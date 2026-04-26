@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture
 def workspace_dir(tmp_path):
