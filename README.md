@@ -1,118 +1,162 @@
 # Kronos Swarm
 
-Multi-agent AI swarm for group chats. Independent processes, shared SQLite coordination, no orchestrator.
+[![CI](https://github.com/spyrae/kronos-swarm/actions/workflows/ci.yml/badge.svg)](https://github.com/spyrae/kronos-swarm/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: BSL 1.1](https://img.shields.io/badge/license-BSL--1.1-orange.svg)](LICENSE)
 
-Each agent is a separate OS process with its own Telegram account, memory, and persona. Agents see every message in a group chat and independently decide whether to respond using tier-based routing and atomic claim arbitration.
+A full-featured multi-agent AI system. Each agent has its own persona, memory, skills, sub-agents, and tools -- and they coordinate autonomously in group chats via atomic SQLite arbitration.
 
-**No Redis. No pub/sub. No central orchestrator. Just SQLite.**
+**Not just chatbots in a group.** Each agent is a complete AI system with a supervisor that orchestrates chains of specialized sub-agents (research, finance, competitor analysis, task management), 11 MCP tool servers, 4-layer memory, browser automation, server ops, scheduled jobs, and a security layer. The swarm coordination in group chats is one capability, not the only one.
 
-## Why
+## What Makes This Different
 
-Existing multi-agent frameworks (CrewAI, AutoGen, Agency Swarm) orchestrate task pipelines — one agent hands off to another in a predefined flow. They don't solve the problem of **multiple AI personalities coexisting in a group chat**, each deciding independently when to speak.
-
-Kronos Swarm does:
-
-- 6 agents see the same message simultaneously
-- Each decides: "Is this for me? Do I have something valuable to add?"
-- Atomic SQLite arbitration prevents duplicate replies
-- Result: natural multi-expert conversation, not a pipeline
+| | Traditional Frameworks | Kronos Swarm |
+|---|---|---|
+| **Architecture** | Central orchestrator dispatches tasks | Independent processes, each a full agent |
+| **Coordination** | Predefined handoff chains | Atomic SQLite arbitration, no Redis/pub-sub |
+| **Routing** | Explicit: "send to agent X" | Implicit: agents decide relevance themselves |
+| **Persona** | System prompt string | Three-Space architecture (identity + knowledge + ops) |
+| **Memory** | Shared or none | Per-agent Mem0 + shared user facts via FTS5 |
+| **Sub-agents** | Framework-specific | Supervisor with pluggable ReAct sub-agents |
+| **Scaling** | Single process | N processes, one shared SQLite file |
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-    TG["Telegram Group Chat"]
+    TG["Telegram / Discord"]
 
-    subgraph agents["Independent Agent Processes"]
+    subgraph processes["Independent Agent Processes (N)"]
         direction LR
         A1["Kronos<br/><i>Strategist</i>"]
         A2["Nexus<br/><i>Analyst</i>"]
         A3["Lacuna<br/><i>Creative</i>"]
-        A4["...N agents"]
+        AN["Agent N"]
     end
 
-    TG -- "every message" --> A1
-    TG -- "every message" --> A2
-    TG -- "every message" --> A3
-    TG -- "every message" --> A4
+    TG -- "every message" --> A1 & A2 & A3 & AN
 
-    subgraph router["GroupRouter (per agent)"]
+    subgraph agent_internals["Inside Each Agent"]
         direction TB
-        R1["Tier 1: @mention / reply-to-me"]
-        R2["Tier 2: Topic relevance >= 7"]
-        R3["Tier 3: Peer reaction"]
-        SKIP["Skip silently"]
+
+        ROUTER["GroupRouter<br/><i>Tier 1/2/3 routing</i>"]
+
+        subgraph supervisor["Supervisor (LLM tool-calling router)"]
+            direction LR
+            RESEARCH["Research<br/>Agent"]
+            TASK["Task<br/>Agent"]
+            FINANCE["Finance<br/>Agent"]
+            COMPETE["Competitor<br/>Monitor"]
+            DEEP["Deep Research<br/>Pipeline"]
+            CHANNELS["Telegram<br/>Channels"]
+        end
+
+        subgraph tools["Tools & Integrations"]
+            direction LR
+            MCP["11 MCP Servers<br/><i>Brave, Exa, Notion,<br/>Google, filesystem...</i>"]
+            BROWSER["Browser<br/><i>Playwright</i>"]
+            SSH["Server Ops<br/><i>SSH diagnostics</i>"]
+            DYNAMIC["Dynamic Tools<br/><i>LLM-generated</i>"]
+        end
+
+        subgraph memory["4-Layer Memory"]
+            direction LR
+            L1["L1: Session<br/><i>SQLite</i>"]
+            L2["L2: Hybrid Search<br/><i>Mem0 + FTS5</i>"]
+            L3["L3: Knowledge Graph<br/><i>entities + relations</i>"]
+            L4["L4: Sleep Compute<br/><i>nightly consolidation</i>"]
+        end
+
+        SECURITY["Security Layer<br/><i>injection shield, cost guard,<br/>loop detector, output validator</i>"]
     end
 
-    A1 --> router
-    A2 --> router
-    A3 --> router
+    A1 --> ROUTER
+    ROUTER --> supervisor
+    supervisor --> tools
+    supervisor --> memory
 
-    subgraph swarm["SwarmStore — shared swarm.db"]
-        direction TB
-        SM["swarm_messages<br/><i>cross-agent ledger</i>"]
-        RC["reply_claims<br/><i>atomic arbitration</i>"]
-        SF["shared_user_facts<br/><i>FTS5</i>"]
+    subgraph swarm["SwarmStore (shared swarm.db)"]
+        SM["Ledger + Claims + Shared Facts + Metrics"]
     end
 
-    router -- "claim" --> RC
-    RC -- "winner?" --> AGENT
-
-    subgraph AGENT["KronosAgent.ainvoke"]
-        direction TB
-        ENG["ReAct Engine<br/><i>200 lines, no LangGraph</i>"]
-        MEM["Mem0 + FTS5<br/><i>hybrid memory</i>"]
-        MCP["MCP Tools<br/><i>11 servers</i>"]
-        SEC["Security<br/><i>shield + cost guard</i>"]
-    end
-
-    AGENT -- "reply" --> TG
+    ROUTER -- "claim/arbitrate" --> swarm
+    agent_internals -- "reply" --> TG
 
     style TG fill:#2196F3,color:#fff
     style swarm fill:#FF9800,color:#fff
-    style AGENT fill:#4CAF50,color:#fff
-    style SKIP fill:#9E9E9E,color:#fff
+    style supervisor fill:#4CAF50,color:#fff
+    style memory fill:#9C27B0,color:#fff
+    style SECURITY fill:#f44336,color:#fff
 ```
-
-### Tier-Based Routing
-
-| Tier | Trigger | Delay | Arbitration |
-|------|---------|-------|-------------|
-| **1** | @mention or reply-to-me | 1-5s | Bypasses cap -- always responds |
-| **2** | Topic relevance >= 7 (LLM check) | 5-20s | Max 2 implicit replies per root message |
-| **3** | Peer reaction (disagree with another agent) | 15-45s | Same cap + 5min cooldown |
-
-### Claim Arbitration
-
-Before sending, each agent inserts a `claimed` row into `swarm.db`, then runs an `IMMEDIATE` transaction to check if it's still the winner:
-
-```
-ORDER BY tier ASC, eta_ts ASC, agent_name ASC
-```
-
-Lowest tier wins. On tie, fastest ETA wins. On tie, alphabetical. Losers cancel silently.
-
-## Key Components
-
-| File | Lines | What it does |
-|------|-------|-------------|
-| `engine.py` | 205 | Custom ReAct loop -- replaces LangGraph entirely |
-| `group_router.py` | 443 | Tier 1/2/3 routing + cross-agent addressing guard |
-| `swarm_store.py` | 810 | Shared ledger, claim arbitration, user facts, metrics |
-| `graph.py` | ~400 | KronosAgent pipeline: validate > memory > route > store |
-| `bridge.py` | ~600 | Telethon userbot + webhook server |
 
 ## Features
 
-- **Custom ReAct engine** -- 200 lines, no framework dependency, just `langchain_core`
-- **Atomic SQLite arbitration** -- decentralized "who answers" without Redis
-- **Three-Space persona** -- `self/` (identity) + `notes/` (knowledge) + `ops/` (runtime)
-- **Hybrid memory** -- Mem0 vectors + FTS5 keywords + knowledge graph + sleep-time consolidation
+### Agent Engine
+- **Custom ReAct engine** -- 200 lines, no LangGraph, just `langchain_core`
+- **Supervisor** -- LLM tool-calling router that dispatches to specialized sub-agents
+- **Sub-agents** -- Research, Task (Notion/Calendar/Email), Finance, Competitor Monitor, Deep Research (multi-step pipeline), Topic Research, Telegram Channels
+- **Skills system** -- progressive disclosure, self-improving skills, importable from external sources
+- **Dynamic tools** -- agents can create new tools at runtime via LLM
+
+### Swarm Coordination
+- **Atomic SQLite arbitration** -- `reply_claims` with IMMEDIATE transactions, no Redis
+- **Tier 1/2/3 routing** -- explicit @mention > topic relevance > peer reaction
+- **Cross-agent addressing guard** -- "@nexus" message goes only to Nexus
+- **Shared user facts** -- FTS5 cross-agent view of the user
 - **Ephemeral peer reactions** -- agents react to each other without polluting history
-- **11 MCP tool servers** -- Brave, Exa, Notion, Google Workspace, filesystem, and more
-- **Built-in cron** -- 18 scheduled jobs (heartbeat, digests, analytics, competitor monitoring)
-- **Security** -- prompt injection shield (28 patterns), output validator, cost guardian, loop detector
+
+### Memory (4 Layers)
+- **L1** Session persistence (SQLite per-agent)
+- **L2** Hybrid search: Mem0 vectors + FTS5 keywords with MMR re-ranking
+- **L3** Knowledge graph: entities, relations, graph context injection
+- **L4** Sleep-time compute: nightly entity extraction, insight generation, stale cleanup
 - **Pluggable context engine** -- summarize / sliding window / hybrid strategies
+
+### Tools & Integrations
+- **11 MCP servers** -- Brave Search, Exa, Notion, Google Workspace (Gmail, Calendar), YouTube, Reddit, filesystem, Yahoo Finance, web fetch, content extraction, Markdown conversion
+- **Browser automation** -- Playwright-based with URL security validation
+- **Server ops** -- SSH-based diagnostics and management (configurable server registry)
+- **Composio** -- 250+ third-party integrations (optional)
+
+### Transport
+- **Telegram** -- Telethon userbot (full message visibility in groups), Bot API for notifications
+- **Discord** -- discord.py bridge (experimental)
+- **Webhook server** -- HTTP endpoint for cron and external integrations
+- **Voice** -- Groq Whisper STT for voice messages, Edge-TTS for voice responses
+
+### Autonomous Operations (18 Cron Jobs)
+- Heartbeat (health check every 30 min)
+- Daily news monitor (Reddit, Twitter, web)
+- Group chat digest (daily summary of monitored Telegram groups)
+- Competitor monitoring (daily digest + weekly deep report + real-time alerts)
+- Business analytics (11 data sources: Zabbix, Grafana, Sentry, Supabase, PostHog, RevenueCat, LiteLLM, Linear, Yandex Metrika, GA4, App Store)
+- Expense tracking (Gmail parsing + Notion)
+- User modeling (behavioral analysis, weekly pattern updates)
+- Self-improvement (skill refinement, learning records)
+- Sleep-time compute (memory consolidation, knowledge graph updates)
+- Workspace backup
+
+### Security
+- Prompt injection shield (28 regex patterns, EN + RU)
+- Output validator
+- Cost guardian (per-request and daily limits)
+- Loop detector (prevents infinite agent-to-agent chains)
+- Browser URL allowlist
+
+### Persona (Three-Space Architecture)
+```
+workspaces/<agent>/
+  self/       -- WHO I AM (identity, soul, methodology, skills)
+  notes/      -- WHAT I KNOW (user model, contacts, world knowledge)
+  ops/        -- WHAT I DO (heartbeat, sessions, task queue, dynamic tools)
+```
+6 included agent personas with distinct cognitive profiles, communication styles, and domain expertise. Create your own from the template.
+
+### Dashboard
+- React UI for agent monitoring
+- Memory inspector, skill manager, persona editor
+- Performance metrics, audit trail, anomaly detection
+- MCP server status, knowledge graph explorer
 
 ## Quickstart
 
@@ -124,8 +168,7 @@ cd kronos-swarm
 
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e "."            # core (no memory)
-pip install -e ".[memory]"    # + Mem0 + local embeddings
+pip install -e ".[memory]"    # core + Mem0 + local embeddings
 ```
 
 ### 2. Configure
@@ -148,7 +191,6 @@ AGENT_NAME=kronos             # picks workspaces/kronos/
 
 ```bash
 python scripts/auth-userbot.py
-# Follow the interactive login (phone number + code)
 ```
 
 ### 4. Run
@@ -157,42 +199,29 @@ python scripts/auth-userbot.py
 python -m kronos
 ```
 
-The agent connects to Telegram via Telethon userbot and starts listening.
-
 ### Multi-Agent Setup
 
-Each agent runs as a separate process with its own `.env`:
+Each agent runs as a separate process:
 
 ```bash
-# Terminal 1
-AGENT_NAME=kronos python -m kronos
-
-# Terminal 2
-AGENT_NAME=nexus python -m kronos
+AGENT_NAME=kronos python -m kronos    # Terminal 1
+AGENT_NAME=nexus python -m kronos     # Terminal 2
+AGENT_NAME=lacuna python -m kronos    # Terminal 3
 ```
 
-Or use systemd units from `systemd/` for production deployment.
+Or use systemd units from `systemd/` for production, or `docker-compose.yml`.
 
-## Configuration
+### Docker
 
-| File | Purpose |
-|------|---------|
-| `.env` | Secrets and API keys (gitignored) |
-| `agents.yaml` | Agent profiles: username, aliases, role |
-| `servers.yaml` | Server registry for SSH ops tools (gitignored) |
-| `workspaces/<name>/` | Per-agent persona, knowledge, runtime state |
-
-See [`.env.example`](.env.example) for all available environment variables.
+```bash
+cp .env.example .env  # fill in values
+docker compose up
+```
 
 ## Adding a New Agent
 
-1. Copy the workspace template:
-   ```bash
-   cp -r workspaces/_template workspaces/my-agent
-   ```
-
-2. Edit `workspaces/my-agent/self/IDENTITY.md` and `SOUL.md`
-
+1. `cp -r workspaces/_template workspaces/my-agent`
+2. Edit `IDENTITY.md` and `SOUL.md` with your agent's persona
 3. Add to `agents.yaml`:
    ```yaml
    my-agent:
@@ -200,55 +229,104 @@ See [`.env.example`](.env.example) for all available environment variables.
      aliases: ["my agent"]
      role: "domain expert for X"
    ```
-
 4. Create `.env.my-agent` with unique Telegram credentials
+5. `AGENT_NAME=my-agent python -m kronos`
 
-5. Run: `AGENT_NAME=my-agent python -m kronos`
+## Configuration
+
+| File | Purpose |
+|------|---------|
+| `.env` | API keys and secrets (gitignored) |
+| `agents.yaml` | Agent profiles: username, aliases, role for routing |
+| `servers.yaml` | Server registry for SSH ops tools (gitignored) |
+| `workspaces/<name>/` | Per-agent persona, knowledge, runtime state |
+| `competitors.yaml` | Competitor list for monitoring |
+
+See [`.env.example`](.env.example) for all environment variables with descriptions.
 
 ## Tech Stack
 
-- **Engine**: Custom ReAct loop (`engine.py` -- no LangGraph dependency)
+- **Engine**: Custom ReAct loop (`engine.py`) -- no LangGraph, no framework lock-in
 - **LLM**: Kimi K2.5 (standard) / DeepSeek V3 (lite) via `langchain_core`
 - **Memory**: Mem0 (Qdrant local) + SQLite FTS5 + Knowledge Graph
 - **Coordination**: SQLite WAL mode with IMMEDIATE transactions
-- **Transport**: Telethon userbot (Telegram) + Discord bridge (experimental)
-- **MCP**: `langchain-mcp-adapters` with stdio transport
+- **Transport**: Telethon (Telegram) + discord.py (Discord)
+- **Tools**: `langchain-mcp-adapters` (11 MCP servers) + Playwright + asyncssh
 - **Observability**: Langfuse (optional)
+- **Dashboard**: FastAPI + React (Vite)
 
 ## Project Structure
 
 ```
 kronos/
-  engine.py            # Custom ReAct loop
-  graph.py             # KronosAgent pipeline
-  bridge.py            # Telethon transport
-  group_router.py      # Tier-based routing
-  swarm_store.py       # Shared SQLite ledger
-  config.py            # Pydantic Settings
-  agents/              # Sub-agents (research, task, finance, competitor)
-  memory/              # Mem0 + FTS5 + knowledge graph + context engine
-  tools/               # MCP configs + custom tools
-  security/            # Shield, loop detector, cost guardian
-  cron/                # 18 scheduled jobs
+  engine.py             # Custom ReAct loop (200 lines)
+  graph.py              # KronosAgent pipeline
+  bridge.py             # Telegram transport + webhook server
+  discord_bridge.py     # Discord transport
+  group_router.py       # Tier-based swarm routing
+  swarm_store.py        # Shared SQLite ledger + arbitration
+  config.py             # Pydantic Settings
+  persona.py            # System prompt builder from workspace
+  agents/               # Supervisor + sub-agents
+    supervisor.py       #   LLM tool-calling router
+    research.py         #   Web research agent
+    task.py             #   Notion/Calendar/Email agent
+    finance.py          #   Finance agent
+    competitor_monitor.py
+    deep_research/      #   Multi-step research pipeline
+    topic_research/     #   Topic discovery pipeline
+    telegram_channels.py
+    server_ops.py       #   SSH diagnostics agent
+  memory/               # 4-layer memory system
+    store.py            #   Mem0 integration
+    fts.py              #   FTS5 keyword search
+    hybrid.py           #   Vector + keyword merge
+    knowledge_graph.py  #   Entity-relation graph
+    context_engine.py   #   Pluggable compaction strategies
+    compaction.py       #   LLM summarization
+  tools/                # Tool integrations
+    mcp_servers.py      #   11 MCP server configs
+    browser/            #   Playwright automation
+    server_ops.py       #   SSH tools (configurable registry)
+    dynamic_tools.py    #   Runtime tool creation
+    expense.py          #   Notion expense tracking + FIFO budget
+    gateway.py          #   MCP gateway management
+  security/             # Security layer
+    shield.py           #   Prompt injection detection (28 patterns)
+    cost_guardian.py    #   Spend limits
+    loop_detector.py    #   Anti-loop for agent chains
+    output_validator.py #   Response validation
+  skills/               # Progressive skill system
+  cron/                 # 18 scheduled jobs
+  competitors/          # Competitor monitoring subsystem
+  analytics/            # Business intelligence (11 data sources)
 workspaces/
-  _template/           # Skeleton for new agents
-  kronos/              # Chief of Staff persona
-  nexus/               # Data Analyst persona
-  ...                  # 4 more included personas
+  _template/            # Skeleton for new agents
+  kronos/               # Strategist (INTJ)
+  nexus/                # Data Analyst
+  lacuna/               # Creative Director
+  resonant/             # UX Advocate
+  keystone/             # Quality Engineer
+  impulse/              # Action Catalyst
+dashboard/              # FastAPI backend
+dashboard-ui/           # React frontend (Vite)
+systemd/                # Production systemd units
+scripts/                # Ops: deploy, health check, backup
 ```
 
-## Deployment
+## Documentation
 
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for production setup with systemd.
-
-```bash
-# Quick deploy via rsync
-bash scripts/deploy.sh
-
-# First-time setup
-bash scripts/deploy.sh --first-run
-```
+| Doc | Content |
+|-----|---------|
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design and data flow |
+| [MEMORY.md](docs/MEMORY.md) | 4-layer memory system in detail |
+| [SECURITY.md](docs/SECURITY.md) | Security model and threat mitigation |
+| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production setup with systemd |
+| [SKILLS.md](docs/SKILLS.md) | Skill system and progressive disclosure |
+| [CRON-JOBS.md](docs/CRON-JOBS.md) | All 18 scheduled jobs |
+| [CHANGELOG.md](CHANGELOG.md) | Release history |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
 ## License
 
-[Business Source License 1.1](LICENSE) — free for personal, internal, academic, and integration use. Cannot be used to build a competing multi-agent swarm service. Converts to Apache 2.0 on 2030-04-26.
+[Business Source License 1.1](LICENSE) -- free for personal, internal, academic, and integration use. Cannot be used to build a competing multi-agent swarm service. Converts to Apache 2.0 on 2030-04-26.
