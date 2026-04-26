@@ -1,5 +1,9 @@
 """Tests for multi-agent system."""
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
 from unittest.mock import patch
 
 from langchain_core.tools import tool

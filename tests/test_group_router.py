@@ -242,6 +242,7 @@ class TestTier2Relevance:
 # ------------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 class TestTier3PeerReaction:
     @pytest.mark.asyncio
     async def test_peer_reply_to_user_triggers_disagree_check(self):
