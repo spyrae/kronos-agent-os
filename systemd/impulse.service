@@ -1,0 +1,27 @@
+[Unit]
+Description=Impulse — Momentum Driver Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kronos
+WorkingDirectory=/opt/kronos-ii/app
+ExecStart=/opt/kronos-ii/app/.venv/bin/python -m kronos
+Restart=on-failure
+RestartSec=10
+
+EnvironmentFile=/opt/kronos-ii/app/.env.impulse
+Environment=WEBHOOK_PORT=8793 DASHBOARD_PORT=18793 WORKSPACE_PATH=
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=2G
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=impulse
+
+[Install]
+WantedBy=multi-user.target

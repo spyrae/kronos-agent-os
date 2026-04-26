@@ -1,0 +1,24 @@
+# Agent profiles — define your swarm members here.
+# Copy to agents.yaml and customize.
+#
+# Each agent needs:
+#   username: Telegram @username (for cross-agent addressing detection)
+#   aliases:  natural-language names (word-boundary matched in messages)
+#   role:     one-line description used by LLM for topic relevance scoring
+#
+# You can have 1 to N agents. Each runs as a separate process.
+
+strategist:
+  username: strategist_bot
+  aliases: ["strategist", "стратег"]
+  role: "strategic advisor — priorities, planning, decision analysis"
+
+analyst:
+  username: analyst_bot
+  aliases: ["analyst", "аналитик"]
+  role: "data analyst — metrics, research, competitive intelligence"
+
+creative:
+  username: creative_bot
+  aliases: ["creative", "креатив"]
+  role: "creative director — brand, naming, product vision"

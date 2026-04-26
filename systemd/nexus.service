@@ -1,0 +1,26 @@
+[Unit]
+Description=Nexus — AI Analyst Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kronos
+WorkingDirectory=/opt/kronos-ii/app
+ExecStart=/opt/kronos-ii/app/.venv/bin/python -m kronos
+Restart=on-failure
+RestartSec=10
+
+EnvironmentFile=/opt/kronos-ii/app/.env.nexus
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=2G
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexus
+
+[Install]
+WantedBy=multi-user.target

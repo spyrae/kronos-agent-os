@@ -1,0 +1,17 @@
+[Unit]
+Description=Kronos II Alert — %i failed
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c '\
+  UNIT="%i"; \
+  source /opt/kronos-ii/app/.env 2>/dev/null; \
+  [ -n "$NTFY_TOKEN" ] && \
+  curl -s -d "Service FAILED: $UNIT" \
+    -H "Title: Kronos II Service Crash" \
+    -H "Priority: urgent" \
+    -H "Tags: rotating_light,skull" \
+    -H "Authorization: Bearer $NTFY_TOKEN" \
+    "${NTFY_URL:-https://ntfy.sh}/${NTFY_TOPIC:-persona-alerts}" \
+    > /dev/null 2>&1; \
+  true'

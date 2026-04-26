@@ -1,0 +1,9 @@
+[Unit]
+Description=Kronos II Daily Status Report
+
+[Timer]
+OnCalendar=*-*-* 23:00:00
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

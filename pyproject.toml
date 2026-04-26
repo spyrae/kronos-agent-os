@@ -1,0 +1,77 @@
+[project]
+name = "kronos-swarm"
+version = "0.1.0"
+description = "Multi-agent AI swarm with SQLite coordination and tier-based routing"
+requires-python = ">=3.11"
+license = "MIT"
+
+dependencies = [
+    # LangChain core (messages, tools, models — no LangGraph)
+    "langchain-core>=0.3",
+
+    # LangChain LLM providers
+    "langchain-openai>=0.3",        # Kimi K2.5 via OpenAI-compatible API
+    "langchain-deepseek>=1.0",
+
+    # MCP integration
+    "langchain-mcp-adapters>=0.2",
+
+    # Persistence
+    "aiosqlite>=0.20",
+
+    # Telegram bridge
+    "telethon>=1.36",
+    "aiohttp>=3.10",
+
+    # Competitor monitoring
+    "google-play-scraper>=1.2",
+    "pyyaml>=6.0",
+    "feedparser>=6.0",
+
+    # SSH (server ops)
+    "asyncssh>=2.17",
+
+    # Config & utils
+    "pydantic-settings>=2.0",
+    "python-dotenv>=1.0",
+
+    # Observability
+    "langfuse>=2.0",
+]
+
+[project.optional-dependencies]
+memory = [
+    "mem0ai>=0.1",
+    "sentence-transformers>=5.0",
+]
+browser = [
+    "playwright>=1.48",
+]
+discord = [
+    "discord.py>=2.0",
+]
+tts = [
+    "edge-tts>=6.1",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+
+[tool.setuptools.packages.find]
+include = ["kronos*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: requires external services (API keys, MCP servers)",
+]

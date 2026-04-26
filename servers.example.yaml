@@ -1,0 +1,20 @@
+# Server Registry — SSH-accessible servers for the server_ops agent tool.
+# Copy to servers.yaml and fill in your values.
+# servers.yaml is gitignored.
+
+my-vps:
+  host: "1.2.3.4"
+  username: "deploy"
+  app_path: "/opt/kronos-swarm/app"
+  data_path: "/opt/kronos-swarm/app/data"
+  description: "Main VPS — Kronos Swarm agents"
+  services:
+    - kronos
+    - nexus
+    - lacuna
+  docker: []
+  projects:
+    kronos-swarm:
+      path: "/opt/kronos-swarm/app"
+      services: ["kronos", "nexus", "lacuna"]
+      description: "AI agent swarm"

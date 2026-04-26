@@ -1,0 +1,9 @@
+[Unit]
+Description=Kronos II Workspace Backup (every 6h)
+
+[Timer]
+OnCalendar=*-*-* 00/6:00:00
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

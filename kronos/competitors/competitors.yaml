@@ -1,0 +1,83 @@
+competitors:
+  # Tier 1 — daily monitoring, direct competitors
+  - id: wanderlog
+    name: Wanderlog
+    tier: 1
+    ios_id: "1476732439"
+    android_package: com.wanderlog.android
+    website: https://wanderlog.com
+    blog_rss: https://wanderlog.com/blog/feed
+    twitter: wanderlog
+
+  - id: tripit
+    name: TripIt
+    tier: 1
+    ios_id: "311035142"
+    android_package: com.tripit
+    website: https://tripit.com
+    twitter: TripIt
+
+  - id: layla_ai
+    name: Layla AI
+    tier: 1
+    ios_id: "6758730467"
+    android_package: ""  # iOS only
+    website: https://justasklayla.com
+    twitter: justasklayla
+
+  - id: tripsy
+    name: Tripsy
+    tier: 1
+    ios_id: "1429967544"
+    android_package: ""  # iOS only
+    website: https://tripsy.app
+    twitter: tripsyapp
+
+  - id: mindtrip
+    name: Mindtrip
+    tier: 1
+    ios_id: "6503107567"
+    android_package: ""  # iOS only
+    website: https://mindtrip.ai
+    twitter: mindtrip_ai
+
+  # Tier 2 — daily monitoring, adjacent competitors
+  - id: roam_around
+    name: Roam Around
+    tier: 2
+    ios_id: "6446047996"
+    android_package: dev.omnivision.roamaround
+    website: https://www.roamaround.io
+    twitter: roamaround_io
+
+  - id: sygic_travel
+    name: Sygic Travel
+    tier: 2
+    ios_id: "519058033"
+    android_package: com.tripomatic
+    website: https://travel.sygic.com
+    twitter: SygicTravel
+
+  - id: lambus
+    name: Lambus
+    tier: 2
+    ios_id: "1446178879"
+    android_package: ""  # iOS only (not on US Play Store)
+    website: https://www.lambus.com
+    twitter: lambusapp
+
+  - id: iplan_ai
+    name: iPlan.ai
+    tier: 2
+    ios_id: "1611716564"
+    android_package: ai.iplan.app
+    website: https://thevoyageai.com
+    twitter: ""
+
+  - id: wonderplan
+    name: WonderPlan
+    tier: 2
+    ios_id: ""  # not on App Store
+    android_package: ""  # not on Play Store
+    website: https://wonderplan.ai
+    twitter: wonderplanai

@@ -1,0 +1,12 @@
+[Unit]
+Description=Kronos II Daily Status Report
+After=kronos-ii.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/kronos-ii/app/scripts/daily-status.sh
+EnvironmentFile=/opt/kronos-ii/app/.env
+
+StandardOutput=journal+console
+StandardError=journal+console
+SyslogIdentifier=kronos-daily-status

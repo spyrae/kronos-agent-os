@@ -1,0 +1,12 @@
+[Unit]
+Description=Kronos II Workspace Backup
+After=kronos-ii.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/kronos-ii/app/scripts/workspace-backup.sh
+EnvironmentFile=/opt/kronos-ii/app/.env
+
+StandardOutput=journal+console
+StandardError=journal+console
+SyslogIdentifier=kronos-backup

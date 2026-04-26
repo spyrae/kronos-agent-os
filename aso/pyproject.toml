@@ -1,0 +1,16 @@
+[project]
+name = "kronos-aso"
+version = "0.1.0"
+description = "ASO pipeline for JourneyBay — continuous App Store Optimization"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=0.4",
+    "langgraph-checkpoint-sqlite>=2.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[project.scripts]
+aso = "runner:main"

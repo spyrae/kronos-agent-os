@@ -1,0 +1,24 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #09090b; color: #e0e0e0; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #555; }
+
+/* Selection */
+::selection { background: #2563eb44; }
+
+/* Focus */
+input:focus, textarea:focus { outline: none; border-color: #2563eb !important; }
+
+/* Button hover */
+button:hover:not(:disabled) { opacity: 0.9; }
+button:active:not(:disabled) { transform: scale(0.98); }
+
+/* Nav hover */
+nav a:hover { background: #151520 !important; }
+
+/* Smooth transitions */
+* { transition-property: background-color, border-color, opacity; transition-duration: 0.15s; }

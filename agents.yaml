@@ -1,0 +1,38 @@
+# Agent profiles — single source of truth for swarm coordination.
+#
+# Each agent needs:
+#   username: Telegram @username (for cross-agent addressing detection)
+#   aliases:  natural-language names (word-boundary matched in messages)
+#   role:     one-line description used by LLM for topic relevance scoring
+#
+# Usernames can be overridden per-agent via env: AGENT_USERNAME_KRONOS=..., etc.
+
+kronos:
+  username: kronosagnt
+  aliases: ["кронос", "kronos", "стратег"]
+  role: "strategic advisor, chief of staff — priorities, planning, multi-model analysis"
+
+nexus:
+  username: nexusagnt
+  aliases: ["нексус", "nexus", "аналитик"]
+  role: "data analyst — business metrics, SEO, competitive intelligence, market trends"
+
+lacuna:
+  username: lacunaagnt
+  aliases: ["лакуна", "lacuna", "иконоборец"]
+  role: "creative director — brand, product meaning, authenticity, naming, creative vision"
+
+resonant:
+  username: resonantagnt
+  aliases: ["резонант", "resonant", "хранитель"]
+  role: "UX advocate — user experience, people, culture, tone of voice, onboarding"
+
+keystone:
+  username: keystoneagnt
+  aliases: ["кистоун", "keystone", "строитель"]
+  role: "quality engineer — code architecture, standards, technical debt, performance"
+
+impulse:
+  username: impulseagnt
+  aliases: ["импульс", "impulse", "энерджайзер"]
+  role: "action catalyst — momentum, quick wins, ideation, overcoming blockers"

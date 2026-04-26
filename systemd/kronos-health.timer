@@ -1,0 +1,9 @@
+[Unit]
+Description=Kronos II Health Check (every 15 min)
+
+[Timer]
+OnCalendar=*:0/15
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

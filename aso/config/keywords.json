@@ -1,0 +1,17 @@
+[
+  {"keyword": "travel planner", "locale": "en", "priority": "high"},
+  {"keyword": "trip planner", "locale": "en", "priority": "high"},
+  {"keyword": "itinerary planner", "locale": "en", "priority": "high"},
+  {"keyword": "travel organizer", "locale": "en", "priority": "medium"},
+  {"keyword": "vacation planner", "locale": "en", "priority": "medium"},
+  {"keyword": "travel app", "locale": "en", "priority": "medium"},
+  {"keyword": "AI travel", "locale": "en", "priority": "medium"},
+  {"keyword": "route planner", "locale": "en", "priority": "low"},
+  {"keyword": "trip organizer", "locale": "en", "priority": "low"},
+  {"keyword": "travel itinerary", "locale": "en", "priority": "low"},
+  {"keyword": "планировщик путешествий", "locale": "ru", "priority": "high"},
+  {"keyword": "планирование поездки", "locale": "ru", "priority": "high"},
+  {"keyword": "маршрут путешествия", "locale": "ru", "priority": "medium"},
+  {"keyword": "путешествия приложение", "locale": "ru", "priority": "medium"},
+  {"keyword": "планировщик маршрута", "locale": "ru", "priority": "low"}
+]

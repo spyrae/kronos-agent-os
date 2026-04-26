@@ -1,0 +1,15 @@
+[Unit]
+Description=Kronos II Health Check
+After=kronos-ii.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/kronos-ii/app/scripts/health-check.sh --alert
+EnvironmentFile=/opt/kronos-ii/app/.env
+
+StandardOutput=journal+console
+StandardError=journal+console
+SyslogIdentifier=kronos-health
+
+# Alert on failure
+OnFailure=kronos-alert@%n.service
