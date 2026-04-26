@@ -22,72 +22,45 @@ A full-featured multi-agent AI system. Each agent has its own persona, memory, s
 
 ## Architecture
 
-```mermaid
-flowchart TB
-    TG["Telegram / Discord"]
-
-    subgraph processes["Independent Agent Processes (N)"]
-        direction LR
-        A1["Kronos<br/><i>Strategist</i>"]
-        A2["Nexus<br/><i>Analyst</i>"]
-        A3["Lacuna<br/><i>Creative</i>"]
-        AN["Agent N"]
-    end
-
-    TG -- "every message" --> A1 & A2 & A3 & AN
-
-    subgraph agent_internals["Inside Each Agent"]
-        direction TB
-
-        ROUTER["GroupRouter<br/><i>Tier 1/2/3 routing</i>"]
-
-        subgraph supervisor["Supervisor (LLM tool-calling router)"]
-            direction LR
-            RESEARCH["Research<br/>Agent"]
-            TASK["Task<br/>Agent"]
-            FINANCE["Finance<br/>Agent"]
-            COMPETE["Competitor<br/>Monitor"]
-            DEEP["Deep Research<br/>Pipeline"]
-            CHANNELS["Telegram<br/>Channels"]
-        end
-
-        subgraph tools["Tools & Integrations"]
-            direction LR
-            MCP["11 MCP Servers<br/><i>Brave, Exa, Notion,<br/>Google, filesystem...</i>"]
-            BROWSER["Browser<br/><i>Playwright</i>"]
-            SSH["Server Ops<br/><i>SSH diagnostics</i>"]
-            DYNAMIC["Dynamic Tools<br/><i>LLM-generated</i>"]
-        end
-
-        subgraph memory["4-Layer Memory"]
-            direction LR
-            L1["L1: Session<br/><i>SQLite</i>"]
-            L2["L2: Hybrid Search<br/><i>Mem0 + FTS5</i>"]
-            L3["L3: Knowledge Graph<br/><i>entities + relations</i>"]
-            L4["L4: Sleep Compute<br/><i>nightly consolidation</i>"]
-        end
-
-        SECURITY["Security Layer<br/><i>injection shield, cost guard,<br/>loop detector, output validator</i>"]
-    end
-
-    A1 --> ROUTER
-    ROUTER --> supervisor
-    supervisor --> tools
-    supervisor --> memory
-
-    subgraph swarm["SwarmStore (shared swarm.db)"]
-        SM["Ledger + Claims + Shared Facts + Metrics"]
-    end
-
-    ROUTER -- "claim/arbitrate" --> swarm
-    agent_internals -- "reply" --> TG
-
-    style TG fill:#2196F3,color:#fff
-    style swarm fill:#FF9800,color:#fff
-    style supervisor fill:#4CAF50,color:#fff
-    style memory fill:#9C27B0,color:#fff
-    style SECURITY fill:#f44336,color:#fff
 ```
+                          Telegram / Discord
+                                 |
+                    every message to all agents
+                     |        |        |        |
+                 +-------+ +------+ +-------+ +---+
+                 |Kronos | |Nexus | |Lacuna | |...N|   <-- independent OS processes
+                 +-------+ +------+ +-------+ +---+
+                     |
+              GroupRouter (Tier 1/2/3)
+                     |
+         +-----------+-----------+
+         |                       |
+   claim/arbitrate         KronosAgent
+   (shared swarm.db)            |
+                          +-----+------+
+                          |            |
+                     Supervisor    4-Layer Memory
+                     (LLM router)  Mem0 + FTS5 + KG
+                          |
+            +------+------+------+------+------+
+            |      |      |      |      |      |
+         Research Task  Finance Compete Deep   Telegram
+         Agent   Agent  Agent  Monitor Research Channels
+                          |
+                  +-------+-------+-------+
+                  |       |       |       |
+               11 MCP  Browser  Server  Dynamic
+               Servers  (PW)    Ops(SSH) Tools
+```
+
+### How It Works
+
+1. **Message arrives** in Telegram group -- all N agent processes see it simultaneously
+2. **GroupRouter** in each agent decides: is this for me? (Tier 1: @mention, Tier 2: topic relevance, Tier 3: peer reaction)
+3. **Claim arbitration** -- agent inserts a claim into shared `swarm.db`, atomic transaction picks the winner (`ORDER BY tier ASC, eta_ts ASC, agent_name ASC`)
+4. **Supervisor** routes to the right sub-agent chain (research, task management, finance, competitor analysis...)
+5. **Sub-agents** use MCP tools, browser, SSH, and memory to complete the task
+6. **Reply** goes back to the chat; memories are stored in background
 
 ## Features
 
