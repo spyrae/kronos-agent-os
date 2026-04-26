@@ -11,10 +11,8 @@ directly with structured parameters. All logic is deterministic Python:
 import json
 import logging
 import os
-import re
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from langchain_core.tools import tool
 
@@ -216,9 +214,9 @@ def add_expense(
     amount: float,
     currency: str,
     category: str,
-    date: Optional[str] = None,
+    date: str | None = None,
     split: bool = False,
-    ref: Optional[str] = None,
+    ref: str | None = None,
 ) -> str:
     """Add an expense to Notion with automatic FIFO budget calculation.
 
@@ -257,7 +255,7 @@ def add_expense(
     if currency == "IDR":
         budget_file = _budget_path()
         if os.path.isfile(budget_file):
-            with open(budget_file, "r") as f:
+            with open(budget_file) as f:
                 budget_text = f.read()
 
             tranches = _parse_tranches(budget_text)
@@ -344,7 +342,7 @@ def add_tranche(
     if not os.path.isfile(budget_file):
         return f"[ERROR] BUDGET.md not found at {budget_file}"
 
-    with open(budget_file, "r") as f:
+    with open(budget_file) as f:
         text = f.read()
 
     tranches = _parse_tranches(text)
@@ -377,7 +375,7 @@ def add_tranche(
 def replace_tranche(
     tranche_num: int,
     new_rate: float,
-    new_amount_idr: Optional[float] = None,
+    new_amount_idr: float | None = None,
     note: str = "",
 ) -> str:
     """Replace an existing tranche with a new rate (and optionally new amount).
@@ -393,9 +391,9 @@ def replace_tranche(
     """
     budget_file = _budget_path()
     if not os.path.isfile(budget_file):
-        return f"[ERROR] BUDGET.md not found"
+        return "[ERROR] BUDGET.md not found"
 
-    with open(budget_file, "r") as f:
+    with open(budget_file) as f:
         text = f.read()
 
     tranches = _parse_tranches(text)
@@ -436,7 +434,7 @@ def get_budget() -> str:
     if not os.path.isfile(budget_file):
         return "[ERROR] BUDGET.md not found"
 
-    with open(budget_file, "r") as f:
+    with open(budget_file) as f:
         text = f.read()
 
     tranches = _parse_tranches(text)

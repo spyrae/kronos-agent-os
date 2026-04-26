@@ -7,7 +7,7 @@ import json
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from kronos.config import settings
@@ -174,7 +174,7 @@ async def analyze_for_new_skills(entries: list[dict] | None = None) -> str | Non
             return None
 
     # Create draft skill
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     protocol = data.get("protocol", "")
     trigger = data.get("trigger", "")
     tools_list = data.get("tools", [])

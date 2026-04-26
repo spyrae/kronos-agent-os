@@ -11,7 +11,7 @@ Handles:
 
 import logging
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage
 
 from kronos.engine import AgentResult, react_loop
 from kronos.llm import ModelTier, get_model

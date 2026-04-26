@@ -6,10 +6,10 @@ metric_store for anomaly detection baselines.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from kronos.config import settings
-from kronos.cron.notify import send_bot_api, TOPIC_DIGEST
+from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
 
 log = logging.getLogger("kronos.cron.analytics_pulse")
 
@@ -19,11 +19,11 @@ async def run_analytics_pulse() -> None:
     if settings.agent_name != "nexus":
         return
 
-    from kronos.analytics.pulse import generate_daily_pulse
-    from kronos.analytics.anomaly import flatten_metrics
     from kronos.analytics import metric_store
+    from kronos.analytics.anomaly import flatten_metrics
+    from kronos.analytics.pulse import generate_daily_pulse
 
-    today = datetime.now(timezone.utc).strftime("%d %B")
+    today = datetime.now(UTC).strftime("%d %B")
 
     try:
         pulse, metrics = await generate_daily_pulse()

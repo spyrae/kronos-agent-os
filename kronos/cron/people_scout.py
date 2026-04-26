@@ -6,11 +6,10 @@ Uses LLM with web search knowledge, tracks seen profiles in SEEN.md.
 
 import logging
 import re
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 
 from kronos.config import settings
-from kronos.cron.notify import send_bot_api, TOPIC_DIGEST
+from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
 from kronos.llm import ModelTier, get_model
 
 log = logging.getLogger("kronos.cron.people_scout")
@@ -56,7 +55,7 @@ async def run_people_scout() -> None:
     seen = _load_seen()
 
     # Rotate focus
-    week_num = datetime.now(timezone.utc).isocalendar()[1]
+    week_num = datetime.now(UTC).isocalendar()[1]
     focus = FOCUS_ROTATION[week_num % len(FOCUS_ROTATION)]
 
     seen_text = ""

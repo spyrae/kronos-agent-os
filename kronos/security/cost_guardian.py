@@ -5,7 +5,6 @@ when limits are exceeded.
 """
 
 import logging
-import time
 from dataclasses import dataclass, field
 
 from kronos.audit import get_daily_cost

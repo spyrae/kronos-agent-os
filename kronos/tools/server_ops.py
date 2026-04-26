@@ -14,7 +14,6 @@ import re
 
 import asyncssh
 import yaml
-
 from langchain_core.tools import tool
 
 log = logging.getLogger("kronos.tools.server_ops")
@@ -137,7 +136,7 @@ async def _ssh_run(
     except asyncssh.DisconnectError as e:
         log.error("SSH disconnect to %s: %s", host, e)
         return f"[SSH ERROR] Connection lost: {e}"
-    except asyncio.TimeoutError:
+    except TimeoutError:
         log.error("SSH timeout to %s after %ds", host, timeout)
         return f"[SSH ERROR] Timeout after {timeout}s"
     except Exception as e:

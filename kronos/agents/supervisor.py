@@ -13,23 +13,23 @@ No LangGraph — uses LLM tool-calling for routing decisions.
 """
 
 import logging
-from typing import Callable
+from collections.abc import Callable
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool, StructuredTool
 
 from kronos.agents.analytics import create_analytics_agent
 from kronos.agents.competitor_monitor import create_competitor_monitor_agent
-from kronos.agents.server_ops import create_server_ops_agent
 from kronos.agents.deep_research.graph import create_deep_research_agent
 from kronos.agents.finance import create_finance_agent
 from kronos.agents.research import create_research_agent
+from kronos.agents.server_ops import create_server_ops_agent
 from kronos.agents.task import create_task_agent
 from kronos.agents.telegram_channels import create_telegram_channels_agent
 from kronos.agents.topic_research.graph import create_topic_research_agent
+from kronos.config import settings
 from kronos.engine import AgentResult, react_loop
 from kronos.llm import ModelTier, get_model
-from kronos.config import settings
 
 log = logging.getLogger("kronos.agents.supervisor")
 
@@ -287,7 +287,7 @@ def build_supervisor(tools: list[BaseTool]):
     supervisor_tools = [t for t in tools if t.name in SUPERVISOR_TOOL_NAMES]
 
     # Direct expense/budget tools — no delegation needed, deterministic
-    from kronos.tools.expense import add_expense, add_tranche, replace_tranche, get_budget
+    from kronos.tools.expense import add_expense, add_tranche, get_budget, replace_tranche
     direct_tools = [add_expense, add_tranche, replace_tranche, get_budget]
 
     # Combine: delegation tools + supervisor-only tools + direct tools

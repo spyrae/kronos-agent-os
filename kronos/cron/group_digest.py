@@ -12,8 +12,7 @@ Pipeline:
 import asyncio
 import logging
 import re
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import UTC, datetime, timedelta
 
 from kronos.config import settings
 from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
@@ -32,7 +31,6 @@ def _fix_html(text: str) -> str:
     - Close unclosed tags
     - Escape unmatched < > outside tags
     """
-    import html as html_mod
 
     # Remove unsupported tags (keep only Telegram-allowed)
     def _strip_tag(m):
@@ -138,7 +136,7 @@ async def _fetch_messages(
         log.warning("Userbot not available — run scripts/auth-userbot.py first")
         return []
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff = datetime.now(UTC) - timedelta(hours=hours)
     messages = []
 
     try:
@@ -434,7 +432,7 @@ async def run_group_digest() -> None:
         total_sources,
     )
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     category_summaries: dict[str, str] = {}
 
     for category, sources in categories.items():

@@ -8,7 +8,7 @@ Two approaches:
 import logging
 import statistics
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from kronos.analytics import metric_store
 
@@ -91,7 +91,7 @@ def check_anomaly(
     z_score = (current_value - mean) / stdev
 
     # Weekend check — ignore natural drops on Sat/Sun
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     is_weekend = now.weekday() >= 5
     if is_weekend and metric_name in _WEEKEND_IGNORE_DROP and z_score < 0:
         return None

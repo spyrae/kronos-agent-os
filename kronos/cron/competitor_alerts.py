@@ -7,7 +7,7 @@ changes (pricing, rating drops) and sends immediate Telegram alerts.
 import logging
 
 from kronos.config import settings
-from kronos.cron.notify import send_bot_api, send_ntfy, TOPIC_GENERAL
+from kronos.cron.notify import TOPIC_GENERAL, send_bot_api, send_ntfy
 
 log = logging.getLogger("kronos.cron.competitor_alerts")
 

@@ -1,13 +1,12 @@
 """Expand node — enrich topics with PAA, competitor analysis, Reddit."""
 
-import json
 import logging
 
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 
-from kronos.agents.topic_research.prompts import EXPAND_PROMPT
 from kronos.agents.topic_research.nodes.discover import _find_tool, _parse_json_array
+from kronos.agents.topic_research.prompts import EXPAND_PROMPT
 from kronos.agents.topic_research.state import TopicResearchState
 from kronos.llm import ModelTier, get_model
 

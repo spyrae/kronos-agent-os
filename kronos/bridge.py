@@ -13,16 +13,16 @@ import time
 
 import aiohttp
 from aiohttp import web
-from kronos.security.cost_guardian import get_guardian
-from kronos.security.output_validator import validate_output
-from kronos.tts import get_voice_mode, set_voice_mode, should_synthesize, synthesize
 from telethon import TelegramClient, events
 from telethon.tl.types import DocumentAttributeAudio
 
 from kronos.audit import log_request
 from kronos.config import settings
 from kronos.graph import KronosAgent
+from kronos.security.cost_guardian import get_guardian
+from kronos.security.output_validator import validate_output
 from kronos.swarm_store import get_swarm
+from kronos.tts import get_voice_mode, set_voice_mode, should_synthesize, synthesize
 
 log = logging.getLogger("kronos.bridge")
 
@@ -211,7 +211,7 @@ async def _typing_loop(chat_id: int, stop_event: asyncio.Event) -> None:
                 async with _client.action(chat_id, "typing"):
                     await asyncio.wait_for(stop_event.wait(), timeout=5.0)
                     return
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue  # re-send typing every 5s
     except Exception:
         pass  # typing indicator is best-effort
@@ -219,7 +219,6 @@ async def _typing_loop(chat_id: int, stop_event: asyncio.Event) -> None:
 
 async def _send_bot_api_message(chat_id: int, text: str, topic_id: int) -> None:
     """Send message via Bot API with message_thread_id (for DM Topics)."""
-    import json
     url = f"https://api.telegram.org/bot{settings.tg_bot_token}/sendMessage"
 
     chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)] if len(text) > 4000 else [text]
@@ -397,7 +396,7 @@ async def _handle_history(request: web.Request) -> web.Response:
 
     try:
         entity = await _client.get_entity(chat_param)
-    except Exception as e:
+    except Exception:
         return web.json_response({"error": f"chat not found: {chat_param}"}, status=404)
 
     messages = []
@@ -454,7 +453,12 @@ async def _handle_aso_command(text: str) -> str | None:
     cmd = parts[1] if len(parts) > 1 else "help"
 
     from kronos.agents.aso import (
-        aso_approve, aso_reject, aso_resume, aso_run, aso_skip, aso_status,
+        aso_approve,
+        aso_reject,
+        aso_resume,
+        aso_run,
+        aso_skip,
+        aso_status,
     )
 
     if cmd == "run":

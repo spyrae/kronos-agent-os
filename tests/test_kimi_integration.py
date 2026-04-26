@@ -13,7 +13,6 @@ from langchain_core.tools import tool
 
 from kronos.config import settings
 
-
 pytestmark = pytest.mark.skipif(
     not settings.fireworks_api_key,
     reason="FIREWORKS_API_KEY not set",

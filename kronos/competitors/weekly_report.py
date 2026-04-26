@@ -7,7 +7,7 @@ competitive advantage updates, and Mem0 integration for long-term memory.
 import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from langchain_core.messages import HumanMessage
 
@@ -91,7 +91,7 @@ async def generate_weekly_report() -> tuple[str, str]:
     competitors = load_competitors()
 
     # Gather week's changes
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     week_ago = now - timedelta(days=7)
 
     all_changes = store.get_undigested_changes()

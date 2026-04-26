@@ -62,8 +62,8 @@ def create_analytics_agent():
 
         # Intent: anomaly check
         elif any(kw in user_lower for kw in _ANOMALY_KEYWORDS):
-            from kronos.analytics.pulse import _collect_all
             from kronos.analytics.anomaly import check_all_anomalies, flatten_metrics
+            from kronos.analytics.pulse import _collect_all
 
             metrics = _collect_all()
             flat = flatten_metrics(metrics)
@@ -78,7 +78,7 @@ def create_analytics_agent():
 
         # Intent: trend analysis
         elif any(kw in user_lower for kw in _TREND_KEYWORDS):
-            from kronos.analytics.trends import analyze_trends, format_trends_summary
+            from kronos.analytics.trends import analyze_trends
 
             trends = analyze_trends()
             if trends:

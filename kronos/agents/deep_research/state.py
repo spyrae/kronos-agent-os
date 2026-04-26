@@ -2,7 +2,6 @@
 
 from typing import Literal, TypedDict
 
-
 ResearchMode = Literal[
     "topic",        # глубокое погружение в тему
     "validation",   # проверка идеи (конкуренты, рынок)

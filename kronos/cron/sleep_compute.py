@@ -11,11 +11,9 @@ Pipeline:
 
 import json
 import logging
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
+from datetime import UTC, datetime, timedelta
 
-from kronos.config import settings
-from kronos.cron.notify import send_bot_api, TOPIC_GENERAL
+from kronos.cron.notify import TOPIC_GENERAL, send_bot_api
 from kronos.llm import ModelTier, get_model
 from kronos.memory import fts
 from kronos.memory import knowledge_graph as kg
@@ -112,7 +110,7 @@ async def run_sleep_compute() -> None:
 def _get_recent_facts(days: int = 7) -> list[str]:
     """Get recent facts from FTS5 index."""
     conn = fts._get_conn()
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
     rows = conn.execute(
         "SELECT content FROM memory_facts WHERE created_at > ? ORDER BY created_at DESC LIMIT 100",
@@ -217,7 +215,7 @@ async def _generate_insights(recent_facts: list[str]) -> list[str]:
 def _cleanup_stale_facts(days: int = 90) -> int:
     """Remove facts older than N days from FTS5."""
     conn = fts._get_conn()
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
     # Get IDs to delete
     rows = conn.execute(

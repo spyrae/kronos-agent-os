@@ -26,24 +26,24 @@ _AGENT_EXCLUSIVE_JOBS: dict[str, str] = {
 def setup_cron_jobs(scheduler: Scheduler) -> None:
     """Register all cron jobs. Matches Kronos I systemd timers."""
 
-    from kronos.cron.heartbeat import run_heartbeat
-    from kronos.cron.news_monitor import run_news_monitor
-    from kronos.cron.self_improve import run_self_improve
-    from kronos.cron.skill_improve import run_skill_improve
-    from kronos.cron.people_scout import run_people_scout
-    from kronos.cron.user_model import run_user_model
-    from kronos.cron.group_digest import run_group_digest
-    from kronos.cron.sleep_compute import run_sleep_compute
-    from kronos.cron.expense_digest import run_expense_digest
-    from kronos.cron.market_review import run_market_review
-    from kronos.cron.email_expenses import run_email_expenses
-    from kronos.cron.swarm_retention import run_swarm_retention
-    from kronos.cron.competitor_digest import run_competitor_digest
-    from kronos.cron.competitor_weekly import run_competitor_weekly
-    from kronos.cron.competitor_alerts import run_competitor_alerts
+    from kronos.cron.analytics_alerts import run_analytics_alerts
     from kronos.cron.analytics_pulse import run_analytics_pulse
     from kronos.cron.analytics_weekly import run_analytics_weekly
-    from kronos.cron.analytics_alerts import run_analytics_alerts
+    from kronos.cron.competitor_alerts import run_competitor_alerts
+    from kronos.cron.competitor_digest import run_competitor_digest
+    from kronos.cron.competitor_weekly import run_competitor_weekly
+    from kronos.cron.email_expenses import run_email_expenses
+    from kronos.cron.expense_digest import run_expense_digest
+    from kronos.cron.group_digest import run_group_digest
+    from kronos.cron.heartbeat import run_heartbeat
+    from kronos.cron.market_review import run_market_review
+    from kronos.cron.news_monitor import run_news_monitor
+    from kronos.cron.people_scout import run_people_scout
+    from kronos.cron.self_improve import run_self_improve
+    from kronos.cron.skill_improve import run_skill_improve
+    from kronos.cron.sleep_compute import run_sleep_compute
+    from kronos.cron.swarm_retention import run_swarm_retention
+    from kronos.cron.user_model import run_user_model
 
     me = settings.agent_name
 

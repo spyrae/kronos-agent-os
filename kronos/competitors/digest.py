@@ -3,13 +3,13 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from langchain_core.messages import HumanMessage
 
 from kronos.competitors.config import load_competitors
 from kronos.competitors.diff import diff_snapshots
-from kronos.competitors.fetchers import fetch_all_for_competitor, _REQUEST_DELAY
+from kronos.competitors.fetchers import _REQUEST_DELAY, fetch_all_for_competitor
 from kronos.competitors.models import Change, ChangeType, CompetitorConfig, Severity
 from kronos.competitors.store import CompetitorStore
 from kronos.llm import ModelTier, get_model
@@ -211,7 +211,7 @@ class CompetitorMonitor:
         if not important:
             return
 
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
         summary = f"Competitor changes {today}: " + "; ".join(c.summary for c in important[:10])
 
         try:
@@ -237,7 +237,7 @@ class CompetitorMonitor:
 
         lines = [
             f"Monitoring {len(competitors)} competitors ({len(tier1)} tier-1, {len(tier2)} tier-2).",
-            f"Channels: App Store, Play Store, websites, blogs, Twitter, press, ProductHunt, jobs.",
+            "Channels: App Store, Play Store, websites, blogs, Twitter, press, ProductHunt, jobs.",
         ]
 
         if recent:

@@ -9,7 +9,7 @@ Results are merged with score normalization and MMR re-ranking.
 
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 log = logging.getLogger("kronos.memory.hybrid")
 
@@ -95,7 +95,7 @@ def merge_hybrid_results(
             merged[key] = entry.copy()
 
     # Compute hybrid score with temporal decay
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for entry in merged.values():
         base_score = (
             entry["vector_score"] * vector_weight

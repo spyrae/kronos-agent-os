@@ -22,10 +22,10 @@ log = logging.getLogger("kronos.app")
 _LEGACY_MOVES: tuple[tuple[str, str], ...] = (
     # (legacy_relative_path, new_relative_path_inside_db_dir)
     # Per-agent flat DBs collapse into the per-agent directory.
-    (f"{{agent}}.db", "session.db"),
+    ("{agent}.db", "session.db"),
     # Hyphenated qdrant dir (from an earlier manual isolation attempt on
     # VPS — e.g. ``data/impulse-qdrant/``) is the per-agent form we want.
-    (f"{{agent}}-qdrant", "qdrant"),
+    ("{agent}-qdrant", "qdrant"),
     # Shared-by-accident files: the canonical "kronos" agent adopts them,
     # other agents start fresh (historical contents were corrupt anyway).
     ("memory_fts.db", "memory_fts.db"),
@@ -106,7 +106,6 @@ async def main():
 
         # Start dashboard
         from dashboard.server import run_dashboard
-
         from kronos.bridge import run_bridge
         from kronos.discord_bridge import run_discord
 

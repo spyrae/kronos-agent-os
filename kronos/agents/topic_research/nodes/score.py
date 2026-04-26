@@ -5,8 +5,8 @@ import logging
 
 from langchain_core.messages import HumanMessage
 
-from kronos.agents.topic_research.prompts import SCORE_PROMPT
 from kronos.agents.topic_research.nodes.discover import _parse_json_array
+from kronos.agents.topic_research.prompts import SCORE_PROMPT
 from kronos.agents.topic_research.state import TopicResearchState
 from kronos.llm import ModelTier, get_model
 

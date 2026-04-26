@@ -1,6 +1,6 @@
 """Tests for prompt injection shield."""
 
-from kronos.security.shield import check_injection, validate_input, RateLimiter
+from kronos.security.shield import RateLimiter, check_injection, validate_input
 
 
 class TestInjectionDetection:
@@ -60,22 +60,22 @@ class TestValidateInput:
 
 class TestRouter:
     def test_short_messages_are_lite(self):
-        from kronos.router import classify_tier
         from kronos.llm import ModelTier
+        from kronos.router import classify_tier
 
         assert classify_tier("Привет") == ModelTier.LITE
         assert classify_tier("Ок") == ModelTier.LITE
         assert classify_tier("да") == ModelTier.LITE
 
     def test_complex_messages_are_standard(self):
-        from kronos.router import classify_tier
         from kronos.llm import ModelTier
+        from kronos.router import classify_tier
 
         assert classify_tier("Проведи анализ рынка криптовалют за последний месяц") == ModelTier.STANDARD
         assert classify_tier("Compare these two investment strategies in detail") == ModelTier.STANDARD
 
     def test_system_markers_are_standard(self):
-        from kronos.router import classify_tier
         from kronos.llm import ModelTier
+        from kronos.router import classify_tier
 
         assert classify_tier("HEARTBEAT analysis prompt here") == ModelTier.STANDARD

@@ -4,9 +4,9 @@ from unittest.mock import patch
 
 from langchain_core.tools import tool
 
-from kronos.agents.research import RESEARCH_TOOL_PREFIXES, create_research_agent
-from kronos.agents.task import TASK_TOOL_PREFIXES, create_task_agent
-from kronos.agents.finance import FINANCE_TOOL_PREFIXES, create_finance_agent
+from kronos.agents.finance import create_finance_agent
+from kronos.agents.research import create_research_agent
+from kronos.agents.task import create_task_agent
 
 
 @tool

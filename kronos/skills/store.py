@@ -9,7 +9,7 @@ Progressive disclosure:
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 log = logging.getLogger("kronos.skills.store")
@@ -236,7 +236,7 @@ class SkillStore:
             "version": "1.0.0",
             "agent": "kronos-ii",
             "skills": skills_list,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
         }
 
     def _generate_manifest_file(self) -> None:

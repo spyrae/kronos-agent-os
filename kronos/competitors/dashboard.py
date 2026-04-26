@@ -8,7 +8,7 @@ Generates a comprehensive markdown dashboard with:
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from kronos.competitors.config import load_competitors
 from kronos.competitors.store import CompetitorStore
@@ -35,10 +35,10 @@ def generate_dashboard_markdown() -> str:
     store = CompetitorStore()
     tracker = CompetitiveTracker()
     competitors = load_competitors()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     sections = [
-        f"# Competitive Dashboard",
+        "# Competitive Dashboard",
         f"*Updated: {now.strftime('%d %B %Y, %H:%M UTC')}*",
         "",
     ]
@@ -122,7 +122,7 @@ def _advantages_table(tracker: CompetitiveTracker) -> str:
 
 def _recent_changes(store: CompetitorStore) -> str:
     """Format recent changes list."""
-    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    week_ago = (datetime.now(UTC) - timedelta(days=7)).isoformat()
     changes = store._db.read(
         "SELECT * FROM competitor_changes WHERE detected_at >= ? "
         "ORDER BY detected_at DESC LIMIT 20",

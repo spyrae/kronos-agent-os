@@ -31,8 +31,6 @@ from dataclasses import dataclass, field
 
 import yaml
 
-from kronos.config import settings
-
 log = logging.getLogger("kronos.group_router")
 
 # How many peer bot replies before this agent skips (Tier 2 post-delay check

@@ -22,12 +22,10 @@ import pytest
 
 from kronos.group_router import (
     AGENT_PROFILES,
-    AddressingInfo,
-    GroupRouter,
     MAX_PEER_REPLIES,
+    GroupRouter,
     _alias_in_text,
 )
-
 
 # --- User ID conventions for tests --------------------------------------------
 MY_ID = 1001

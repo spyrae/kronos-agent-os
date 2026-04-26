@@ -4,7 +4,7 @@ import logging
 
 from langchain_core.tools import tool
 
-from kronos.tools.dynamic import create_tool, load_persisted_tools, TOOLS_DIR
+from kronos.tools.dynamic import TOOLS_DIR, create_tool
 
 log = logging.getLogger("kronos.tools.dynamic_tools")
 

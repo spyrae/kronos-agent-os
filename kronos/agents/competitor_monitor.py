@@ -128,7 +128,7 @@ async def _competitor_deep_query(
             limit=3,
         )
         if memories:
-            lines.append(f"\nFrom memory:")
+            lines.append("\nFrom memory:")
             for m in memories:
                 lines.append(f"  • {m}")
     except Exception:

@@ -15,7 +15,6 @@ Memory architecture (per Phase 3 + Phase 7 of the swarm refactor):
     user-sourced → shared, agent-sourced → personal.
 """
 
-import asyncio
 import logging
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage

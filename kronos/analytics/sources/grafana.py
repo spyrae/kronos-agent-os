@@ -42,7 +42,7 @@ def _prom_query(query: str) -> float | None:
 
     # Simpler: use Grafana's built-in Prometheus datasource proxy
     try:
-        data = _api_get(f"/api/datasources/proxy/1/api/v1/query", {
+        data = _api_get("/api/datasources/proxy/1/api/v1/query", {
             "query": query,
         })
         results = data.get("data", {}).get("result", [])

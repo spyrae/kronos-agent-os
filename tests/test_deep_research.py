@@ -5,8 +5,6 @@ from unittest.mock import MagicMock, patch
 from langchain_core.messages import AIMessage, HumanMessage
 
 from kronos.agents.deep_research.graph import create_deep_research_agent
-from kronos.agents.deep_research.nodes import set_tools
-from kronos.agents.deep_research.state import DeepResearchState
 
 
 class TestDeepResearchGraph:

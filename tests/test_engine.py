@@ -1,13 +1,12 @@
 """Tests for kronos.engine — custom react loop replacing LangGraph."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
 from kronos.engine import AgentResult, create_agent, execute_tool, react_loop
-
 
 # --- Helpers ---
 

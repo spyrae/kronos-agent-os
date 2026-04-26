@@ -9,7 +9,6 @@ No LangGraph — plain async workflow.
 """
 
 import logging
-from functools import partial
 
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool

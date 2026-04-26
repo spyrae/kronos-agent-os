@@ -4,8 +4,8 @@ Run: pytest tests/test_mcp_smoke.py -v
 Requires: MCP server binaries and API keys in .env
 """
 
-import asyncio
 import os
+
 import pytest
 
 pytestmark = pytest.mark.integration
@@ -49,7 +49,6 @@ def test_mcp_config_has_filesystem(mcp_config):
     skips the server. Skip the test in that case — on VPS the directory
     is always present and the assertion runs normally.
     """
-    import os
 
     from kronos.config import settings
 

@@ -7,7 +7,7 @@ Retention: 90 days, then auto-pruned.
 import logging
 import statistics
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from kronos.db import get_db
 
@@ -81,7 +81,7 @@ def record_metrics(metrics: dict[str, float | int | None]) -> None:
 def get_history(metric_name: str, days: int = 14) -> list[float]:
     """Get metric values for the last N days (one per day, latest)."""
     db = _db()
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     rows = db.conn.execute(
         """SELECT value FROM metric_history
            WHERE metric_name = ? AND recorded_at >= ?
@@ -112,7 +112,7 @@ def get_average(metric_name: str, days: int = 14) -> float | None:
 def prune_old(days: int = _RETENTION_DAYS) -> int:
     """Delete metrics older than retention period. Returns count deleted."""
     db = _db()
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     cursor = db.conn.execute(
         "DELETE FROM metric_history WHERE recorded_at < ?",
         (cutoff,),

@@ -9,7 +9,6 @@ Supports:
 import logging
 import re
 import urllib.request
-from pathlib import Path
 
 from kronos.skills.store import SkillStore, _parse_frontmatter
 

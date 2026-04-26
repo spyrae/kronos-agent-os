@@ -6,10 +6,10 @@ alert fatigue.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from kronos.config import settings
-from kronos.cron.notify import send_bot_api, send_ntfy, TOPIC_DIGEST
+from kronos.cron.notify import TOPIC_DIGEST, send_bot_api, send_ntfy
 
 log = logging.getLogger("kronos.cron.analytics_alerts")
 
@@ -21,7 +21,7 @@ _alert_state = {"count": 0, "date": ""}
 
 def _check_reset() -> None:
     """Reset daily counter if date changed."""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     if _alert_state["date"] != today:
         _alert_state["count"] = 0
         _alert_state["date"] = today
@@ -38,8 +38,8 @@ async def run_analytics_alerts() -> None:
         log.debug("Daily alert cap reached (%d), skipping", MAX_DAILY_ALERTS)
         return
 
-    from kronos.analytics.sources import zabbix, grafana, sentry
     from kronos.analytics.anomaly import check_all_anomalies, flatten_metrics
+    from kronos.analytics.sources import grafana, sentry, zabbix
 
     # Collect only critical sources (fast check, not all 10)
     critical_sources = {

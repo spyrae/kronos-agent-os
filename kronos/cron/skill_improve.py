@@ -6,15 +6,14 @@ proposes minimal improvements to SKILL.md files with versioned backups.
 
 import json
 import logging
-import re
 import shutil
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 from kronos.config import settings
-from kronos.cron.notify import send_bot_api, TOPIC_GENERAL
+from kronos.cron.notify import TOPIC_GENERAL, send_bot_api
 from kronos.llm import ModelTier, get_model
 
 log = logging.getLogger("kronos.cron.skill_improve")

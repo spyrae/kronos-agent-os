@@ -8,10 +8,10 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Awaitable
 
 log = logging.getLogger("kronos.cron.scheduler")
 
@@ -95,7 +95,7 @@ class Scheduler:
 
         # Daily/weekly job
         if job.cron_hour is not None:
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.now(UTC)
 
             # Weekly: check weekday first
             if job.cron_weekday is not None and now_utc.weekday() != job.cron_weekday:
@@ -107,7 +107,7 @@ class Scheduler:
 
             # Only run once per scheduled hour (check last_run)
             if job.last_run > 0:
-                last_dt = datetime.fromtimestamp(job.last_run, tz=timezone.utc)
+                last_dt = datetime.fromtimestamp(job.last_run, tz=UTC)
                 # Same calendar hour = already ran
                 if last_dt.date() == now_utc.date() and last_dt.hour == now_utc.hour:
                     return False
@@ -153,7 +153,7 @@ class Scheduler:
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=30)
                 break
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
         log.info("Scheduler stopped")

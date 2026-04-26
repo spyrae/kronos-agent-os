@@ -19,27 +19,59 @@ Kronos Swarm does:
 
 ## Architecture
 
-```
-Telegram group ──> each agent's Telethon bridge ──> GroupRouter (AddressingInfo)
-                                                         |
-                                                         +──> skip (addressed to another agent)
-                                                         +──> Tier 1 -- explicit @me / reply-to-me
-                                                         +──> Tier 2 -- topic relevance >= 7
-                                                         +──> Tier 3 -- peer reaction (user-root only)
-                                                                   |
-                                                                   v
-                                             SwarmStore (shared swarm.db)
-                                                - swarm_messages (ledger)
-                                                - reply_claims  (arbitration)
-                                                - shared_user_facts (FTS5)
-                                                                   |
-                                                                   v
-                                             KronosAgent.ainvoke (per-agent process)
-                                                - Custom ReAct engine (200 lines, no LangGraph)
-                                                - Supervisor with sub-agents
-                                                - Mem0 + FTS5 hybrid memory
-                                                - MCP tool servers
-                                                - Security (shield + loop detector + cost guardian)
+```mermaid
+flowchart TB
+    TG["Telegram Group Chat"]
+
+    subgraph agents["Independent Agent Processes"]
+        direction LR
+        A1["Kronos<br/><i>Strategist</i>"]
+        A2["Nexus<br/><i>Analyst</i>"]
+        A3["Lacuna<br/><i>Creative</i>"]
+        A4["...N agents"]
+    end
+
+    TG -- "every message" --> A1
+    TG -- "every message" --> A2
+    TG -- "every message" --> A3
+    TG -- "every message" --> A4
+
+    subgraph router["GroupRouter (per agent)"]
+        direction TB
+        R1["Tier 1: @mention / reply-to-me"]
+        R2["Tier 2: Topic relevance >= 7"]
+        R3["Tier 3: Peer reaction"]
+        SKIP["Skip silently"]
+    end
+
+    A1 --> router
+    A2 --> router
+    A3 --> router
+
+    subgraph swarm["SwarmStore — shared swarm.db"]
+        direction TB
+        SM["swarm_messages<br/><i>cross-agent ledger</i>"]
+        RC["reply_claims<br/><i>atomic arbitration</i>"]
+        SF["shared_user_facts<br/><i>FTS5</i>"]
+    end
+
+    router -- "claim" --> RC
+    RC -- "winner?" --> AGENT
+
+    subgraph AGENT["KronosAgent.ainvoke"]
+        direction TB
+        ENG["ReAct Engine<br/><i>200 lines, no LangGraph</i>"]
+        MEM["Mem0 + FTS5<br/><i>hybrid memory</i>"]
+        MCP["MCP Tools<br/><i>11 servers</i>"]
+        SEC["Security<br/><i>shield + cost guard</i>"]
+    end
+
+    AGENT -- "reply" --> TG
+
+    style TG fill:#2196F3,color:#fff
+    style swarm fill:#FF9800,color:#fff
+    style AGENT fill:#4CAF50,color:#fff
+    style SKIP fill:#9E9E9E,color:#fff
 ```
 
 ### Tier-Based Routing
@@ -219,4 +251,4 @@ bash scripts/deploy.sh --first-run
 
 ## License
 
-MIT
+[Business Source License 1.1](LICENSE) — free for personal, internal, academic, and integration use. Cannot be used to build a competing multi-agent swarm service. Converts to Apache 2.0 on 2030-04-26.

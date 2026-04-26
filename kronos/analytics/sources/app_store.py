@@ -3,9 +3,6 @@
 import json
 import logging
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
-
-from kronos.config import settings
 
 log = logging.getLogger("kronos.analytics.sources.app_store")
 

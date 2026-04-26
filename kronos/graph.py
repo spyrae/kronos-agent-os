@@ -12,20 +12,17 @@ Memory integration (Mem0):
 
 import asyncio
 import logging
-from typing import Callable
 
-from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
 from kronos.config import settings
-from kronos.engine import AgentResult, react_loop
-from kronos.llm import ModelTier, get_model
+from kronos.engine import react_loop
+from kronos.llm import get_model
 from kronos.memory.context_engine import get_context_engine
 from kronos.memory.nodes import retrieve_memories, store_memories_background
 from kronos.persona import build_system_prompt
 from kronos.router import classify_tier
-from kronos.security.loop_detector import LoopDetector
 from kronos.security.shield import validate_input
 from kronos.session import SessionStore
 from kronos.skills.store import SkillStore
@@ -87,8 +84,8 @@ class KronosAgent:
         self._tools.extend(get_gateway_tools())
 
         # Dynamic tools
-        from kronos.tools.dynamic_tools import get_dynamic_management_tools
         from kronos.tools.dynamic import load_persisted_tools
+        from kronos.tools.dynamic_tools import get_dynamic_management_tools
         self._tools.extend(get_dynamic_management_tools())
         persisted = load_persisted_tools()
         if persisted:

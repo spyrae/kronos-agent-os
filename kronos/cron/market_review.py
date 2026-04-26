@@ -5,11 +5,10 @@ Runs weekly Friday at 18:00 UTC+8 (10:00 UTC).
 """
 
 import logging
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 
 from kronos.config import settings
-from kronos.cron.notify import send_bot_api, TOPIC_DIGEST
+from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
 from kronos.llm import ModelTier, get_model
 from kronos.tools.brave import search as brave_search
 
@@ -46,7 +45,7 @@ async def run_market_review() -> None:
         return
 
     tickers = _load_watchlist()
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
 
     # Collect news for each ticker
     all_data = []

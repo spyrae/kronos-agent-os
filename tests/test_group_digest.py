@@ -1,8 +1,7 @@
 """Tests for group digest cron job."""
 
-import pytest
 
-from kronos.cron.group_digest import _filter_significant, _load_groups, BATCH_SIZE
+from kronos.cron.group_digest import _filter_significant, _load_groups
 from kronos.workspace import Workspace
 
 

@@ -13,9 +13,9 @@ import logging
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool
 
+from kronos.agents.deep_research.state import DeepResearchState, SearchResult
 from kronos.engine import create_agent
 from kronos.llm import ModelTier, get_model
-from kronos.agents.deep_research.state import DeepResearchState, SearchResult
 
 log = logging.getLogger("kronos.agents.deep_research")
 

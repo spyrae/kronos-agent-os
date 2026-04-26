@@ -10,11 +10,10 @@ import json
 import logging
 import os
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from kronos.config import settings
-from kronos.cron.notify import send_bot_api, TOPIC_GENERAL
-
+from kronos.cron.notify import TOPIC_GENERAL, send_bot_api
 from kronos.llm import ModelTier, get_model
 
 log = logging.getLogger("kronos.cron.email_expenses")
@@ -143,7 +142,7 @@ def _create_notion_expense(expense: dict) -> bool:
                 "Name": {"title": [{"text": {"content": expense.get("description", "Email expense")}}]},
                 "Amount": {"number": expense.get("amount", 0)},
                 "Category": {"select": {"name": expense.get("category", "Other")}},
-                "Date": {"date": {"start": expense.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))}},
+                "Date": {"date": {"start": expense.get("date", datetime.now(UTC).strftime("%Y-%m-%d"))}},
                 "Source": {"select": {"name": "Email"}},
             },
         }).encode("utf-8")

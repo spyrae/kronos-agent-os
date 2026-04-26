@@ -7,7 +7,7 @@ HTTP API. Linear GraphQL API with personal API key.
 import json
 import logging
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from kronos.config import settings
 
@@ -43,7 +43,7 @@ def collect() -> dict:
     if not settings.linear_api_key:
         return {"error": "Linear not configured"}
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     week_ago = (now - timedelta(days=7)).isoformat()
 
     try:

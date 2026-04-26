@@ -7,7 +7,7 @@ Generates deep analysis report → Telegram + Mem0.
 import logging
 
 from kronos.config import settings
-from kronos.cron.notify import send_bot_api, TOPIC_DIGEST
+from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
 
 log = logging.getLogger("kronos.cron.competitor_weekly")
 

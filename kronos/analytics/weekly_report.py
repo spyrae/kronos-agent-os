@@ -5,14 +5,22 @@ compares with previous week (Mem0), generates executive summary.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from langchain_core.messages import HumanMessage
 
 from kronos.analytics.sources import (
-    zabbix, grafana, sentry,
-    posthog, app_store, supabase_stats, web_analytics,
-    revenuecat, litellm, langfuse_stats, linear_stats,
+    app_store,
+    grafana,
+    langfuse_stats,
+    linear_stats,
+    litellm,
+    posthog,
+    revenuecat,
+    sentry,
+    supabase_stats,
+    web_analytics,
+    zabbix,
 )
 from kronos.llm import ModelTier, get_model
 
@@ -136,7 +144,7 @@ async def _save_to_mem0(summary: str, metrics: dict) -> None:
         from kronos.memory.mem0_client import get_mem0
         mem0 = get_mem0()
 
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
 
         # Extract key numbers for compact storage
         parts = [f"Weekly report {today}:"]

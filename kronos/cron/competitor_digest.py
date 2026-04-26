@@ -6,10 +6,10 @@ to Telegram.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from kronos.config import settings
-from kronos.cron.notify import send_bot_api, TOPIC_DIGEST
+from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
 
 log = logging.getLogger("kronos.cron.competitor_digest")
 
@@ -23,7 +23,7 @@ async def run_competitor_digest() -> None:
     from kronos.competitors.digest import CompetitorMonitor
 
     monitor = CompetitorMonitor()
-    today = datetime.now(timezone.utc).strftime("%d %B")
+    today = datetime.now(UTC).strftime("%d %B")
 
     try:
         digest = await monitor.run_daily_check()
@@ -80,6 +80,7 @@ def _update_dashboard() -> None:
         dashboard = generate_dashboard_markdown()
         # Save locally as fallback (Outline integration in future)
         from pathlib import Path
+
         from kronos.config import settings
 
         dashboard_path = Path(settings.db_dir) / "competitor_dashboard.md"

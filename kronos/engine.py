@@ -10,8 +10,8 @@ No LangGraph dependency. Uses langchain_core messages and tools directly.
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
-from typing import Callable
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
@@ -58,7 +58,7 @@ async def execute_tool(
 
         content = str(result) if result is not None else "OK"
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         content = f"[ERROR] Tool '{tool.name}' timed out after {TOOL_TIMEOUT_SECONDS}s"
         log.error("Tool timeout: %s", tool.name)
     except Exception as e:

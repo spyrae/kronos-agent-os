@@ -8,11 +8,10 @@ import json
 import logging
 import os
 import urllib.request
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 
 from kronos.config import settings
-from kronos.cron.notify import send_bot_api, TOPIC_GENERAL
+from kronos.cron.notify import TOPIC_GENERAL, send_bot_api
 from kronos.llm import ModelTier, get_model
 
 log = logging.getLogger("kronos.cron.heartbeat")
@@ -107,7 +106,7 @@ async def run_heartbeat() -> None:
     except Exception:
         pass
 
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
     prompt = f"""Current time: {now}
 
@@ -143,7 +142,7 @@ Answer in Russian."""
     log.warning("Heartbeat: problem detected — %s", reply[:200])
 
     global _last_notify_ts
-    now_ts = datetime.now(timezone.utc).timestamp()
+    now_ts = datetime.now(UTC).timestamp()
     if now_ts - _last_notify_ts < _NOTIFY_COOLDOWN_SECONDS:
         log.info("Heartbeat: skipping notification (cooldown)")
         return

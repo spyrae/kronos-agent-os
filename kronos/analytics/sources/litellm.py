@@ -4,7 +4,7 @@ import json
 import logging
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from kronos.config import settings
 
@@ -36,7 +36,7 @@ def collect() -> dict:
     if not settings.litellm_base_url or not settings.litellm_admin_key:
         return {"error": "LiteLLM not configured"}
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     yesterday = now - timedelta(days=1)
 
     try:

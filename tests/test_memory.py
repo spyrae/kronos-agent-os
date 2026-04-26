@@ -1,8 +1,8 @@
 """Tests for memory system."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 
 from kronos.memory.compaction import should_compact
 from kronos.memory.nodes import retrieve_memories

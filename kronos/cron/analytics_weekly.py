@@ -5,10 +5,10 @@ Runs Monday 09:00 UTC on Nexus agent. Aggregates all sources for
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from kronos.config import settings
-from kronos.cron.notify import send_bot_api, TOPIC_DIGEST
+from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
 
 log = logging.getLogger("kronos.cron.analytics_weekly")
 
@@ -20,7 +20,7 @@ async def run_analytics_weekly() -> None:
 
     from kronos.analytics.weekly_report import generate_weekly_report
 
-    today = datetime.now(timezone.utc)
+    today = datetime.now(UTC)
     week_label = today.strftime("W%V %Y")
 
     try:

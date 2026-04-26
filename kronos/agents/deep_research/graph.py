@@ -10,7 +10,7 @@ No LangGraph — plain async workflow.
 
 import logging
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 
 from kronos.agents.deep_research.nodes import (

@@ -1,8 +1,6 @@
 """Competitive Advantage Tracker — us vs competitors feature comparison."""
 
-import json
 import logging
-from datetime import datetime, timezone
 
 from kronos.db import get_db
 

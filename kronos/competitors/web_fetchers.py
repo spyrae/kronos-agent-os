@@ -4,11 +4,9 @@ All fetchers return list[Change]. Uses Brave Search REST API
 (kronos.tools.brave) — same pattern as news_monitor cron.
 """
 
-import asyncio
 import hashlib
 import logging
 import time
-from datetime import datetime, timezone
 
 from langchain_core.messages import HumanMessage
 

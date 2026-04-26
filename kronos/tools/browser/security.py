@@ -6,7 +6,6 @@ server-side request forgery attacks.
 
 import ipaddress
 import logging
-import re
 from urllib.parse import urlparse
 
 log = logging.getLogger("kronos.tools.browser.security")

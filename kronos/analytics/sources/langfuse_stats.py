@@ -4,7 +4,7 @@ import json
 import logging
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from kronos.config import settings
 
@@ -43,7 +43,7 @@ def collect() -> dict:
     if not settings.langfuse_public_key or not settings.langfuse_secret_key:
         return {"error": "Langfuse not configured"}
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     yesterday = now - timedelta(days=1)
 
     try:

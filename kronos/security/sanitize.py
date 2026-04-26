@@ -14,7 +14,6 @@ import re
 import secrets
 import unicodedata
 
-
 # Patterns commonly used in prompt injection attacks
 _INJECTION_PATTERNS = [
     r"ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|prompts?|rules?)",

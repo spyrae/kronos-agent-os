@@ -8,10 +8,10 @@ import json
 import logging
 import os
 import urllib.request
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 from kronos.config import settings
-from kronos.cron.notify import send_bot_api, TOPIC_DIGEST
+from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
 from kronos.llm import ModelTier, get_model
 
 log = logging.getLogger("kronos.cron.expense_digest")
@@ -25,7 +25,7 @@ def _query_notion_expenses(days: int = 7) -> list[dict]:
         log.warning("NOTION_API_KEY not set, skipping expense digest")
         return []
 
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
 
     payload = json.dumps({
         "filter": {
@@ -85,7 +85,7 @@ async def run_expense_digest() -> None:
 
     expenses_text = json.dumps(expenses, ensure_ascii=False, indent=2)
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     prompt = f"""Ты — финансовый аналитик. Дата: {today}.
 
 Расходы за последнюю неделю:

@@ -13,11 +13,11 @@ import json
 import logging
 import time
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from kronos.config import settings
-from kronos.cron.notify import send_bot_api, TOPIC_GENERAL
+from kronos.cron.notify import TOPIC_GENERAL, send_bot_api
 from kronos.llm import ModelTier, get_model
 
 log = logging.getLogger("kronos.cron.user_model")
@@ -190,14 +190,14 @@ async def run_user_model() -> None:
     # Save updated model
     header = (
         f"# User Model\n\n"
-        f"Updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
+        f"Updated: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}\n"
         f"Period: {LOOKBACK_DAYS} days, {len(entries)} interactions\n\n"
     )
     model_path.write_text(header + new_model, encoding="utf-8")
 
     # Also save quantitative stats
     patterns_path = ws.user_patterns
-    patterns_path.write_text(f"# User Patterns — Quantitative\n\nUpdated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n{stats}", encoding="utf-8")
+    patterns_path.write_text(f"# User Patterns — Quantitative\n\nUpdated: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}\n\n{stats}", encoding="utf-8")
 
     log.info("User model updated: %d entries, %d chars", len(entries), len(new_model))
 

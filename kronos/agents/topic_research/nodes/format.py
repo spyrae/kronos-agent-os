@@ -1,6 +1,5 @@
 """Format node — produce final report and optionally save to Notion."""
 
-import json
 import logging
 
 from langchain_core.messages import AIMessage, HumanMessage

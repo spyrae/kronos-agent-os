@@ -12,7 +12,7 @@ All database access goes through SafeDB for thread-safe write serialization.
 import logging
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from kronos.db import get_db
 
@@ -84,7 +84,7 @@ def index_fact(content: str, user_id: str, mem0_id: str = "") -> None:
         return
 
     db = _get_db()
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     def _do_index(conn):
         existing = conn.execute(
@@ -194,7 +194,7 @@ def touch_facts(fact_contents: list[str], user_id: str) -> int:
 
     try:
         db = _get_db()
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         ops = []
         for content in fact_contents:
@@ -228,7 +228,7 @@ def decay_all_facts(half_life_days: int = 14) -> dict:
     import math
 
     db = _get_db()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     rows = db.read(
         "SELECT id, relevance, last_accessed, tier FROM memory_facts WHERE relevance > 0.01"

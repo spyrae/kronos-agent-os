@@ -4,11 +4,10 @@ Pipeline: Brave Search (real data) → LLM (synthesis) → Telegram.
 """
 
 import logging
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
+from datetime import UTC, datetime, timedelta
 
 from kronos.config import settings
-from kronos.cron.notify import send_bot_api, TOPIC_DIGEST
+from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
 from kronos.llm import ModelTier, get_model
 from kronos.tools.brave import search as brave_search
 
@@ -63,7 +62,7 @@ async def run_news_monitor() -> None:
         log.info("No watchlist found, skipping news-monitor")
         return
 
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    yesterday = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%d")
     topics = _parse_watchlist_queries(watchlist)
 
     # Phase 1: Collect real search results

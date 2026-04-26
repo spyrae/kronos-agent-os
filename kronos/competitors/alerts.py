@@ -8,7 +8,7 @@ Only checks tier-1 competitors for critical signals:
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 from kronos.competitors.config import load_competitors
 from kronos.competitors.diff import diff_snapshots
@@ -112,7 +112,7 @@ def format_alert(change: Change) -> str:
 
 def _get_today_alert_count(store: CompetitorStore) -> int:
     """Get number of alerts sent today."""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     row = store._db.read_one(
         "SELECT COUNT(*) as cnt FROM competitor_changes "
         "WHERE severity = 'critical' AND detected_at >= ?",

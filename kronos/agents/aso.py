@@ -107,7 +107,7 @@ async def aso_status() -> str:
         next_nodes = list(state.next) if state.next else []
 
         lines = [
-            f"ASO Pipeline Status",
+            "ASO Pipeline Status",
             f"Cycle: #{v.get('cycle_id', '—')}",
             f"Phase: {v.get('phase', '—')}",
             f"Next: {next_nodes or 'complete'}",

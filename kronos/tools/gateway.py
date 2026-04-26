@@ -92,9 +92,9 @@ class MCPGateway:
         """
         # Validate config
         if "transport" not in config:
-            return f"Error: config must include 'transport' (stdio or sse)"
+            return "Error: config must include 'transport' (stdio or sse)"
         if "command" not in config and config.get("transport") == "stdio":
-            return f"Error: stdio transport requires 'command'"
+            return "Error: stdio transport requires 'command'"
 
         # Save to DB
         conn = sqlite3.connect(str(self._db_path))

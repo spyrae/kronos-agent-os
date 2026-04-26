@@ -16,7 +16,7 @@ All database access goes through SafeDB for thread-safe write serialization.
 import json
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from kronos.db import get_db
 
@@ -73,7 +73,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 def add_entity(name: str, entity_type: str, properties: dict | None = None) -> int:
     """Add or update an entity. Returns entity ID."""
     db = _get_db()
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     props = json.dumps(properties or {}, ensure_ascii=False)
 
     def _upsert(conn):
@@ -162,7 +162,7 @@ def add_relation(
     target_id = add_entity(target_name, target_type)
 
     db = _get_db()
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     props = json.dumps(properties or {}, ensure_ascii=False)
 
     def _upsert(conn):

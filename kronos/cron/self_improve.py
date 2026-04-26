@@ -6,11 +6,11 @@ Reads audit log, identifies ONE concrete improvement, saves as learning record.
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from kronos.config import settings
-from kronos.cron.notify import send_bot_api, TOPIC_GENERAL
+from kronos.cron.notify import TOPIC_GENERAL, send_bot_api
 from kronos.llm import ModelTier, get_model
 from kronos.swarm_store import get_swarm
 
@@ -94,7 +94,7 @@ async def run_self_improve() -> None:
     if prev_improvements:
         prev_text = "\n\nПредыдущие улучшения:\n" + "\n---\n".join(prev_improvements)
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
 
     prompt = f"""Проанализируй последние сессии агента Kronos и предложи ОДНО конкретное улучшение.
 

@@ -9,18 +9,11 @@ Security: generated code runs in a restricted scope (no file system
 access, no network, no imports beyond allowlist).
 """
 
-import hashlib
-import importlib
-import json
 import logging
 import re
-import sys
-import types
-from pathlib import Path
 
 from langchain_core.tools import BaseTool, StructuredTool
 
-from kronos.config import settings
 from kronos.llm import ModelTier, get_model
 from kronos.workspace import ws
 
@@ -295,6 +288,5 @@ def _save_tool(name: str, code: str, description: str) -> None:
 
 
 def _is_async(func) -> bool:
-    import asyncio
     import inspect
     return inspect.iscoroutinefunction(func)

@@ -6,8 +6,8 @@ import logging
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 
+from kronos.agents.topic_research.nodes.discover import _find_tool
 from kronos.agents.topic_research.prompts import VALIDATE_PROMPT
-from kronos.agents.topic_research.nodes.discover import _find_tool, _parse_json_array
 from kronos.agents.topic_research.state import TopicResearchState
 from kronos.llm import ModelTier, get_model
 

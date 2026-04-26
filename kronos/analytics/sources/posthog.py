@@ -4,7 +4,7 @@ import json
 import logging
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from kronos.config import settings
 
@@ -54,7 +54,7 @@ def _api_post(path: str, body: dict) -> dict:
 def _event_count(event: str, days: int = 1) -> int | None:
     """Count events over the last N days using PostHog Trends API."""
     project_id = settings.posthog_project_id
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     date_from = (now - timedelta(days=days)).strftime("%Y-%m-%d")
     date_to = now.strftime("%Y-%m-%d")
 
@@ -76,7 +76,7 @@ def _event_count(event: str, days: int = 1) -> int | None:
 def _unique_users(event: str, days: int = 1) -> int | None:
     """Count unique users for an event using PostHog Trends API."""
     project_id = settings.posthog_project_id
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     date_from = (now - timedelta(days=days)).strftime("%Y-%m-%d")
     date_to = now.strftime("%Y-%m-%d")
 
