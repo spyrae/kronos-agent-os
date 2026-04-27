@@ -18,7 +18,7 @@ I am preparing a public release of Kronos Agent OS (KAOS), a self-hosted runtime
 Could you spend 20-30 minutes trying the public quickstart from the README and tell me where you get stuck?
 
 Please use only the repo/docs, not private instructions:
-https://github.com/spyrae/kronos-swarm
+https://github.com/spyrae/kronos-agent-os
 
 Useful checks:
 - Does the Agent OS framing make sense?

@@ -6,13 +6,13 @@ First paragraph:
 
 > Kronos Agent OS (KAOS) is a self-hosted runtime for durable AI agents: local memory, reusable skills, MCP tools, scheduled jobs, a dashboard control room, and optional sub-agent coordination.
 
-Repository: `https://github.com/spyrae/kronos-swarm`
+Repository: `https://github.com/spyrae/kronos-agent-os`
 
 Quickstart:
 
 ```bash
-git clone https://github.com/spyrae/kronos-swarm.git
-cd kronos-swarm
+git clone https://github.com/spyrae/kronos-agent-os.git
+cd kronos-agent-os
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -64,8 +64,8 @@ Security: `docs/SECURITY.md`
 7. Try it locally:
 
 ```bash
-git clone https://github.com/spyrae/kronos-swarm.git
-cd kronos-swarm
+git clone https://github.com/spyrae/kronos-agent-os.git
+cd kronos-agent-os
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -74,7 +74,7 @@ kaos demo
 
 8. If you want to build agents you can inspect and operate, KAOS is the direction I wanted: local-first, file-backed, dashboard-visible, and serious about tool safety.
 
-GitHub: `https://github.com/spyrae/kronos-swarm`
+GitHub: `https://github.com/spyrae/kronos-agent-os`
 
 ## Hacker News
 
@@ -95,8 +95,8 @@ The repo includes a deterministic offline demo, dashboard seed state, safe templ
 
 Quickstart:
 
-git clone https://github.com/spyrae/kronos-swarm.git
-cd kronos-swarm
+git clone https://github.com/spyrae/kronos-agent-os.git
+cd kronos-agent-os
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -124,7 +124,7 @@ pip install -e ".[dev]"
 kaos demo
 kaos demo-seed --reset
 
-Repo: https://github.com/spyrae/kronos-swarm
+Repo: https://github.com/spyrae/kronos-agent-os
 Docs: docs/README.md
 Security model: docs/SECURITY.md
 ```
@@ -141,7 +141,7 @@ Try the deterministic demo:
 kaos demo
 kaos demo-seed --reset
 
-Repo: https://github.com/spyrae/kronos-swarm
+Repo: https://github.com/spyrae/kronos-agent-os
 ```
 
 ### r/opensource
@@ -151,7 +151,7 @@ I am releasing Kronos Agent OS (KAOS), an MIT-licensed self-hosted runtime for d
 
 It includes CLI demos, templates, skill packs, MCP/tool gates, scheduled jobs, a dashboard control room, and optional swarm coordination. The goal is a practical foundation people can inspect, fork, and extend.
 
-Repo: https://github.com/spyrae/kronos-swarm
+Repo: https://github.com/spyrae/kronos-agent-os
 Start with: kaos demo
 ```
 
@@ -166,7 +166,7 @@ Start locally:
 pip install -e ".[dev]"
 kaos demo
 
-Repo: https://github.com/spyrae/kronos-swarm
+Repo: https://github.com/spyrae/kronos-agent-os
 ```
 
 ## Newsletter / Discord / Slack
@@ -178,7 +178,7 @@ The thesis: useful agents need more than a prompt. They need memory you can insp
 
 KAOS includes safe local demos, public templates, skill packs, MCP/tool gates, scheduler visibility, and optional swarm coordination. Public defaults keep risky capabilities disabled until explicit local opt-in.
 
-GitHub: https://github.com/spyrae/kronos-swarm
+GitHub: https://github.com/spyrae/kronos-agent-os
 Quickstart: kaos demo
 Dashboard seed: kaos demo-seed --reset
 ```

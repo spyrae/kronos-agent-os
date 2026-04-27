@@ -1,6 +1,6 @@
 # Kronos Agent OS (KAOS)
 
-[![CI](https://github.com/spyrae/kronos-swarm/actions/workflows/ci.yml/badge.svg)](https://github.com/spyrae/kronos-swarm/actions/workflows/ci.yml)
+[![CI](https://github.com/spyrae/kronos-agent-os/actions/workflows/ci.yml/badge.svg)](https://github.com/spyrae/kronos-agent-os/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](pyproject.toml)
 
@@ -28,8 +28,8 @@ Requirements:
 - Node.js 18.18+ for the optional dashboard UI
 
 ```bash
-git clone https://github.com/spyrae/kronos-swarm.git
-cd kronos-swarm
+git clone https://github.com/spyrae/kronos-agent-os.git
+cd kronos-agent-os
 
 python3 -m venv .venv
 source .venv/bin/activate

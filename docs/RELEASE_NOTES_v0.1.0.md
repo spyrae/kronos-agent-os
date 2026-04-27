@@ -14,8 +14,8 @@ Initial public release of Kronos Agent OS (KAOS), a self-hosted runtime for dura
 ## Quickstart
 
 ```bash
-git clone https://github.com/spyrae/kronos-swarm.git
-cd kronos-swarm
+git clone https://github.com/spyrae/kronos-agent-os.git
+cd kronos-agent-os
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"

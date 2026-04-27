@@ -7,8 +7,8 @@ Kronos Agent OS (KAOS) is a self-hosted runtime for durable AI agents. It gives 
 ## Start Locally
 
 ```bash
-git clone https://github.com/spyrae/kronos-swarm.git
-cd kronos-swarm
+git clone https://github.com/spyrae/kronos-agent-os.git
+cd kronos-agent-os
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -90,4 +90,4 @@ KAOS is designed for people who want to run and extend their own agent runtime i
 - Check [Roadmap](../ROADMAP.md) for current priorities.
 - Open issues for setup friction, docs gaps, template ideas, skill pack improvements, and safety concerns.
 
-Repository: `https://github.com/spyrae/kronos-swarm`
+Repository: `https://github.com/spyrae/kronos-agent-os`

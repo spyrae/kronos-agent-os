@@ -1,7 +1,7 @@
 repository:
-  name: kronos-swarm
+  name: kronos-agent-os
   description: "Kronos Agent OS (KAOS): self-hosted runtime for durable AI agents with memory, skills, MCP tools, automations, dashboard, and optional swarm coordination."
-  homepage: "https://github.com/spyrae/kronos-swarm/tree/main/docs"
+  homepage: "https://github.com/spyrae/kronos-agent-os/tree/main/docs"
   topics:
     - ai-agents
     - agent-os

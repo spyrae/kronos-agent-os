@@ -133,7 +133,7 @@ def test_python_package_has_public_metadata():
     assert project["name"] == "kronos-agent-os"
     assert project["readme"] == "README.md"
     assert "ai-agents" in project["keywords"]
-    assert project["urls"]["Repository"] == "https://github.com/spyrae/kronos-swarm"
+    assert project["urls"]["Repository"] == "https://github.com/spyrae/kronos-agent-os"
     assert "langgraph>=0.4" in project["optional-dependencies"]["aso"]
     assert not any(item.startswith("License ::") for item in project["classifiers"])
     assert pyproject["tool"]["setuptools"]["include-package-data"] is False
@@ -227,7 +227,7 @@ def test_launch_copy_covers_required_channels_and_objections():
     assert "## Short Announcement" in launch
     assert "## Maintainer Reply Snippets" in launch
     assert "kaos demo-seed --reset" in launch
-    assert "https://github.com/spyrae/kronos-swarm" in launch
+    assert "https://github.com/spyrae/kronos-agent-os" in launch
     assert "Is this just LangGraph?" in launch
     assert "How do you handle security?" in launch
     assert "Why MCP?" in launch
@@ -245,7 +245,7 @@ def test_landing_page_content_is_standalone_and_command_first():
     assert "[Durable Agent Demo](DEMO.md)" in landing
     assert "[Security](SECURITY.md)" in landing
     assert "[CONTRIBUTING.md](../CONTRIBUTING.md)" in landing
-    assert "https://github.com/spyrae/kronos-swarm" in landing
+    assert "https://github.com/spyrae/kronos-agent-os" in landing
 
 
 def test_soft_launch_plan_tracks_external_feedback_requirements():

@@ -95,10 +95,10 @@ dev = [
 kaos = "kronos.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/spyrae/kronos-swarm"
-Repository = "https://github.com/spyrae/kronos-swarm"
-Issues = "https://github.com/spyrae/kronos-swarm/issues"
-Documentation = "https://github.com/spyrae/kronos-swarm/tree/main/docs"
+Homepage = "https://github.com/spyrae/kronos-agent-os"
+Repository = "https://github.com/spyrae/kronos-agent-os"
+Issues = "https://github.com/spyrae/kronos-agent-os/issues"
+Documentation = "https://github.com/spyrae/kronos-agent-os/tree/main/docs"
 
 [tool.setuptools]
 include-package-data = false
