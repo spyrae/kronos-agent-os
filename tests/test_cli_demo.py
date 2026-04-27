@@ -81,6 +81,28 @@ def test_chat_parser_accepts_prompt_and_no_memory(monkeypatch, capsys):
     assert result == 0
 
 
+def test_doctor_allows_fresh_clone_before_workspace_init(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='fresh-kaos'\n", encoding="utf-8")
+    monkeypatch.setattr(settings, "agent_name", "kronos")
+    monkeypatch.setattr(settings, "workspace_path", "")
+    monkeypatch.setattr(settings, "db_dir", "data/kronos")
+    monkeypatch.setattr(settings, "enable_dynamic_tools", False)
+    monkeypatch.setattr(settings, "enable_mcp_gateway_management", False)
+    monkeypatch.setattr(settings, "enable_dynamic_mcp_servers", False)
+    monkeypatch.setattr(settings, "enable_server_ops", False)
+    monkeypatch.setattr(settings, "allowed_users", "")
+    monkeypatch.setattr(settings, "allow_all_users", False)
+
+    result = main(["doctor"])
+
+    out = capsys.readouterr().out
+    assert result == 0
+    assert "[WARN] Workspace: No workspace for AGENT_NAME=kronos yet" in out
+    assert "kaos init kronos" in out
+    assert "No hard blockers found." in out
+
+
 def test_tool_event_printer_redacts_secret_args(capsys):
     from kronos.cli import _make_tool_event_printer
 

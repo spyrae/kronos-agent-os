@@ -330,6 +330,11 @@ def run_doctor() -> int:
             "Workspace",
             f"WORKSPACE_PATH points to missing {workspace}; fallback exists at {fallback_workspace}",
         )
+    elif not settings.workspace_path:
+        warn(
+            "Workspace",
+            f"No workspace for AGENT_NAME={settings.agent_name} yet; run `kaos init {settings.agent_name}`",
+        )
     else:
         fail("Workspace", f"Missing workspace for AGENT_NAME={settings.agent_name}: {workspace}")
 
