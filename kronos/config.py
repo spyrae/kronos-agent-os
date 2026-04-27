@@ -1,15 +1,23 @@
 """Application settings via Pydantic Settings."""
 
+import os
+
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_ENV_FILE = os.environ.get("KAOS_ENV_FILE") or os.environ.get("KRONOS_ENV_FILE") or ".env"
+load_dotenv(_ENV_FILE, override=False)
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 
     # LLM Providers
     fireworks_api_key: str = ""  # Fireworks AI — Kimi K2.5 Turbo (standard tier)
     deepseek_api_key: str = ""   # DeepSeek V3 (lite tier)
     openai_api_key: str = ""
+    kaos_standard_provider_chain: str = "kimi,deepseek"
+    kaos_lite_provider_chain: str = "deepseek,kimi"
 
     # Telegram Bridge
     tg_api_id: int = 0
@@ -119,8 +127,6 @@ class Settings(BaseSettings):
         after upgrade — the migration in ``app._migrate_legacy_layout`` then
         moves the physical file to match.
         """
-        import os
-
         # Detect a legacy flat DB_PATH and rewrite it in place.
         legacy_flat = f"./data/{self.agent_name}.db"
         if self.db_path in ("", legacy_flat, f"data/{self.agent_name}.db"):

@@ -9,6 +9,7 @@ Start here if you want to understand or contribute to Kronos Agent OS.
 | [Landing](LANDING.md) | Portable product landing content for launch traffic |
 | [Architecture](ARCHITECTURE.md) | System map and Agent OS mental model |
 | [Demo](DEMO.md) | Durable agent demo script, commands, and launch assets |
+| [LLM Providers](LLM_PROVIDERS.md) | Bring your own model: OpenAI, OpenRouter, Groq, LiteLLM, Ollama, custom endpoints |
 | [Personal Operator Demo](PERSONAL_OPERATOR_DEMO.md) | Relatable inbox/task/research demo using the Personal Operator template |
 | [Swarm Mode Demo](SWARM_DEMO.md) | Optional multi-agent coordination demo with roles, arbitration, and synthesis |
 | [Launch Copy](LAUNCH_COPY.md) | X/HN/Reddit/announcement copy and technical reply snippets |
@@ -28,13 +29,17 @@ Start here if you want to understand or contribute to Kronos Agent OS.
 
 ```bash
 kaos demo
+cp .env.example .env
+# edit .env: add one real LLM key, or configure Ollama/local
 kaos doctor
-kaos init my-agent --dry-run
+kaos templates install personal-operator personal-demo --force
+kaos skills install-pack productivity --agent personal-demo --force
+AGENT_NAME=personal-demo kaos chat
 ```
 
 Then read:
 
-1. [Architecture](ARCHITECTURE.md)
+1. [LLM Providers](LLM_PROVIDERS.md)
 2. [Runtime](RUNTIME.md)
 3. [Security](SECURITY.md)
 
@@ -42,7 +47,7 @@ Then read:
 
 | Goal | Read |
 |------|------|
-| Run KAOS locally | Runtime, Deployment, Security |
+| Run KAOS locally | LLM Providers, Runtime, Deployment, Security |
 | Extend the agent | Skills, MCP & Tools, Memory |
 | Operate the dashboard | Dashboard, Automations, Security |
 | Understand multi-agent mode | Architecture, Sub-Agents & Swarm |

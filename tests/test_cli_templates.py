@@ -12,6 +12,7 @@ def test_templates_list_and_show(capsys):
     assert result == 0
     assert "personal-operator" in out
     assert "research-agent" in out
+    assert "kaos templates install personal-operator personal-demo --force" in out
 
     result = main(["templates", "show", "personal-operator"])
     out = capsys.readouterr().out
@@ -46,6 +47,7 @@ def test_skill_packs_list_show_and_dry_run(capsys):
     assert result == 0
     assert "research" in out
     assert "finance-lite" in out
+    assert "kaos skills install-pack productivity --agent personal-demo --force" in out
 
     result = main(["skills", "show-pack", "research"])
     out = capsys.readouterr().out

@@ -37,9 +37,15 @@ pip install -e ".[dev]"
 
 kaos demo
 cp .env.example .env
+# edit .env: add at least one real LLM key, or configure Ollama/local
 kaos doctor
 kaos init personal-operator --role "personal operator for research and tasks"
 ```
+
+Bring your own LLM by editing `.env`. The default chain is Fireworks/Kimi plus
+DeepSeek, but OpenAI, OpenRouter, Groq, Together, LiteLLM, Ollama, and arbitrary
+OpenAI-compatible endpoints can be configured without code changes. See
+[LLM Providers](docs/LLM_PROVIDERS.md).
 
 If you work on the dashboard UI, run `nvm use` from the repository root before
 `npm install` in `dashboard-ui/`.
@@ -156,6 +162,24 @@ ENABLE_SERVER_OPS=false
 
 Enable risky capabilities only in trusted local deployments where you understand the tool surface.
 
+## Create Your First Agent
+
+KAOS ships the runtime, templates, and skill packs. You bring the domain.
+
+```bash
+kaos templates list
+kaos templates install personal-operator personal-demo --force
+kaos skills packs
+kaos skills install-pack productivity --agent personal-demo --force
+
+AGENT_NAME=personal-demo kaos doctor
+AGENT_NAME=personal-demo kaos chat
+```
+
+Then edit `workspaces/personal-demo/self/IDENTITY.md`, add domain-specific
+skills under `workspaces/personal-demo/self/skills/`, and connect MCP tools as
+needed.
+
 ## Project Structure
 
 ```text
@@ -211,6 +235,7 @@ See [docs/SECURITY.md](docs/SECURITY.md) and [SECURITY.md](SECURITY.md).
 
 - [Roadmap](ROADMAP.md)
 - [Landing Page Content](docs/LANDING.md)
+- [LLM Providers](docs/LLM_PROVIDERS.md)
 - [Demo](docs/DEMO.md)
 - [Personal Operator Demo](docs/PERSONAL_OPERATOR_DEMO.md)
 - [Swarm Mode Demo](docs/SWARM_DEMO.md)

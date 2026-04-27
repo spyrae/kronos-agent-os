@@ -6,12 +6,12 @@ Logs to JSONL files:
 - tool_calls.jsonl: durable tool-call trail
 """
 
-from contextvars import ContextVar, Token
 import json
 import logging
 import math
 import re
 import time
+from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import Any
 

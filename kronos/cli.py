@@ -19,6 +19,7 @@ from typing import Any
 
 from kronos import __version__
 from kronos.config import settings
+from kronos.llm import ModelTier, describe_provider_chain, is_runtime_llm_configured
 
 log = logging.getLogger("kronos.cli")
 
@@ -32,12 +33,13 @@ def _configure_logging() -> None:
 
 def _runtime_llm_configured() -> bool:
     """Return whether the current runtime LLM factory can create a chat model."""
-    return bool(settings.fireworks_api_key or settings.deepseek_api_key)
+    return is_runtime_llm_configured()
 
 
 def _print_missing_runtime_llm() -> None:
-    print("KAOS chat requires FIREWORKS_API_KEY or DEEPSEEK_API_KEY.")
-    print("Set one in .env, or run `kaos demo` for the offline walkthrough.")
+    print("KAOS chat requires at least one configured LLM provider.")
+    print("Set FIREWORKS_API_KEY, DEEPSEEK_API_KEY, OPENAI_API_KEY, or configure a provider chain in .env.")
+    print("Run `kaos doctor` to inspect providers, or `kaos demo` for the offline walkthrough.")
 
 
 _SECRET_ARG_NAMES = {"token", "secret", "password", "api_key", "apikey", "key", "hash", "authorization"}
@@ -296,15 +298,25 @@ def run_doctor() -> int:
     else:
         warn("Project", "Run doctor from the KAOS repo root for best results")
 
-    providers = {
-        "FIREWORKS_API_KEY": bool(settings.fireworks_api_key),
-        "DEEPSEEK_API_KEY": bool(settings.deepseek_api_key),
-    }
-    if any(providers.values()):
-        enabled = ", ".join(name for name, present in providers.items() if present)
-        ok("Runtime LLM provider", enabled)
+    provider_lines: list[str] = []
+    for tier in (ModelTier.STANDARD, ModelTier.LITE):
+        rows = describe_provider_chain(tier)
+        configured = [
+            f"{row['provider']}:{row['model']}"
+            for row in rows
+            if row["configured"]
+        ]
+        missing = [str(row["provider"]) for row in rows if not row["configured"]]
+        if configured:
+            ok(f"LLM {tier.value}", " -> ".join(configured))
+        else:
+            warn(f"LLM {tier.value}", f"No configured providers in chain: {', '.join(missing) or '(empty)'}")
+        provider_lines.extend(configured)
+
+    if provider_lines:
+        ok("Runtime LLM provider", "configured")
     else:
-        warn("Runtime LLM provider", "Set FIREWORKS_API_KEY or DEEPSEEK_API_KEY before chat")
+        warn("Runtime LLM provider", "Set provider keys or configure KAOS_*_PROVIDER_CHAIN before chat")
 
     if settings.openai_api_key:
         ok("OpenAI optional key", "configured")
@@ -422,6 +434,9 @@ def run_templates(command: str, name: str = "", workspace: str = "", role: str =
         for path in templates:
             meta = _load_yaml(path / "template.yaml")
             print(f"- {path.name}: {meta.get('description', 'No description')}")
+        print("\nNext:")
+        print("  kaos templates show personal-operator")
+        print("  kaos templates install personal-operator personal-demo --force")
         return 0
 
     template_dir = _agent_template_dir(name)
@@ -499,6 +514,9 @@ def run_skills(command: str, pack: str = "", agent: str = "", force: bool = Fals
         for path in packs:
             meta = _load_yaml(path / "pack.yaml")
             print(f"- {path.name}: {meta.get('description', 'No description')}")
+        print("\nNext:")
+        print("  kaos skills show-pack productivity")
+        print("  kaos skills install-pack productivity --agent personal-demo --force")
         return 0
 
     pack_dir = _skill_pack_dir(pack)
@@ -606,6 +624,8 @@ def run_init(name: str, role: str, force: bool = False, dry_run: bool = False) -
             path.write_text(content, encoding="utf-8")
 
     print("\nNext steps:")
+    print(f"  Edit workspaces/{slug}/self/IDENTITY.md")
+    print(f"  kaos skills install-pack productivity --agent {slug} --force")
     print(f"  AGENT_NAME={slug} kaos doctor")
     print(f"  AGENT_NAME={slug} kaos chat")
     print("\nOptional: add this agent to agents.yaml for swarm/group routing.")

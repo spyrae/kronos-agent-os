@@ -1,15 +1,21 @@
-"""LLM factory with multi-provider fallback chain and cooldown tracking.
+"""LLM factory with configurable provider chains and cooldown tracking.
 
-Resolution order per tier:
-  standard: Kimi K2.5 → DeepSeek V3 (fallback)
-  lite:     DeepSeek V3 → Kimi K2.5 (fallback)
+Default resolution order:
+  standard: Kimi K2.5 via Fireworks -> DeepSeek V3
+  lite:     DeepSeek V3 -> Kimi K2.5 via Fireworks
 
-On error, automatically tries next provider in chain.
-Failed providers enter cooldown (5 min) before being retried.
+Users can override the chains and provider details from .env without editing
+Python code. Most hosted and local providers are covered through the generic
+OpenAI-compatible adapter.
 """
 
+from __future__ import annotations
+
 import logging
+import os
+import re
 import time
+from dataclasses import dataclass
 from enum import Enum
 
 from langchain_core.language_models import BaseChatModel
@@ -27,18 +33,56 @@ class ModelTier(str, Enum):
     STANDARD = "standard"
 
 
+@dataclass(frozen=True)
+class ProviderConfig:
+    """Resolved provider configuration."""
+
+    provider_id: str
+    adapter: str
+    model: str
+    base_url: str = ""
+    api_key: str = ""
+    api_key_env: str = ""
+    max_tokens: int = 4096
+    temperature: float = 0.5
+    api_key_required: bool = True
+
+    @property
+    def ready(self) -> bool:
+        return bool(self.model) and (bool(self.api_key) or not self.api_key_required)
+
+    @property
+    def display(self) -> str:
+        base = f"{self.provider_id}:{self.model}"
+        if self.base_url:
+            base = f"{base} @ {self.base_url}"
+        return base
+
+    @property
+    def signature(self) -> tuple:
+        return (
+            self.provider_id,
+            self.adapter,
+            self.model,
+            self.base_url,
+            bool(self.api_key),
+            self.api_key_env,
+            self.max_tokens,
+            self.temperature,
+            self.api_key_required,
+        )
+
+
 class _ProviderState:
-    """Tracks per-provider health and cooldown."""
+    """Tracks per-provider health and cached model instances."""
 
     def __init__(self):
-        self._cooldowns: dict[str, float] = {}  # provider -> cooldown_until timestamp
-        self._models: dict[str, BaseChatModel] = {}  # provider -> cached instance
+        self._cooldowns: dict[str, float] = {}
+        self._models: dict[str, tuple[tuple, BaseChatModel]] = {}
 
     def is_available(self, provider: str) -> bool:
         cooldown_until = self._cooldowns.get(provider, 0)
-        if time.time() < cooldown_until:
-            return False
-        return True
+        return time.time() >= cooldown_until
 
     def mark_failed(self, provider: str) -> None:
         self._cooldowns[provider] = time.time() + COOLDOWN_SECONDS
@@ -48,30 +92,108 @@ class _ProviderState:
         self._cooldowns.pop(provider, None)
 
     def get_or_create(self, provider: str) -> BaseChatModel | None:
-        if provider not in self._models:
-            model = _create_model(provider)
-            if model:
-                self._models[provider] = model
-        return self._models.get(provider)
+        config = resolve_provider_config(provider)
+        if not config or not config.ready:
+            return None
+
+        cached = self._models.get(provider)
+        if cached and cached[0] == config.signature:
+            return cached[1]
+
+        model = _create_model(config)
+        if model:
+            self._models[provider] = (config.signature, model)
+        return model
 
     def reset_cooldown(self, provider: str) -> None:
         self._cooldowns.pop(provider, None)
 
+    def clear_cache(self) -> None:
+        self._models.clear()
+
 
 _state = _ProviderState()
 
-# Provider chains per tier
-_STANDARD_CHAIN = ["kimi", "deepseek"]
-_LITE_CHAIN = ["deepseek", "kimi"]
+
+_PRESETS: dict[str, dict[str, object]] = {
+    "kimi": {
+        "adapter": "openai-compatible",
+        "model": "accounts/fireworks/routers/kimi-k2p5-turbo",
+        "base_url": "https://api.fireworks.ai/inference/v1",
+        "api_key_env": "FIREWORKS_API_KEY",
+        "max_tokens": 8192,
+    },
+    "fireworks": {
+        "adapter": "openai-compatible",
+        "model": "accounts/fireworks/routers/kimi-k2p5-turbo",
+        "base_url": "https://api.fireworks.ai/inference/v1",
+        "api_key_env": "FIREWORKS_API_KEY",
+        "max_tokens": 8192,
+    },
+    "deepseek": {
+        "adapter": "deepseek",
+        "model": "deepseek-chat",
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "max_tokens": 4096,
+    },
+    "openai": {
+        "adapter": "openai-compatible",
+        "model": "gpt-4.1-mini",
+        "base_url": "https://api.openai.com/v1",
+        "api_key_env": "OPENAI_API_KEY",
+        "max_tokens": 4096,
+    },
+    "openrouter": {
+        "adapter": "openai-compatible",
+        "model": "openai/gpt-4.1-mini",
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key_env": "OPENROUTER_API_KEY",
+        "max_tokens": 4096,
+    },
+    "groq": {
+        "adapter": "openai-compatible",
+        "model": "llama-3.3-70b-versatile",
+        "base_url": "https://api.groq.com/openai/v1",
+        "api_key_env": "GROQ_API_KEY",
+        "max_tokens": 4096,
+    },
+    "together": {
+        "adapter": "openai-compatible",
+        "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        "base_url": "https://api.together.xyz/v1",
+        "api_key_env": "TOGETHER_API_KEY",
+        "max_tokens": 4096,
+    },
+    "litellm": {
+        "adapter": "openai-compatible",
+        "model": "gpt-4.1-mini",
+        "base_url": "http://127.0.0.1:4000/v1",
+        "api_key_env": "LITELLM_API_KEY",
+        "max_tokens": 4096,
+        "api_key_required": False,
+    },
+    "ollama": {
+        "adapter": "openai-compatible",
+        "model": "llama3.1",
+        "base_url": "http://127.0.0.1:11434/v1",
+        "api_key_env": "OLLAMA_API_KEY",
+        "max_tokens": 4096,
+        "api_key_required": False,
+    },
+    "local": {
+        "adapter": "openai-compatible",
+        "model": "llama3.1",
+        "base_url": "http://127.0.0.1:11434/v1",
+        "api_key_env": "LOCAL_LLM_API_KEY",
+        "max_tokens": 4096,
+        "api_key_required": False,
+    },
+}
 
 
 def get_model(tier: ModelTier = ModelTier.STANDARD) -> BaseChatModel:
-    """Get primary LLM for the given tier.
-
-    Returns the first available provider in the chain.
-    Skips providers in cooldown or without API keys.
-    """
-    chain = _STANDARD_CHAIN if tier == ModelTier.STANDARD else _LITE_CHAIN
+    """Get the first available chat model for the given tier."""
+    chain = provider_chain(tier)
 
     for provider in chain:
         if not _has_key(provider):
@@ -82,7 +204,7 @@ def get_model(tier: ModelTier = ModelTier.STANDARD) -> BaseChatModel:
         if model:
             return model
 
-    # Fallback: ignore cooldowns, try anything
+    # Fallback: ignore cooldowns, try anything configured.
     for provider in chain:
         if not _has_key(provider):
             continue
@@ -91,21 +213,27 @@ def get_model(tier: ModelTier = ModelTier.STANDARD) -> BaseChatModel:
             log.warning("All providers in cooldown, using '%s' anyway", provider)
             return model
 
-    raise RuntimeError(f"No API keys configured for {tier.value} tier")
+    configured = ", ".join(chain) or "(empty chain)"
+    raise RuntimeError(f"No API keys configured for {tier.value} tier: {configured}")
 
 
 def get_fallback_model() -> BaseChatModel:
-    """Get a fallback model (used by graph.py on primary failure)."""
-    for provider in ["deepseek", "kimi"]:
-        if not _has_key(provider):
-            continue
-        if not _state.is_available(provider):
-            continue
-        model = _state.get_or_create(provider)
-        if model:
-            return model
+    """Get a fallback model using the union of configured chains."""
+    seen: set[str] = set()
+    for tier in (ModelTier.LITE, ModelTier.STANDARD):
+        for provider in provider_chain(tier):
+            if provider in seen:
+                continue
+            seen.add(provider)
+            if not _has_key(provider):
+                continue
+            if not _state.is_available(provider):
+                continue
+            model = _state.get_or_create(provider)
+            if model:
+                return model
 
-    raise RuntimeError("No fallback API keys configured")
+    raise RuntimeError("No fallback LLM providers configured")
 
 
 def invoke_with_fallback(
@@ -113,14 +241,8 @@ def invoke_with_fallback(
     tier: ModelTier = ModelTier.STANDARD,
     tools: list | None = None,
 ) -> BaseMessage:
-    """Invoke LLM with automatic fallback chain.
-
-    Tries each provider in the chain. On failure, marks provider
-    for cooldown and tries the next one.
-
-    Returns the AI response message.
-    """
-    chain = _STANDARD_CHAIN if tier == ModelTier.STANDARD else _LITE_CHAIN
+    """Invoke LLM with automatic fallback chain and cooldown tracking."""
+    chain = provider_chain(tier)
     last_error = None
 
     for provider in chain:
@@ -146,7 +268,7 @@ def invoke_with_fallback(
             log.error("Provider '%s' failed: %s", provider, e)
             continue
 
-    # Last resort: retry first available ignoring cooldowns
+    # Last resort: retry first configured provider ignoring cooldowns.
     for provider in chain:
         if not _has_key(provider):
             continue
@@ -166,33 +288,182 @@ def invoke_with_fallback(
     raise RuntimeError(f"All providers failed. Last error: {last_error}")
 
 
+def is_runtime_llm_configured() -> bool:
+    """Return whether any provider in either configured chain is ready."""
+    return any(
+        _has_key(provider)
+        for tier in (ModelTier.STANDARD, ModelTier.LITE)
+        for provider in provider_chain(tier)
+    )
+
+
+def provider_chain(tier: ModelTier = ModelTier.STANDARD) -> list[str]:
+    """Return normalized provider ids for a tier."""
+    raw = (
+        settings.kaos_standard_provider_chain
+        if tier == ModelTier.STANDARD
+        else settings.kaos_lite_provider_chain
+    )
+    fallback = "kimi,deepseek" if tier == ModelTier.STANDARD else "deepseek,kimi"
+    return _parse_chain(raw or fallback)
+
+
+def describe_provider_chain(tier: ModelTier = ModelTier.STANDARD) -> list[dict[str, object]]:
+    """Return provider state for CLI/docs without constructing models."""
+    rows: list[dict[str, object]] = []
+    for provider in provider_chain(tier):
+        config = resolve_provider_config(provider)
+        rows.append({
+            "provider": provider,
+            "configured": bool(config and config.ready),
+            "model": config.model if config else "",
+            "base_url": config.base_url if config else "",
+            "api_key_env": config.api_key_env if config else "",
+            "api_key_required": config.api_key_required if config else True,
+            "adapter": config.adapter if config else "",
+        })
+    return rows
+
+
+def resolve_provider_config(provider: str) -> ProviderConfig | None:
+    """Resolve a provider preset plus KAOS_PROVIDER_<ID>_* overrides."""
+    provider_id = _normalize_provider_id(provider)
+    preset = dict(_PRESETS.get(provider_id, {}))
+
+    prefix = f"KAOS_PROVIDER_{_env_key(provider_id)}_"
+    adapter = str(_env(prefix + "ADAPTER", _env(prefix + "TYPE", preset.get("adapter", "openai-compatible"))))
+    model = str(_env(prefix + "MODEL", preset.get("model", "")))
+    base_url = str(_env(prefix + "BASE_URL", preset.get("base_url", ""))).rstrip("/")
+    api_key_env = str(_env(prefix + "API_KEY_ENV", preset.get("api_key_env", "")))
+    api_key = str(_env(prefix + "API_KEY", ""))
+    max_tokens = _int_env(prefix + "MAX_TOKENS", int(preset.get("max_tokens", 4096)))
+    temperature = _float_env(prefix + "TEMPERATURE", float(preset.get("temperature", 0.5)))
+    api_key_required = _bool_env(prefix + "API_KEY_REQUIRED", bool(preset.get("api_key_required", True)))
+
+    if not api_key and api_key_env:
+        api_key = _api_key_from_env(api_key_env)
+
+    if not model:
+        return None
+
+    return ProviderConfig(
+        provider_id=provider_id,
+        adapter=adapter,
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        api_key_env=api_key_env,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        api_key_required=api_key_required,
+    )
+
+
+def reset_provider_state() -> None:
+    """Clear cached model instances and cooldowns. Intended for tests."""
+    _state._cooldowns.clear()
+    _state.clear_cache()
+
+
 def _has_key(provider: str) -> bool:
-    if provider == "kimi":
-        return bool(settings.fireworks_api_key)
-    if provider == "deepseek":
-        return bool(settings.deepseek_api_key)
-    return False
+    config = resolve_provider_config(provider)
+    return bool(config and config.ready)
 
 
-def _create_model(provider: str) -> BaseChatModel | None:
+def _create_model(config: ProviderConfig) -> BaseChatModel | None:
     try:
-        if provider == "kimi":
+        if config.adapter in {"openai", "openai-compatible", "openai_compatible"}:
             from langchain_openai import ChatOpenAI
-            return ChatOpenAI(
-                model="accounts/fireworks/routers/kimi-k2p5-turbo",
-                base_url="https://api.fireworks.ai/inference/v1",
-                api_key=settings.fireworks_api_key,
-                max_tokens=8192,
-                temperature=0.5,
-            )
-        elif provider == "deepseek":
+
+            api_key = config.api_key or "not-needed"
+            kwargs = {
+                "model": config.model,
+                "api_key": api_key,
+                "max_tokens": config.max_tokens,
+                "temperature": config.temperature,
+            }
+            if config.base_url:
+                kwargs["base_url"] = config.base_url
+            return ChatOpenAI(**kwargs)
+
+        if config.adapter == "deepseek":
             from langchain_deepseek import ChatDeepSeek
+
             return ChatDeepSeek(
-                model="deepseek-chat",
-                api_key=settings.deepseek_api_key,
-                max_tokens=4096,
-                temperature=0.5,
+                model=config.model,
+                api_key=config.api_key,
+                max_tokens=config.max_tokens,
+                temperature=config.temperature,
             )
+
+        log.error("Unsupported LLM adapter '%s' for provider '%s'", config.adapter, config.provider_id)
     except Exception as e:
-        log.error("Failed to create '%s' model: %s", provider, e)
+        log.error("Failed to create '%s' model: %s", config.provider_id, e)
     return None
+
+
+def _parse_chain(value: str) -> list[str]:
+    providers = [
+        _normalize_provider_id(item)
+        for item in re.split(r"[, ]+", value.strip())
+        if item.strip()
+    ]
+    return providers
+
+
+def _normalize_provider_id(provider: str) -> str:
+    return re.sub(r"[^a-z0-9_]+", "_", provider.strip().lower()).strip("_")
+
+
+def _env_key(provider: str) -> str:
+    return re.sub(r"[^A-Z0-9]+", "_", provider.upper()).strip("_")
+
+
+def _env(name: str, default: object = "") -> object:
+    value = os.environ.get(name)
+    return default if value is None or value == "" else value
+
+
+def _int_env(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        log.warning("Invalid integer for %s=%r; using %s", name, value, default)
+        return default
+
+
+def _float_env(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        log.warning("Invalid float for %s=%r; using %s", name, value, default)
+        return default
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value in (None, ""):
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _api_key_from_env(name: str) -> str:
+    if name == "FIREWORKS_API_KEY":
+        return settings.fireworks_api_key or os.environ.get(name, "")
+    if name == "DEEPSEEK_API_KEY":
+        return settings.deepseek_api_key or os.environ.get(name, "")
+    if name == "OPENAI_API_KEY":
+        return settings.openai_api_key or os.environ.get(name, "")
+    if name == "GROQ_API_KEY":
+        return settings.groq_api_key or os.environ.get(name, "")
+    if name == "LITELLM_API_KEY":
+        return os.environ.get(name) or settings.litellm_admin_key
+    if name == "LITELLM_ADMIN_KEY":
+        return settings.litellm_admin_key or os.environ.get(name, "")
+    return os.environ.get(name, "")

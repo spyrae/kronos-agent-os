@@ -1,3 +1,5 @@
+import os
+
 from kronos.cli import _demo_reply, main
 from kronos.config import settings
 
@@ -39,12 +41,27 @@ def test_demo_reply_mentions_relevant_kaos_module():
 def test_chat_prompt_without_runtime_llm_fails_cleanly(monkeypatch, capsys):
     monkeypatch.setattr(settings, "fireworks_api_key", "")
     monkeypatch.setattr(settings, "deepseek_api_key", "")
+    monkeypatch.setattr(settings, "openai_api_key", "")
+    monkeypatch.setattr(settings, "kaos_standard_provider_chain", "kimi,deepseek")
+    monkeypatch.setattr(settings, "kaos_lite_provider_chain", "deepseek,kimi")
+    for name in list(os.environ):
+        if name.startswith("KAOS_PROVIDER_") or name in {
+            "FIREWORKS_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "OPENAI_API_KEY",
+            "OPENROUTER_API_KEY",
+            "GROQ_API_KEY",
+            "TOGETHER_API_KEY",
+            "LITELLM_API_KEY",
+            "OLLAMA_API_KEY",
+        }:
+            monkeypatch.delenv(name, raising=False)
 
     result = main(["chat", "--prompt", "hello"])
 
     out = capsys.readouterr().out
     assert result == 1
-    assert "KAOS chat requires FIREWORKS_API_KEY or DEEPSEEK_API_KEY" in out
+    assert "KAOS chat requires at least one configured LLM provider" in out
     assert "kaos demo" in out
 
 

@@ -66,15 +66,53 @@ ENABLE_DYNAMIC_MCP_SERVERS=false
 ENABLE_SERVER_OPS=false
 ```
 
-## Contribution Areas
+## Contribution Map
+
+KAOS is meant to be extended through small, understandable lanes. Pick the lane
+that matches what you want to improve.
+
+| Area | Good PRs | Primary files | Tests/docs |
+|------|----------|---------------|------------|
+| LLM providers | Provider presets, OpenAI-compatible recipes, local model notes | `kronos/llm.py`, `.env.example` | `tests/test_llm_providers.py`, `docs/LLM_PROVIDERS.md` |
+| Agent templates | New starter agent profiles for common roles | `templates/agents/` | `tests/test_cli_templates.py`, README/docs examples |
+| Skill packs | Reusable procedures for a domain | `templates/skill-packs/` | `tests/test_cli_templates.py`, `docs/SKILLS.md` |
+| MCP recipes | Safe static MCP examples and tool docs | `docs/MCP.md`, `servers.example.yaml` | `tests/test_mcp_smoke.py` where practical |
+| Deployment targets | Docker/systemd/runner docs and safer deploy checks | `docs/DEPLOYMENT.md`, `.github/workflows/`, `scripts/deploy.sh` | shell syntax checks, deploy docs |
+| Dashboard panels | Better local visibility into memory/jobs/tools/config | `dashboard/`, `dashboard-ui/` | dashboard API tests, UI build |
+| Safety policies | Clearer gates, warnings, audit trails, blocked actions | `kronos/security/`, `kronos/tools/`, docs | focused safety tests |
+| Examples/demos | Public-safe workflows people can copy | `docs/`, `scripts/render_demo_assets.py` | public-surface tests |
 
 Good first contributions:
 
 - Quickstart and installation fixes
-- Tests for CLI, config, Docker, dashboard, and safety defaults
+- Provider recipes for services you already use
+- Agent templates for clear use cases
+- Skill packs with safe fixtures
 - Documentation for runtime, memory, skills, MCP, automations, dashboard, and swarm mode
-- New safe static MCP integrations
 - Dashboard observability and blocked-capability explanations
+
+### Provider PR Checklist
+
+- Prefer an OpenAI-compatible preset before adding a custom adapter.
+- Add/adjust provider defaults in `kronos/llm.py`.
+- Add a copy-paste `.env` recipe in `docs/LLM_PROVIDERS.md`.
+- Add a compatibility matrix row.
+- Add tests that do not require live API calls.
+- Do not include real API keys, account IDs, or private base URLs.
+
+### Template PR Checklist
+
+- Add a directory under `templates/agents/<name>/`.
+- Include a `template.yaml` with role, description, memory defaults, capability policy, and example prompts.
+- Keep the template public-safe: no private people, companies, chats, servers, or credentials.
+- Add docs or README examples if the template is a common first-run path.
+
+### Skill-Pack PR Checklist
+
+- Add a directory under `templates/skill-packs/<name>/`.
+- Include `pack.yaml`, at least one skill, and safe fixture notes where useful.
+- Keep skills procedural and reusable; avoid private workflows disguised as examples.
+- Mention risky external actions and the capability gates that control them.
 
 Changes that need design discussion first:
 

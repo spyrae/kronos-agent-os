@@ -11,6 +11,7 @@ pip install -e ".[dev,memory]"
 
 kaos demo
 cp .env.example .env
+# edit .env: add one real LLM key, or configure Ollama/local
 kaos doctor
 kaos chat
 kaos dashboard
@@ -88,9 +89,15 @@ GitHub Actions run.
 At least one LLM provider is required for chat/runtime use:
 
 ```bash
+KAOS_STANDARD_PROVIDER_CHAIN=kimi,deepseek
+KAOS_LITE_PROVIDER_CHAIN=deepseek,kimi
 FIREWORKS_API_KEY=fw_...
 DEEPSEEK_API_KEY=sk-...
 ```
+
+You can use OpenAI, OpenRouter, Groq, Together, LiteLLM, Ollama, or another
+OpenAI-compatible endpoint without code changes. See
+[LLM Providers](LLM_PROVIDERS.md) for copy-paste recipes.
 
 Telegram:
 

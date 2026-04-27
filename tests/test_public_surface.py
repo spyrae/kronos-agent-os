@@ -64,6 +64,7 @@ def test_required_docs_exist():
         "docs/README.md",
         "docs/LANDING.md",
         "docs/DEMO.md",
+        "docs/LLM_PROVIDERS.md",
         "docs/PERSONAL_OPERATOR_DEMO.md",
         "docs/SWARM_DEMO.md",
         "docs/LAUNCH_COPY.md",
@@ -246,6 +247,30 @@ def test_landing_page_content_is_standalone_and_command_first():
     assert "[Security](SECURITY.md)" in landing
     assert "[CONTRIBUTING.md](../CONTRIBUTING.md)" in landing
     assert "https://github.com/spyrae/kronos-agent-os" in landing
+
+
+def test_llm_provider_docs_cover_common_provider_recipes():
+    providers = (ROOT / "docs" / "LLM_PROVIDERS.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    env = (ROOT / ".env.example").read_text(encoding="utf-8")
+
+    assert "KAOS_STANDARD_PROVIDER_CHAIN" in providers
+    assert "OpenRouter" in providers
+    assert "LiteLLM Proxy" in providers
+    assert "Ollama" in providers
+    assert "Arbitrary OpenAI-Compatible Provider" in providers
+    assert "[LLM Providers](docs/LLM_PROVIDERS.md)" in readme
+    assert "KAOS_PROVIDER_MY_LAB_BASE_URL" in env
+
+
+def test_contributing_explains_extension_lanes():
+    contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+
+    assert "## Contribution Map" in contributing
+    assert "LLM providers" in contributing
+    assert "Agent templates" in contributing
+    assert "Skill packs" in contributing
+    assert "Provider PR Checklist" in contributing
 
 
 def test_soft_launch_plan_tracks_external_feedback_requirements():
