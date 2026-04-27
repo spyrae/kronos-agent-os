@@ -29,7 +29,10 @@ class MCPGateway:
         self._tools: list[BaseTool] = []
         self._db_path = Path(settings.db_path).parent / "mcp_registry.db"
         self._init_db()
-        self._load_dynamic_servers()
+        if settings.enable_dynamic_mcp_servers:
+            self._load_dynamic_servers()
+        else:
+            log.info("Dynamic MCP servers disabled (ENABLE_DYNAMIC_MCP_SERVERS=false)")
 
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,6 +93,12 @@ class MCPGateway:
         Server is persisted in registry and available after restart.
         Note: tools won't be available until next reload.
         """
+        if not settings.enable_mcp_gateway_management:
+            return (
+                "Blocked: dynamic MCP server management is disabled. "
+                "Set ENABLE_MCP_GATEWAY_MANAGEMENT=true in a trusted local environment."
+            )
+
         # Validate config
         if "transport" not in config:
             return "Error: config must include 'transport' (stdio or sse)"
@@ -111,6 +120,12 @@ class MCPGateway:
 
     def remove_server(self, name: str) -> str:
         """Remove a dynamic MCP server."""
+        if not settings.enable_mcp_gateway_management:
+            return (
+                "Blocked: dynamic MCP server management is disabled. "
+                "Set ENABLE_MCP_GATEWAY_MANAGEMENT=true in a trusted local environment."
+            )
+
         if name in self._static_config:
             return f"Cannot remove static server '{name}'. Edit mcp_servers.py instead."
 
@@ -134,6 +149,12 @@ class MCPGateway:
 
     async def reload(self) -> str:
         """Reload all tools from all servers."""
+        if not settings.enable_mcp_gateway_management:
+            return (
+                "Blocked: MCP gateway reload is disabled. "
+                "Set ENABLE_MCP_GATEWAY_MANAGEMENT=true in a trusted local environment."
+            )
+
         combined = {**self._static_config, **self._dynamic_config}
         if not combined:
             return "No servers configured."

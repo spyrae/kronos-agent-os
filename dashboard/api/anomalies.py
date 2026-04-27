@@ -1,10 +1,10 @@
 """Anomalies API — anomaly detection from audit patterns."""
 
-import json
 import hashlib
+import json
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends
@@ -110,7 +110,7 @@ async def list_anomalies():
                 "severity": "INFO",
                 "type": "IDLE_ANOMALY",
                 "agent": agent,
-                "description": f"No operations detected while other agents are active",
+                "description": "No operations detected while other agents are active",
                 "timestamp": now.isoformat(),
             })
 

@@ -1,4 +1,4 @@
-"""ASO pipeline adapter — thin wrapper for Kronos II integration.
+"""ASO pipeline adapter — thin wrapper for Kronos Agent OS integration.
 
 Provides async functions to run ASO commands from bridge or supervisor.
 The ASO pipeline runs as an independent sub-graph with its own checkpointer.

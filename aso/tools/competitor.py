@@ -6,11 +6,8 @@ Uses iTunes Search API to find and compare competitor apps.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
-import httpx
-
-from .keyword_tracker import search_itunes, get_app_info
+from .keyword_tracker import get_app_info, search_itunes
 
 log = logging.getLogger("aso.tools.competitor")
 

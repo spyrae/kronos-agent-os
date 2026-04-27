@@ -21,7 +21,7 @@ class LoginRequest(BaseModel):
 async def health():
     return {
         "status": "ok",
-        "agent": "kronos-ii",
+        "agent": "kaos",
         "uptime_seconds": int(time.time() - _start_time),
     }
 

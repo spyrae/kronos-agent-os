@@ -37,7 +37,7 @@ For each entity found, output JSON:
 
 Rules:
 - Only extract clearly stated facts, don't infer
-- Normalize names (e.g. "Роман", "John Doe" → "John Doe")
+- Normalize names (e.g. "Alex", "John Doe" -> "John Doe")
 - Use English for entity types and relation types
 - Skip vague or uncertain references
 """
@@ -109,13 +109,13 @@ async def run_sleep_compute() -> None:
 
 def _get_recent_facts(days: int = 7) -> list[str]:
     """Get recent facts from FTS5 index."""
-    conn = fts._get_conn()
+    db = fts._get_db()
     cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
-    rows = conn.execute(
+    rows = db.read(
         "SELECT content FROM memory_facts WHERE created_at > ? ORDER BY created_at DESC LIMIT 100",
         (cutoff,),
-    ).fetchall()
+    )
 
     return [row["content"] for row in rows]
 
@@ -176,10 +176,10 @@ async def _generate_insights(recent_facts: list[str]) -> list[str]:
         return []
 
     # Get graph context
-    conn = kg._get_conn()
-    rows = conn.execute(
+    db = kg._get_db()
+    rows = db.read(
         "SELECT name, type FROM entities ORDER BY updated_at DESC LIMIT 20"
-    ).fetchall()
+    )
 
     graph_parts = []
     for row in rows:
@@ -214,23 +214,24 @@ async def _generate_insights(recent_facts: list[str]) -> list[str]:
 
 def _cleanup_stale_facts(days: int = 90) -> int:
     """Remove facts older than N days from FTS5."""
-    conn = fts._get_conn()
+    db = fts._get_db()
     cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
     # Get IDs to delete
-    rows = conn.execute(
+    rows = db.read(
         "SELECT id FROM memory_facts WHERE created_at < ?",
         (cutoff,),
-    ).fetchall()
+    )
 
     if not rows:
         return 0
 
     ids = [row["id"] for row in rows]
+    ops = []
     for fact_id in ids:
-        conn.execute("DELETE FROM memory_fts WHERE rowid = ?", (fact_id,))
-        conn.execute("DELETE FROM memory_facts WHERE id = ?", (fact_id,))
+        ops.append(("DELETE FROM memory_fts WHERE rowid = ?", (fact_id,)))
+        ops.append(("DELETE FROM memory_facts WHERE id = ?", (fact_id,)))
 
-    conn.commit()
+    db.write_many(ops)
     log.info("Cleaned %d stale facts (>%d days)", len(ids), days)
     return len(ids)

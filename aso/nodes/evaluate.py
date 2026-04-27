@@ -10,7 +10,7 @@ import json
 import logging
 from pathlib import Path
 
-from ..llm import ask, Model
+from ..llm import Model, ask
 from ..state import ASOState
 
 log = logging.getLogger("aso.nodes.evaluate")

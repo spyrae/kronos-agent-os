@@ -1,5 +1,5 @@
 #!/bin/bash
-# daily-status.sh — Daily status report for Kronos II stack
+# daily-status.sh — Daily status report for Kronos Agent OS stack
 # Sends summary to NTFY with uptime, service status, and log stats
 #
 # Usage: daily-status.sh
@@ -8,9 +8,9 @@
 set -uo pipefail
 
 # NTFY config (loaded from .env if available)
-if [ -f /opt/kronos-ii/app/.env ]; then
+if [ -f /opt/kaos/app/.env ]; then
   # shellcheck disable=SC1091
-  source /opt/kronos-ii/app/.env 2>/dev/null || true
+  source /opt/kaos/app/.env 2>/dev/null || true
 fi
 NTFY_URL="${NTFY_URL:-${NTFY_URL:-https://ntfy.sh}}"
 NTFY_TOKEN="${NTFY_TOKEN:-}"
@@ -19,10 +19,10 @@ NTFY_TOPIC="${NTFY_TOPIC:-persona-alerts}"
 # --- Gather data ---
 
 # Service status
-service_status=$(systemctl is-active kronos-ii 2>/dev/null || echo "unknown")
+service_status=$(systemctl is-active kaos 2>/dev/null || echo "unknown")
 
 # Service uptime (from systemd ActiveEnterTimestamp)
-service_started=$(systemctl show kronos-ii --property=ActiveEnterTimestamp --value 2>/dev/null || echo "")
+service_started=$(systemctl show kaos --property=ActiveEnterTimestamp --value 2>/dev/null || echo "")
 if [ -n "$service_started" ] && [ "$service_started" != "n/a" ]; then
   started_ts=$(date -d "$service_started" +%s 2>/dev/null) || started_ts=0
   now_ts=$(date +%s)
@@ -73,10 +73,10 @@ else
 fi
 
 # Recent service restarts (last 24h)
-service_restarts=$(journalctl -u kronos-ii --since "24 hours ago" 2>/dev/null | grep -c "Started\|Stopped" 2>/dev/null) || service_restarts=0
+service_restarts=$(journalctl -u kaos --since "24 hours ago" 2>/dev/null | grep -c "Started\|Stopped" 2>/dev/null) || service_restarts=0
 
 # Audit log stats (if available)
-audit_log="/opt/kronos-ii/data/audit.jsonl"
+audit_log="/opt/kaos/data/audit.jsonl"
 audit_stats="N/A"
 if [ -f "$audit_log" ]; then
   audit_today=$(grep "$(date -u +%Y-%m-%d)" "$audit_log" 2>/dev/null | wc -l | tr -d ' ')
@@ -94,10 +94,10 @@ if [ "$service_status" != "active" ] || [ "$bridge_health" != "ok" ]; then
 fi
 
 report=$(cat <<EOF
-Kronos II Daily Status [$status_word]
+Kronos Agent OS Daily Status [$status_word]
 
 Services:
-  kronos-ii: $service_status
+  kaos: $service_status
   Bridge (8788): $bridge_health
   Dashboard (8789): $dashboard_health
 
@@ -125,7 +125,7 @@ EOF
 
 if [ -n "$NTFY_TOKEN" ]; then
   curl -s -d "$report" \
-    -H "Title: Kronos II Daily Status" \
+    -H "Title: Kronos Agent OS Daily Status" \
     -H "Priority: low" \
     -H "Tags: $status_icon,robot_face" \
     -H "Authorization: Bearer $NTFY_TOKEN" \

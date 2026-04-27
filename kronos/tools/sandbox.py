@@ -1,7 +1,7 @@
 """Docker sandbox for dynamic tool execution.
 
 Runs untrusted code in isolated Docker containers instead of exec() in-process.
-Falls back to in-process exec() if Docker is unavailable.
+Public-safe default fails closed if Docker is unavailable.
 """
 
 import asyncio
@@ -41,6 +41,11 @@ async def execute_sandboxed(
         Tuple of (stdout, stderr)
     """
     if not _docker_available():
+        from kronos.config import settings
+
+        if settings.require_dynamic_tool_sandbox:
+            return "", "Sandbox unavailable: Docker is required for dynamic tool execution."
+
         log.warning("Docker not available, falling back to in-process exec")
         return _exec_in_process(code, timeout)
 
@@ -88,6 +93,11 @@ async def execute_sandboxed(
         )
 
     except FileNotFoundError:
+        from kronos.config import settings
+
+        if settings.require_dynamic_tool_sandbox:
+            return "", "Sandbox unavailable: Docker binary not found."
+
         log.warning("Docker binary not found, falling back to in-process exec")
         return _exec_in_process(code, timeout)
     except Exception as e:

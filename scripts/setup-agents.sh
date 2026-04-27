@@ -1,20 +1,20 @@
 #!/bin/bash
-# Setup .env files for all agents on VPS.
+# Setup .env files for optional swarm agents.
 # Run once on the server after initial deploy.
 #
-# Usage: cd /opt/kronos-ii/app && bash scripts/setup-agents.sh
+# Usage: cd /opt/kaos/app && bash scripts/setup-agents.sh
 #
 # Prerequisites:
-#   - .env (Kronos) already exists with shared keys (LLM, MCP, etc.)
+#   - .env already exists with shared keys (LLM, MCP, etc.)
 #   - Telegram API credentials for each agent
 
 set -euo pipefail
 
-APP_DIR="/opt/kronos-ii/app"
+APP_DIR="/opt/kaos/app"
 BASE_ENV="$APP_DIR/.env"
 
 if [ ! -f "$BASE_ENV" ]; then
-    echo "ERROR: $BASE_ENV not found. Set up Kronos first."
+    echo "ERROR: $BASE_ENV not found. Set up KAOS first."
     exit 1
 fi
 
@@ -53,20 +53,17 @@ create_env() {
 # Agent credentials: name, api_id, api_hash, webhook_port
 # Each agent needs its own Telegram API credentials (https://my.telegram.org)
 # Set them via environment variables before running this script:
-#   export NEXUS_API_ID=... NEXUS_API_HASH=...
-create_env "nexus"    "${NEXUS_API_ID:?Set NEXUS_API_ID}"       "${NEXUS_API_HASH:?Set NEXUS_API_HASH}"       8789
-create_env "lacuna"   "${LACUNA_API_ID:?Set LACUNA_API_ID}"     "${LACUNA_API_HASH:?Set LACUNA_API_HASH}"     8790
-create_env "resonant" "${RESONANT_API_ID:?Set RESONANT_API_ID}" "${RESONANT_API_HASH:?Set RESONANT_API_HASH}" 8791
-create_env "keystone" "${KEYSTONE_API_ID:?Set KEYSTONE_API_ID}" "${KEYSTONE_API_HASH:?Set KEYSTONE_API_HASH}" 8792
-create_env "impulse"  "${IMPULSE_API_ID:?Set IMPULSE_API_ID}"   "${IMPULSE_API_HASH:?Set IMPULSE_API_HASH}"   8793
+#   export KAOS_WORKER_API_ID=... KAOS_WORKER_API_HASH=...
+create_env "kaos-worker"  "${KAOS_WORKER_API_ID:?Set KAOS_WORKER_API_ID}"   "${KAOS_WORKER_API_HASH:?Set KAOS_WORKER_API_HASH}"   8790
+create_env "kaos-analyst" "${KAOS_ANALYST_API_ID:?Set KAOS_ANALYST_API_ID}" "${KAOS_ANALYST_API_HASH:?Set KAOS_ANALYST_API_HASH}" 8791
 
 echo ""
 echo "Next steps:"
 echo "  1. Verify each .env file has correct shared keys"
 echo "  2. Auth each agent's Telegram session:"
-echo "     AGENT_NAME=lacuna TG_API_ID=... TG_API_HASH=... .venv/bin/python scripts/auth-userbot.py"
+echo "     AGENT_NAME=kaos-worker TG_API_ID=... TG_API_HASH=... .venv/bin/python scripts/auth-userbot.py"
 echo "  3. Install systemd units:"
-echo "     cp systemd/{lacuna,resonant,keystone,impulse}.service /etc/systemd/system/"
+echo "     cp systemd/kaos@.service /etc/systemd/system/"
 echo "     systemctl daemon-reload"
 echo "  4. Start agents:"
-echo "     systemctl enable --now lacuna resonant keystone impulse"
+echo "     systemctl enable --now kaos@kaos-worker kaos@kaos-analyst"

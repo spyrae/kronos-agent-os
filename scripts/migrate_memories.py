@@ -1,4 +1,4 @@
-"""Migrate memories from Kronos I MEMORY.md into Mem0.
+"""Import sample memories into Mem0.
 
 Parses MEMORY.md sections and imports each fact as a separate memory.
 
@@ -8,7 +8,6 @@ Usage:
 
 import argparse
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -17,24 +16,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from kronos.memory.store import add_memories, get_all_memories, search_memories  # noqa: E402
 
-USER_ID = os.environ.get("KRONOS_USER_ID", "")
+USER_ID = os.environ.get("KAOS_USER_ID", "")
 
-# Raw facts from Kronos I MEMORY.md
+# Safe sample facts for testing memory import.
 MEMORY_FACTS = [
-    # О Романе
-    "User is the founder of a travel planning app with an AI assistant",
-    "Роман живёт в Юго-Восточной Азии, часовой пояс UTC+8",
-    "Основной стек Романа: Flutter, Supabase, Cloudflare, Appwrite",
-    "Роман предпочитает прямую коммуникацию, без воды",
-    # Ключевые факты
-    "Валюта расходов Романа: индонезийская рупия (IDR)",
-    "Банк Романа: Permata Bank",
-    "Брокер Романа: Interactive Brokers",
-    "Инвестиционный фокус: технологические акции, ETF",
-    # Предпочтения
-    "Язык общения с Романом: русский",
-    "Технические термины на английском",
-    "Формат ответов: короткий, конкретный, с юмором",
+    "User is building a self-hosted AI agent workspace",
+    "User prefers direct, concise communication",
+    "User works with Python, TypeScript, and cloud infrastructure",
+    "User wants technical terms in English when useful",
+    "Preferred answer format: concise, concrete, with clear next steps",
 ]
 
 
@@ -60,14 +50,14 @@ def migrate(dry_run: bool = False) -> None:
         print(f"\nDone. Total memories after migration: {len(final)}")
 
         # Verify with a search
-        results = search_memories("Где живёт Роман?", user_id=USER_ID, limit=3)
-        print(f"Verification search 'Где живёт Роман?': {results}")
+        results = search_memories("What is the user building?", user_id=USER_ID, limit=3)
+        print(f"Verification search 'What is the user building?': {results}")
     else:
         print("\n[DRY RUN] No changes made.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Migrate Kronos I memories to Mem0")
+    parser = argparse.ArgumentParser(description="Import sample memories to Mem0")
     parser.add_argument("--dry-run", action="store_true", help="Print facts without importing")
     args = parser.parse_args()
     migrate(dry_run=args.dry_run)

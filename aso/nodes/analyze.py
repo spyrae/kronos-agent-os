@@ -10,7 +10,7 @@ import json
 import logging
 from pathlib import Path
 
-from ..llm import ask, Model
+from ..llm import Model, ask
 from ..state import ASOState, Opportunity
 
 log = logging.getLogger("aso.nodes.analyze")
@@ -82,7 +82,7 @@ async def analyze(state: ASOState) -> dict:
     data_section = _build_data_section(state)
 
     user_prompt = (
-        "Проанализируй текущее состояние ASO для JourneyBay и найди возможности для оптимизации.\n\n"
+        "Проанализируй текущее состояние ASO для приложения и найди возможности для оптимизации.\n\n"
         f"{data_section}\n"
         "Верни ТОЛЬКО JSON-массив opportunities. Без markdown-обёртки, без пояснений."
     )

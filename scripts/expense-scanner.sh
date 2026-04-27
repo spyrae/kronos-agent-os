@@ -1,35 +1,35 @@
 #!/bin/bash
-# expense-scanner.sh — Scan Gmail for Permata Bank transactions
+# expense-scanner.sh — Scan Gmail for bank transaction emails
 #
 # TODO: This script depends on mcporter (google-workspace MCP tool) which does
-#       not exist in Kronos II. It needs to be rewritten using one of the following:
+#       not exist in Kronos Agent OS. It needs to be rewritten using one of the following:
 #
-#       Option A: Route through the Kronos II agent — send a structured message
-#         to the bridge webhook asking the agent to check Gmail for Permata Bank
+#       Option A: Route through the Kronos Agent OS agent — send a structured message
+#         to the bridge webhook asking the agent to check Gmail for transaction
 #         emails. The agent has access to MCP tools (google-workspace, etc.) and
-#         can write results to /opt/kronos-ii/app/workspace/PENDING-EXPENSES.md.
+#         can write results to /opt/kaos/app/workspace/PENDING-EXPENSES.md.
 #
 #       Option B: Use the Gmail API directly with OAuth 2.0 credentials:
-#         - Store client credentials in /opt/kronos-ii/app/.env
+#         - Store client credentials in /opt/kaos/app/.env
 #         - Use curl + python3 to authenticate and fetch messages
-#         - Parse Permata Bank email format (existing parser logic is preserved below)
+#         - Parse bank transaction email format
 #
 #       Option C: Use the existing google-workspace MCP via an HTTP API call
-#         to the Kronos II bridge, which will proxy the request through the agent.
+#         to the Kronos Agent OS bridge, which will proxy the request through the agent.
 #
 #       Until rewritten, this script exits with an error explaining the issue.
 #
 # Original: Kronos I scripts/expense-scanner.sh
-# Blocked by: mcporter removal in Kronos II
+# Blocked by: mcporter removal in Kronos Agent OS
 #
-# NOTE: The Permata Bank email parsing logic (python3 inline script) is preserved
+# NOTE: The transaction email parsing logic (python3 inline script) is preserved
 #       below as a reference for the rewrite. The parse_permata_email() function
 #       handles both Indonesian and English email formats and both ID/US number
 #       separators.
 
 # --- Preserved parser (for rewrite reference) ---
 #
-# parse_permata_email() {
+# parse_transaction_email() {
 #   local content="$1"
 #   python3 << 'PYEOF' "$content"
 # import sys, re, json
@@ -70,11 +70,11 @@
 # PYEOF
 # }
 
-echo "ERROR: expense-scanner.sh is not yet implemented for Kronos II."
+echo "ERROR: expense-scanner.sh is not yet implemented for Kronos Agent OS."
 echo ""
 echo "This script requires rewriting to remove the mcporter dependency."
 echo "See the TODO comments in this file for implementation options."
-echo "The Permata Bank email parser logic is preserved in the comments above."
+echo "The transaction email parser logic is preserved in the comments above."
 echo ""
-echo "Blocked: mcporter CLI is not available in Kronos II."
+echo "Blocked: mcporter CLI is not available in Kronos Agent OS."
 exit 1

@@ -126,6 +126,32 @@ class TestReactLoop:
         assert result.tool_calls_count == 1
 
     @pytest.mark.asyncio
+    async def test_tool_event_callback_receives_call_and_result(self):
+        tool = _make_tool("search", result="Python is a programming language")
+        model = _make_model([
+            _ai_with_tool_call("search", {"query": "python"}),
+            AIMessage(content="Python — язык программирования."),
+        ])
+        events = []
+
+        messages = [HumanMessage(content="Что такое Python?")]
+        result = await react_loop(
+            model,
+            messages,
+            tools=[tool],
+            on_tool_event=lambda event, payload: events.append((event, payload)),
+        )
+
+        assert result.tool_calls_count == 1
+        assert [event for event, _ in events] == ["tool_call", "tool_result"]
+        assert events[0][1]["name"] == "search"
+        assert events[0][1]["call_id"] == "call_search_1"
+        assert events[0][1]["args"] == {"query": "python"}
+        assert events[1][1]["ok"] is True
+        assert events[1][1]["call_id"] == "call_search_1"
+        assert isinstance(events[1][1]["duration_ms"], int)
+
+    @pytest.mark.asyncio
     async def test_unknown_tool(self):
         """Model calls a tool that doesn't exist → error message fed back."""
         model = _make_model([

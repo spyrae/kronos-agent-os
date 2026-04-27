@@ -2,8 +2,8 @@
 # cost-stats.sh — Show LLM cost statistics from audit log
 # Usage: cost-stats.sh [today|week|all]
 
-COST_LOG="/opt/kronos-ii/data/logs/cost.jsonl"
-AUDIT_LOG="/opt/kronos-ii/data/logs/audit.jsonl"
+COST_LOG="/opt/kaos/data/logs/cost.jsonl"
+AUDIT_LOG="/opt/kaos/data/logs/audit.jsonl"
 
 if [ ! -f "$COST_LOG" ]; then
   echo "No cost log found at $COST_LOG"
@@ -33,7 +33,7 @@ case "$PERIOD" in
     ;;
 esac
 
-echo "=== Kronos II Cost Stats: $LABEL ==="
+echo "=== Kronos Agent OS Cost Stats: $LABEL ==="
 echo ""
 
 python3 -c "

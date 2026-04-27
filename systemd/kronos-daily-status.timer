@@ -1,5 +1,5 @@
 [Unit]
-Description=Kronos II Daily Status Report
+Description=Kronos Agent OS Daily Status Report
 
 [Timer]
 OnCalendar=*-*-* 23:00:00

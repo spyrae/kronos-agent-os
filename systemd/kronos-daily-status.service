@@ -1,11 +1,11 @@
 [Unit]
-Description=Kronos II Daily Status Report
-After=kronos-ii.service
+Description=Kronos Agent OS Daily Status Report
+After=kaos.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/kronos-ii/app/scripts/daily-status.sh
-EnvironmentFile=/opt/kronos-ii/app/.env
+ExecStart=/opt/kaos/app/scripts/daily-status.sh
+EnvironmentFile=/opt/kaos/app/.env
 
 StandardOutput=journal+console
 StandardError=journal+console

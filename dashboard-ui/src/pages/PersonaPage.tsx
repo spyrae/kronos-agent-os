@@ -119,7 +119,7 @@ export default function PersonaPage() {
               <div style={{ textAlign: 'center', color: '#555' }}>
                 <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>{'\u{1F4DD}'}</div>
                 <div style={{ fontSize: '0.95rem' }}>Select a file to edit</div>
-                <div style={{ fontSize: '0.75rem', color: '#444', marginTop: '0.3rem' }}>Workspace files define Kronos II personality</div>
+                <div style={{ fontSize: '0.75rem', color: '#444', marginTop: '0.3rem' }}>Workspace files define Kronos Agent OS personality</div>
               </div>
             </div>
           )}

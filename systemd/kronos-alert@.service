@@ -1,14 +1,14 @@
 [Unit]
-Description=Kronos II Alert — %i failed
+Description=Kronos Agent OS Alert — %i failed
 
 [Service]
 Type=oneshot
 ExecStart=/bin/bash -c '\
   UNIT="%i"; \
-  source /opt/kronos-ii/app/.env 2>/dev/null; \
+  source /opt/kaos/app/.env 2>/dev/null; \
   [ -n "$NTFY_TOKEN" ] && \
   curl -s -d "Service FAILED: $UNIT" \
-    -H "Title: Kronos II Service Crash" \
+    -H "Title: Kronos Agent OS Service Crash" \
     -H "Priority: urgent" \
     -H "Tags: rotating_light,skull" \
     -H "Authorization: Bearer $NTFY_TOKEN" \

@@ -4,6 +4,7 @@ import logging
 
 from langchain_core.tools import tool
 
+from kronos.config import settings
 from kronos.tools.dynamic import TOOLS_DIR, create_tool
 
 log = logging.getLogger("kronos.tools.dynamic_tools")
@@ -19,6 +20,12 @@ async def create_new_tool(name: str, description: str) -> str:
         name: Tool name in snake_case (e.g. 'currency_converter')
         description: What the tool should do (e.g. 'Convert between currencies using fixed rates')
     """
+    if not settings.enable_dynamic_tools:
+        return (
+            "Blocked: dynamic tool creation is disabled. "
+            "Set ENABLE_DYNAMIC_TOOLS=true in a trusted local environment."
+        )
+
     result_tool, message = await create_tool(name, description)
     return message
 
@@ -50,4 +57,6 @@ def list_dynamic_tools() -> str:
 
 def get_dynamic_management_tools() -> list:
     """Get tools for managing dynamic tools."""
+    if not settings.enable_dynamic_tools:
+        return []
     return [create_new_tool, list_dynamic_tools]

@@ -1,17 +1,63 @@
 import { useEffect, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { api } from '../api/client';
-import { SectionHeader } from '../components/Charts';
+import { SectionHeader, StatusBadge } from '../components/Charts';
 
 interface EnvVar { key: string; value: string; is_secret: boolean; }
 interface LlmConfig { tiers: Record<string, { model: string; temperature?: number; max_tokens?: number }>; routing: { complex_patterns_count: number; simple_patterns_count: number } }
+interface Capability {
+  key: string;
+  name: string;
+  enabled: boolean;
+  status: string;
+  risk: string;
+  description: string;
+  required_env: string;
+  scope: string;
+  owner: string;
+  change_mode: string;
+  can_request_change: boolean;
+}
+interface Approval {
+  id: string;
+  kind: string;
+  capability: string;
+  capability_name: string;
+  action: string;
+  status: string;
+  risk: string;
+  scope: string;
+  owner: string;
+  required_env: string;
+  reason: string;
+  requested_at: string;
+  decision_reason?: string;
+  decided_at?: string;
+  effect?: string;
+}
+interface ApprovalResponse { approvals: Approval[]; pending: number; recent: Approval[] }
 
 const TIER_COLORS: Record<string, string> = {
   standard: '#3b82f6', lite: '#4ade80', fallback: '#f59e0b', vision: '#8b5cf6',
 };
 
+const RISK_COLORS: Record<string, string> = {
+  protective: '#4ade80',
+  high: '#f59e0b',
+  critical: '#ef4444',
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  enabled: '#4ade80',
+  blocked: '#71717a',
+};
+
 export default function ConfigPage() {
   const [vars, setVars] = useState<EnvVar[]>([]);
   const [llm, setLlm] = useState<LlmConfig | null>(null);
+  const [capabilities, setCapabilities] = useState<Capability[]>([]);
+  const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [approvalReason, setApprovalReason] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [toast, setToast] = useState('');
@@ -22,12 +68,16 @@ export default function ConfigPage() {
 
   const load = async () => {
     try {
-      const [envR, llmR] = await Promise.all([
+      const [envR, llmR, capabilitiesR] = await Promise.all([
         api<{ vars: EnvVar[] }>('/api/config/env'),
         api<LlmConfig>('/api/config/llm'),
+        api<{ capabilities: Capability[] }>('/api/config/capabilities'),
       ]);
+      const approvalsR = await api<ApprovalResponse>('/api/config/approvals');
       setVars(envR.vars);
       setLlm(llmR);
+      setCapabilities(capabilitiesR.capabilities);
+      setApprovals(approvalsR.approvals);
     } catch (e: any) { showError(e.message); }
   };
   useEffect(() => { load(); }, []);
@@ -45,9 +95,36 @@ export default function ConfigPage() {
     } catch (e: any) { showError(e.message); }
   };
 
-  const card: React.CSSProperties = {
-    background: '#111', border: '1px solid #1a1a1a', borderRadius: '12px', padding: '1.25rem',
+  const requestCapabilityChange = async (capability: Capability) => {
+    const action = capability.enabled ? 'disable' : 'enable';
+    try {
+      await api('/api/config/approvals', {
+        method: 'POST',
+        body: JSON.stringify({ capability: capability.key, action, reason: `dashboard:${action}` }),
+      });
+      showToast(`${capability.name}: ${action} requested.`);
+      load();
+    } catch (e: any) { showError(e.message); }
   };
+
+  const decideApproval = async (approval: Approval, decision: 'approved' | 'denied') => {
+    try {
+      await api(`/api/config/approvals/${approval.id}/decision`, {
+        method: 'POST',
+        body: JSON.stringify({ decision, reason: approvalReason[approval.id] || '' }),
+      });
+      showToast(`${approval.capability_name}: ${decision}.`);
+      setApprovalReason(prev => ({ ...prev, [approval.id]: '' }));
+      load();
+    } catch (e: any) { showError(e.message); }
+  };
+
+  const card: CSSProperties = {
+    background: '#111', border: '1px solid #1a1a1a', borderRadius: 8, padding: '1.25rem',
+  };
+
+  const pendingApprovals = approvals.filter(item => item.status === 'pending');
+  const recentApprovals = approvals.filter(item => item.status !== 'pending').slice(0, 8);
 
   return (
     <div>
@@ -92,6 +169,117 @@ export default function ConfigPage() {
           </div>
         </div>
       )}
+
+      {/* Capability Gates */}
+      <div style={{ marginBottom: '1.5rem' }}>
+        <SectionHeader title="Capability Gates" />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
+          {capabilities.map(capability => (
+            <div key={capability.key} style={{
+              ...card,
+              borderLeft: `3px solid ${capability.enabled ? STATUS_COLORS.enabled : RISK_COLORS[capability.risk] || '#666'}`,
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start', marginBottom: '0.65rem' }}>
+                <div>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#e5e5e5', marginBottom: '0.25rem' }}>{capability.name}</div>
+                  <div style={{ fontSize: '0.72rem', color: '#555', fontFamily: 'monospace' }}>{capability.key}</div>
+                </div>
+                <span style={{
+                  padding: '0.2rem 0.5rem',
+                  borderRadius: 999,
+                  background: capability.enabled ? '#16653422' : '#27272a',
+                  border: `1px solid ${capability.enabled ? '#4ade8033' : '#3f3f46'}`,
+                  color: STATUS_COLORS[capability.status] || '#888',
+                  fontSize: '0.68rem',
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                }}>{capability.status}</span>
+              </div>
+              <p style={{ color: '#888', fontSize: '0.78rem', lineHeight: 1.5, margin: '0 0 0.75rem' }}>{capability.description}</p>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center', fontSize: '0.72rem' }}>
+                <span style={{ color: RISK_COLORS[capability.risk] || '#888', fontWeight: 600, textTransform: 'uppercase' }}>{capability.risk}</span>
+                <code style={{ color: '#666', fontSize: '0.68rem', overflowWrap: 'anywhere', textAlign: 'right' }}>{capability.required_env}</code>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center', marginTop: '0.85rem' }}>
+                <span style={{ color: '#555', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{capability.scope} · {capability.change_mode.replace(/_/g, ' ')}</span>
+                <button
+                  onClick={() => requestCapabilityChange(capability)}
+                  disabled={!capability.can_request_change}
+                  style={{
+                    padding: '0.35rem 0.65rem', borderRadius: 6, border: '1px solid #2a2a2a',
+                    background: '#0a0a0a', color: capability.enabled ? '#f59e0b' : '#f97316',
+                    cursor: capability.can_request_change ? 'pointer' : 'not-allowed',
+                    fontSize: '0.72rem', fontWeight: 650,
+                  }}
+                >
+                  Request {capability.enabled ? 'disable' : 'enable'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Approval Queue */}
+      <div style={{ marginBottom: '1.5rem' }}>
+        <SectionHeader title="Approval Queue" action={<span style={{ color: '#888', fontSize: '0.75rem' }}>{pendingApprovals.length} pending</span>} />
+        <div style={{ ...card, padding: 0, overflow: 'hidden' }}>
+          {pendingApprovals.length === 0 && (
+            <div style={{ padding: '1.6rem', color: '#555', textAlign: 'center', fontSize: '0.85rem' }}>No pending approvals</div>
+          )}
+          {pendingApprovals.map(approval => (
+            <div key={approval.id} style={{ padding: '1rem', borderBottom: '1px solid #181818', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 260px', gap: '1rem', alignItems: 'start' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap', marginBottom: '0.35rem' }}>
+                  <span style={{ color: '#e5e5e5', fontWeight: 650 }}>{approval.capability_name}</span>
+                  <StatusBadge status="warning" label={approval.action} />
+                  <span style={{ color: RISK_COLORS[approval.risk] || '#888', fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase' }}>{approval.risk}</span>
+                </div>
+                <div style={{ color: '#777', fontSize: '0.75rem', lineHeight: 1.45, overflowWrap: 'anywhere' }}>
+                  {approval.required_env}
+                </div>
+                <div style={{ color: '#555', fontSize: '0.7rem', marginTop: '0.4rem' }}>
+                  {approval.id} · {approval.owner}
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                <input
+                  value={approvalReason[approval.id] || ''}
+                  onChange={e => setApprovalReason(prev => ({ ...prev, [approval.id]: e.target.value }))}
+                  placeholder="Reason"
+                  style={{
+                    background: '#0a0a0a', color: '#ddd', border: '1px solid #222',
+                    borderRadius: 6, padding: '0.45rem 0.55rem', fontSize: '0.78rem',
+                  }}
+                />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.45rem' }}>
+                  <button onClick={() => decideApproval(approval, 'approved')} style={{
+                    padding: '0.45rem 0.7rem', borderRadius: 6, border: '1px solid #166534',
+                    background: '#052e16', color: '#4ade80', cursor: 'pointer', fontWeight: 650,
+                  }}>Approve</button>
+                  <button onClick={() => decideApproval(approval, 'denied')} style={{
+                    padding: '0.45rem 0.7rem', borderRadius: 6, border: '1px solid #7f1d1d',
+                    background: '#1a0505', color: '#fca5a5', cursor: 'pointer', fontWeight: 650,
+                  }}>Deny</button>
+                </div>
+              </div>
+            </div>
+          ))}
+          {recentApprovals.length > 0 && (
+            <div style={{ padding: '0.85rem 1rem', borderTop: pendingApprovals.length ? '1px solid #222' : undefined }}>
+              <div style={{ color: '#666', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.55rem' }}>Recent Decisions</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                {recentApprovals.map(approval => (
+                  <div key={approval.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '0.75rem', color: '#777', fontSize: '0.75rem' }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{approval.capability_name} · {approval.action}</span>
+                    <StatusBadge status={approval.status === 'approved' ? 'running' : 'error'} label={approval.status} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Env Vars */}
       <SectionHeader title="Environment Variables" />

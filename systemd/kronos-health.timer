@@ -1,5 +1,5 @@
 [Unit]
-Description=Kronos II Health Check (every 15 min)
+Description=Kronos Agent OS Health Check (every 15 min)
 
 [Timer]
 OnCalendar=*:0/15

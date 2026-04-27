@@ -13,7 +13,7 @@ import logging
 import uuid
 
 from ..state import ASOState
-from ..tools import app_store, keyword_tracker, competitor
+from ..tools import app_store, competitor, keyword_tracker
 
 log = logging.getLogger("aso.nodes.monitor")
 

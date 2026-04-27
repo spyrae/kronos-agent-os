@@ -1,0 +1,29 @@
+[Unit]
+Description=Kronos Agent OS — main agent runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kronos
+WorkingDirectory=/opt/kaos/app
+ExecStart=/opt/kaos/app/.venv/bin/python -m kronos
+Restart=on-failure
+RestartSec=10
+
+# Kill child processes such as MCP servers on stop/restart.
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+EnvironmentFile=/opt/kaos/app/.env
+
+LimitNOFILE=65536
+MemoryMax=2G
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kaos
+
+[Install]
+WantedBy=multi-user.target

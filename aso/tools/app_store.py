@@ -11,7 +11,6 @@ Environment:
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import time
@@ -23,9 +22,9 @@ log = logging.getLogger("aso.tools.app_store")
 
 ASC_BASE = "https://api.appstoreconnect.apple.com/v1"
 
-# JourneyBay constants
-APP_ID = "6759391883"
-BUNDLE_ID = "co.journeybay.app"
+# Public-safe defaults. Override with ASC_APP_ID and ASC_BUNDLE_ID.
+APP_ID = os.environ.get("ASC_APP_ID", "")
+BUNDLE_ID = os.environ.get("ASC_BUNDLE_ID", "com.example.app")
 
 
 # --- JWT Auth ---
@@ -147,7 +146,7 @@ async def get_localizations(version_id: str) -> dict[str, dict]:
 
     Returns {locale: {title, subtitle, keywords, description, ...}}.
     """
-    data = await _get(f"/appStoreVersionLocalizations", params={
+    data = await _get("/appStoreVersionLocalizations", params={
         "filter[appStoreVersion]": version_id,
         "limit": "50",
     })

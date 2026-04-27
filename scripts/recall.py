@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """FTS5 Cross-Session Search — full-text search across audit log.
 
-Builds a SQLite FTS5 index from Kronos II audit.jsonl.
+Builds a SQLite FTS5 index from Kronos Agent OS audit.jsonl.
 Supports search with optional LLM summarization via DeepSeek API.
 
 Usage:
@@ -12,10 +12,10 @@ Usage:
     recall.py stats              — show index statistics
 
 Environment:
-    AUDIT_LOG           Audit log path (default: /opt/kronos-ii/data/audit.jsonl)
-    DB_PATH             SQLite database path (default: /opt/kronos-ii/data/recall.db)
+    AUDIT_LOG           Audit log path (default: /opt/kaos/data/audit.jsonl)
+    DB_PATH             SQLite database path (default: /opt/kaos/data/recall.db)
     DEEPSEEK_API_KEY    DeepSeek API key (for --summarize)
-    RECALL_LOG          Log file (default: /var/log/kronos-ii/recall.log)
+    RECALL_LOG          Log file (default: /var/log/kaos/recall.log)
 """
 
 import json
@@ -30,10 +30,10 @@ from pathlib import Path
 
 # --- Config ---
 
-AUDIT_LOG = Path(os.environ.get("AUDIT_LOG", "/opt/kronos-ii/data/audit.jsonl"))
-DB_PATH = Path(os.environ.get("DB_PATH", "/opt/kronos-ii/data/recall.db"))
+AUDIT_LOG = Path(os.environ.get("AUDIT_LOG", "/opt/kaos/data/audit.jsonl"))
+DB_PATH = Path(os.environ.get("DB_PATH", "/opt/kaos/data/recall.db"))
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-LOG_FILE = os.environ.get("RECALL_LOG", "/var/log/kronos-ii/recall.log")
+LOG_FILE = os.environ.get("RECALL_LOG", "/var/log/kaos/recall.log")
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL = "deepseek-chat"
@@ -121,9 +121,9 @@ def init_db() -> sqlite3.Connection:
 # --- Indexing ---
 
 def extract_messages_from_audit(filepath: Path) -> list[dict]:
-    """Extract messages from Kronos II audit.jsonl.
+    """Extract messages from Kronos Agent OS audit.jsonl.
 
-    Kronos II audit format fields:
+    Kronos Agent OS audit format fields:
         ts, tier, duration_ms, input_tokens, output_tokens,
         approx_cost_usd, input_preview, output_preview
     """

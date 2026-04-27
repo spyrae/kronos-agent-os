@@ -8,14 +8,14 @@ Usage:
     contact-profiler.py --chat @username [--limit 300] [--dry-run] [--no-notify]
 
 Environment:
-    WORKSPACE           Workspace dir (default: /opt/kronos-ii/app/workspace)
+    WORKSPACE           Workspace dir (default: /opt/kaos/app/workspace)
     BRIDGE_URL          Bridge HTTP URL (default: http://127.0.0.1:8788)
     WEBHOOK_SECRET      Auth secret for bridge
     DEEPSEEK_API_KEY    DeepSeek API key
     TG_BOT_TOKEN        Telegram bot token (for notifications)
     PROFILER_CHAT_ID    Telegram chat for notifications
     PROFILER_TOPIC_ID   Telegram topic for notifications
-    PROFILER_LOG        Log file (default: /var/log/kronos-ii/contact-profiler.log)
+    PROFILER_LOG        Log file (default: /var/log/kaos/contact-profiler.log)
 """
 
 import argparse
@@ -35,7 +35,7 @@ from kronos.security.sanitize import sanitize_text, detect_injection, wrap_untru
 
 # --- Config ---
 
-WORKSPACE = Path(os.environ.get("WORKSPACE", "/opt/kronos-ii/workspace"))
+WORKSPACE = Path(os.environ.get("WORKSPACE", "/opt/kaos/workspace"))
 CONTACTS_DIR = WORKSPACE / "notes" / "world" / "contacts"
 BRIDGE_URL = os.environ.get("BRIDGE_URL", "http://127.0.0.1:8788")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
@@ -43,7 +43,7 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 CHAT_ID = int(os.environ.get("PROFILER_CHAT_ID", "0"))
 TOPIC_ID = int(os.environ.get("PROFILER_TOPIC_ID", "0"))
-LOG_FILE = os.environ.get("PROFILER_LOG", "/var/log/kronos-ii/contact-profiler.log")
+LOG_FILE = os.environ.get("PROFILER_LOG", "/var/log/kaos/contact-profiler.log")
 
 DEEPSEEK_TIMEOUT = 180  # seconds for LLM analysis
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"

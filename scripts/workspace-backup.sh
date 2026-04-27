@@ -1,19 +1,19 @@
 #!/bin/bash
 # workspace-backup.sh — Auto-backup workspace files to Git
-# Commits workspace changes in /opt/kronos-ii/app/ repo and pushes.
+# Commits workspace changes in /opt/kaos/app/ repo and pushes.
 #
 # Usage: workspace-backup.sh
 # Designed to run via cron every 6 hours
 
 set -uo pipefail
 
-WORKSPACE_SRC="/opt/kronos-ii/workspace"
-REPO_DIR="/opt/kronos-ii/app"
+WORKSPACE_SRC="/opt/kaos/workspace"
+REPO_DIR="/opt/kaos/app"
 
 # NTFY config
-if [ -f /opt/kronos-ii/app/.env ]; then
+if [ -f /opt/kaos/app/.env ]; then
   # shellcheck disable=SC1091
-  source /opt/kronos-ii/app/.env 2>/dev/null || true
+  source /opt/kaos/app/.env 2>/dev/null || true
 fi
 NTFY_URL="${NTFY_URL:-${NTFY_URL:-https://ntfy.sh}}"
 NTFY_TOKEN="${NTFY_TOKEN:-}"
@@ -65,7 +65,7 @@ if git push origin main 2>&1; then
   if [ -n "$NTFY_TOKEN" ]; then
     msg=$(printf "Workspace backup pushed\n\nTime: %s\nFiles changed: %s\n\n%s" "$timestamp" "$files_changed" "$CHANGES")
     curl -s -d "$msg" \
-      -H "Title: Kronos II Backup OK" \
+      -H "Title: Kronos Agent OS Backup OK" \
       -H "Priority: low" \
       -H "Tags: white_check_mark,floppy_disk" \
       -H "Authorization: Bearer $NTFY_TOKEN" \
@@ -77,7 +77,7 @@ else
   # Alert on push failure
   if [ -n "$NTFY_TOKEN" ]; then
     curl -s -d "Workspace backup FAILED: git push error" \
-      -H "Title: Kronos II Backup FAILED" \
+      -H "Title: Kronos Agent OS Backup FAILED" \
       -H "Priority: high" \
       -H "Tags: warning,floppy_disk" \
       -H "Authorization: Bearer $NTFY_TOKEN" \

@@ -27,7 +27,7 @@ MAX_ITERATIONS = 2
 MIN_QUALITY_SCORE = 60
 
 
-def set_tools(tools: list[BaseTool]) -> None:
+def set_tools(tools: list[BaseTool], on_tool_event=None) -> None:
     """Register search tools and build a ReAct search agent."""
     global _tools, _search_agent
     _tools = [
@@ -42,6 +42,7 @@ def set_tools(tools: list[BaseTool]) -> None:
             tools=_tools,
             system_prompt="You are a search assistant. Execute the given search queries using the available tools. If a tool returns an error, skip it and try an alternative. Return all results.",
             name="search_executor",
+            on_tool_event=on_tool_event,
         )
     log.info("Research tools registered: %d tools", len(_tools))
 

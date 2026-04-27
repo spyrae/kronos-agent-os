@@ -26,7 +26,7 @@ log = logging.getLogger("kronos.agents.topic_research")
 MAX_ITERATIONS = 2
 
 
-def create_topic_research_agent(tools: list[BaseTool]):
+def create_topic_research_agent(tools: list[BaseTool], on_tool_event=None):
     """Build the Topic Research sub-agent as an async callable.
 
     Returns an async function that takes messages and returns AgentResult.
@@ -53,15 +53,15 @@ def create_topic_research_agent(tools: list[BaseTool]):
             state["iteration"] = iteration
 
             # Step 1: discover topics
-            update = await discover_topics(state, tools)
+            update = await discover_topics(state, tools, on_tool_event=on_tool_event)
             state.update(update)
 
             # Step 2: expand topics
-            update = await expand_topics(state, tools)
+            update = await expand_topics(state, tools, on_tool_event=on_tool_event)
             state.update(update)
 
             # Step 3: validate topics
-            update = await validate_topics(state, tools)
+            update = await validate_topics(state, tools, on_tool_event=on_tool_event)
             state.update(update)
 
             # Step 4: score topics

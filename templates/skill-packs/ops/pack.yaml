@@ -1,0 +1,9 @@
+name: Ops Pack
+description: Incident review and runbook summarization for trusted local operators.
+capabilities:
+  - optional logs
+  - optional server ops when explicitly enabled
+skills:
+  - incident-review
+examples:
+  - Summarize an incident log into cause, impact, and follow-ups.

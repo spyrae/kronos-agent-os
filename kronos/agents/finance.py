@@ -23,7 +23,7 @@ FINANCE_SYSTEM_PROMPT = """Ты — Finance Agent в системе Kronos. Тв
 - Язык: русский, тикеры и финансовые термины на английском"""
 
 
-def create_finance_agent(tools: list[BaseTool]):
+def create_finance_agent(tools: list[BaseTool], on_tool_event=None):
     """Create finance agent with market data tools."""
     finance_tools = [
         t for t in tools
@@ -40,4 +40,5 @@ def create_finance_agent(tools: list[BaseTool]):
         tools=finance_tools,
         system_prompt=FINANCE_SYSTEM_PROMPT,
         name="finance_agent",
+        on_tool_event=on_tool_event,
     )

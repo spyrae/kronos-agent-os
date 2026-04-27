@@ -24,11 +24,10 @@ Environment:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 logging.basicConfig(
@@ -59,8 +58,8 @@ async def run_cycle(*, dry_run: bool = False) -> None:
     graph = compile_graph(sqlite_path=db)
 
     initial_state: ASOState = {
-        "app_id_ios": "6759391883",
-        "package_android": "co.journeybay.app",
+        "app_id_ios": os.environ.get("ASC_APP_ID", ""),
+        "package_android": os.environ.get("PLAY_PACKAGE_NAME", "com.example.app"),
         "phase": "start",
         "error": None,
         "opportunities": [],
@@ -121,8 +120,9 @@ async def resume_graph(human_input: dict) -> None:
 
     Used for both review (approve/reject/skip) and wait (resume).
     """
-    from .graph import compile_graph
     from langgraph.types import Command
+
+    from .graph import compile_graph
 
     db = _db_path()
     graph = compile_graph(sqlite_path=db)
@@ -167,7 +167,7 @@ async def show_status() -> None:
     next_nodes = state.next  # what nodes are pending
 
     print(f"\n{'='*40}")
-    print(f"ASO Pipeline Status")
+    print("ASO Pipeline Status")
     print(f"{'='*40}")
     print(f"Cycle:       #{values.get('cycle_id', '—')}")
     print(f"Phase:       {values.get('phase', '—')}")
@@ -240,7 +240,7 @@ async def check_wait_resume() -> None:
                 resume_at = intr_value.get("resume_at", "")
                 if resume_at:
                     resume_dt = datetime.fromisoformat(resume_at)
-                    now = datetime.now(timezone.utc)
+                    now = datetime.now(UTC)
                     if now >= resume_dt:
                         log.info("Wait period elapsed, auto-resuming graph")
                         await resume_graph({"action": "resume"})

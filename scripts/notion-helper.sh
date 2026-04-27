@@ -3,17 +3,17 @@
 # Usage: notion-helper [-w workspace] <command> [args]
 #
 # Workspaces:
-#   personal   — Roman's personal Notion (default)
-#   team — Team workspace
+#   personal — Personal Notion workspace (default)
+#   team     — Team workspace
 #
-# Tokens are loaded from env vars: NOTION_TOKEN_PERSONAL, NOTION_TOKEN_JOURNEYBAY
-# Fallback: load from /opt/kronos-ii/app/.env if the file exists
+# Tokens are loaded from env vars: NOTION_TOKEN_PERSONAL, NOTION_TOKEN_TEAM
+# Fallback: load from /opt/kaos/app/.env if the file exists
 
 # Load .env if tokens not already in environment
-if [ -z "${NOTION_TOKEN_PERSONAL:-}" ] || [ -z "${NOTION_TOKEN_JOURNEYBAY:-}" ]; then
-  if [ -f /opt/kronos-ii/app/.env ]; then
+if [ -z "${NOTION_TOKEN_PERSONAL:-}" ] || [ -z "${NOTION_TOKEN_TEAM:-}" ]; then
+  if [ -f /opt/kaos/app/.env ]; then
     # shellcheck disable=SC1091
-    source /opt/kronos-ii/app/.env 2>/dev/null || true
+    source /opt/kaos/app/.env 2>/dev/null || true
   fi
 fi
 
@@ -34,7 +34,7 @@ if [ -z "$NOTION_KEY" ]; then
   if [ -z "${WORKSPACES[$WORKSPACE]+x}" ]; then
     echo "ERROR: Unknown workspace '$WORKSPACE'. Available: ${!WORKSPACES[*]}"
   else
-    echo "ERROR: Token for workspace '$WORKSPACE' is not set. Set NOTION_TOKEN_${WORKSPACE^^} env var or add it to /opt/kronos-ii/app/.env"
+    echo "ERROR: Token for workspace '$WORKSPACE' is not set. Set NOTION_TOKEN_${WORKSPACE^^} env var or add it to /opt/kaos/app/.env"
   fi
   exit 1
 fi
@@ -144,11 +144,11 @@ case "$1" in
     echo "Usage: notion-helper [-w workspace] <command> [args]"
     echo ""
     echo "Workspaces: ${!WORKSPACES[*]} (default: personal)"
-    echo "  -w personal     Roman's personal Notion"
+    echo "  -w personal   Personal Notion workspace"
     echo "  -w team       Team workspace"
     echo ""
-    echo "Tokens: set NOTION_TOKEN_PERSONAL and NOTION_TOKEN_JOURNEYBAY in env"
-    echo "  or add them to /opt/kronos-ii/app/.env"
+    echo "Tokens: set NOTION_TOKEN_PERSONAL and NOTION_TOKEN_TEAM in env"
+    echo "  or add them to /opt/kaos/app/.env"
     echo ""
     echo "Commands:"
     echo "  search <query>                    Search pages and databases"

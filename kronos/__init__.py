@@ -1,3 +1,3 @@
-"""Kronos II — LangGraph personal AI agent with INTJ persona."""
+"""Kronos Agent OS — self-hosted runtime for durable AI agents."""
 
 __version__ = "0.1.0"

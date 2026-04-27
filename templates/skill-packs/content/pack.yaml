@@ -1,0 +1,8 @@
+name: Content Pack
+description: Release notes, launch copy, and editorial review workflows.
+capabilities:
+  - local docs
+skills:
+  - release-notes
+examples:
+  - Turn a list of changes into release notes.

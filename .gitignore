@@ -11,15 +11,22 @@ venv/
 .env
 .env.*
 !.env.example
-!.env.nexus.example
+!.env.worker.example
 *.session
 *.session-journal
 servers.yaml
+agents.yaml
 
 # Data
 data/
 *.db
 *.sqlite
+
+# Local agent workspaces are runtime state. Keep only public templates/docs.
+workspaces/*
+!workspaces/README.md
+!workspaces/_template/
+!workspaces/_template/**
 
 # IDE
 .idea/
@@ -31,3 +38,4 @@ data/
 Thumbs.db
 dashboard-ui/node_modules/
 dashboard-ui/.vite/
+dashboard-ui/dist/

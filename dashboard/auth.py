@@ -1,13 +1,12 @@
 """Session-based auth with login/password."""
 
-import hashlib
 import secrets
 import time
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from dashboard.config import DASHBOARD_USERNAME, DASHBOARD_PASSWORD
+from dashboard.config import DASHBOARD_PASSWORD, DASHBOARD_USERNAME
 
 security = HTTPBearer(auto_error=False)
 

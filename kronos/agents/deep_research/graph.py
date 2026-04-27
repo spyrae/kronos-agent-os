@@ -29,12 +29,12 @@ from kronos.engine import AgentResult
 log = logging.getLogger("kronos.agents.deep_research")
 
 
-def create_deep_research_agent(tools: list[BaseTool]):
+def create_deep_research_agent(tools: list[BaseTool], on_tool_event=None):
     """Create the deep research agent as an async callable.
 
     Returns an async function that takes messages and returns AgentResult.
     """
-    set_tools(tools)
+    set_tools(tools, on_tool_event=on_tool_event)
 
     async def run(messages: list[BaseMessage]) -> AgentResult:
         """Run the deep research pipeline."""

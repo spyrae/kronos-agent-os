@@ -25,7 +25,7 @@ RESEARCH_SYSTEM_PROMPT = """Ты — Research Agent в системе Kronos. Т
 - Язык: русский, технические термины на английском"""
 
 
-def create_research_agent(tools: list[BaseTool]):
+def create_research_agent(tools: list[BaseTool], on_tool_event=None):
     """Create research agent with search/extraction tools."""
     research_tools = [
         t for t in tools
@@ -42,4 +42,5 @@ def create_research_agent(tools: list[BaseTool]):
         tools=research_tools,
         system_prompt=RESEARCH_SYSTEM_PROMPT,
         name="research_agent",
+        on_tool_event=on_tool_event,
     )

@@ -1,46 +1,126 @@
 import { useEffect, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { api } from '../api/client';
-import { SectionHeader } from '../components/Charts';
+import { SectionHeader, StatusBadge } from '../components/Charts';
 
-interface MemoryItem { id: string; memory: string; created_at: string; updated_at: string }
-interface MemoryStatus { status: string; total_memories: number; qdrant: string; error?: string }
+interface MemoryRecord {
+  id: string;
+  type: string;
+  source: string;
+  memory: string;
+  created_at: string;
+  updated_at: string;
+  user_id: string;
+  session_id: string;
+  template: string;
+  metadata: Record<string, unknown>;
+  recall_reason: string;
+}
+
+interface MemoryStatus {
+  status: string;
+  total_memories: number;
+  qdrant: string;
+  error?: string;
+  counts?: Record<string, number>;
+}
+
+interface RecordsResponse {
+  records: MemoryRecord[];
+  total: number;
+  filters: { types: string[]; sources: string[]; sessions: string[] };
+}
+
+const STORE_COLORS: Record<string, string> = {
+  fact: '#4ade80',
+  shared_fact: '#06b6d4',
+  entity: '#8b5cf6',
+  relation: '#f97316',
+  session: '#3b82f6',
+};
+
+const RESET_SCOPES = ['facts', 'shared', 'knowledge_graph', 'sessions', 'all'];
+
+function formatDate(value: string) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString([], { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function statusFor(value: string): 'running' | 'stopped' | 'error' | 'warning' {
+  if (value === 'ok') return 'running';
+  if (value === 'degraded') return 'warning';
+  if (value === 'error') return 'error';
+  return 'stopped';
+}
+
+function SelectFilter({
+  value,
+  options,
+  onChange,
+}: {
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)} style={{
+      background: '#0a0a0a', color: '#ddd', border: '1px solid #222', borderRadius: 6,
+      padding: '0.5rem 0.65rem', fontSize: '0.8rem', minWidth: 140,
+    }}>
+      <option value="all">All</option>
+      {options.map(option => <option key={option} value={option}>{option}</option>)}
+    </select>
+  );
+}
 
 export default function MemoryPage() {
   const [status, setStatus] = useState<MemoryStatus | null>(null);
-  const [memories, setMemories] = useState<MemoryItem[]>([]);
-  const [selected, setSelected] = useState<MemoryItem | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<string[]>([]);
-  const [searching, setSearching] = useState(false);
+  const [records, setRecords] = useState<MemoryRecord[]>([]);
+  const [filters, setFilters] = useState<RecordsResponse['filters']>({ types: [], sources: [], sessions: [] });
+  const [selected, setSelected] = useState<MemoryRecord | null>(null);
+  const [query, setQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const [sessionFilter, setSessionFilter] = useState('all');
   const [addText, setAddText] = useState('');
-  const [adding, setAdding] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [resetScope, setResetScope] = useState('facts');
+  const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState('');
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); };
 
-  const fetchData = () => {
-    api<MemoryStatus>('/api/memory/status').then(setStatus).catch(() => {});
-    api<{ memories: MemoryItem[]; total: number }>('/api/memory/all').then(r => setMemories(r.memories)).catch(() => {});
-  };
-
-  useEffect(() => { fetchData(); }, []);
-
-  const doSearch = async () => {
-    if (!searchQuery.trim()) { setSearchResults([]); return; }
-    setSearching(true);
+  const fetchData = async () => {
     try {
-      const r = await api<{ results: string[] }>('/api/memory/search', {
-        method: 'POST', body: JSON.stringify({ query: searchQuery, limit: 10 }),
+      const params = new URLSearchParams({
+        query,
+        type: typeFilter,
+        source: sourceFilter,
+        session: sessionFilter,
+        limit: '300',
       });
-      setSearchResults(r.results);
-    } catch { showToast('Search failed'); }
-    setSearching(false);
+      const [statusR, recordsR] = await Promise.all([
+        api<MemoryStatus>('/api/memory/status'),
+        api<RecordsResponse>(`/api/memory/records?${params.toString()}`),
+      ]);
+      setStatus(statusR);
+      setRecords(recordsR.records);
+      setFilters(recordsR.filters);
+      if (selected && !recordsR.records.some(item => item.id === selected.id)) {
+        setSelected(null);
+      }
+    } catch {
+      showToast('Memory load failed');
+    }
   };
+
+  useEffect(() => { fetchData(); }, [query, typeFilter, sourceFilter, sessionFilter]);
 
   const doAdd = async () => {
     if (!addText.trim()) return;
-    setAdding(true);
+    setBusy(true);
     try {
       await api('/api/memory/add', { method: 'POST', body: JSON.stringify({ text: addText }) });
       showToast('Memory added');
@@ -48,172 +128,187 @@ export default function MemoryPage() {
       setShowAdd(false);
       fetchData();
     } catch { showToast('Add failed'); }
-    setAdding(false);
+    setBusy(false);
   };
 
-  const card: React.CSSProperties = {
-    background: '#111', border: '1px solid #1a1a1a', borderRadius: '12px', padding: '1.25rem',
+  const deleteSelected = async () => {
+    if (!selected) return;
+    if (!window.confirm(`Delete ${selected.id}?`)) return;
+    setBusy(true);
+    try {
+      await api(`/api/memory/records/${encodeURIComponent(selected.id)}`, { method: 'DELETE' });
+      showToast('Memory deleted');
+      setSelected(null);
+      fetchData();
+    } catch { showToast('Delete failed'); }
+    setBusy(false);
   };
-  const input: React.CSSProperties = {
+
+  const resetMemory = async () => {
+    if (!window.confirm(`Reset ${resetScope}?`)) return;
+    setBusy(true);
+    try {
+      await api('/api/memory/reset', { method: 'POST', body: JSON.stringify({ scope: resetScope, confirm: true }) });
+      showToast(`${resetScope} reset`);
+      setSelected(null);
+      fetchData();
+    } catch { showToast('Reset failed'); }
+    setBusy(false);
+  };
+
+  const card: CSSProperties = {
+    background: '#111', border: '1px solid #1a1a1a', borderRadius: 8, padding: '1.1rem',
+  };
+  const input: CSSProperties = {
     padding: '0.5rem 0.75rem', background: '#0a0a0a', border: '1px solid #222',
-    borderRadius: '6px', color: '#e0e0e0', fontSize: '0.85rem', width: '100%', outline: 'none',
+    borderRadius: 6, color: '#e0e0e0', fontSize: '0.85rem', outline: 'none',
   };
-
-  const displayList = searchResults.length > 0
-    ? searchResults.map((r, i) => ({ id: `search-${i}`, memory: r, created_at: '', updated_at: '' }))
-    : memories;
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-        <h1 style={{ fontSize: '1.5rem', fontWeight: 600 }}>Memory Explorer</h1>
-        <button onClick={() => setShowAdd(!showAdd)} style={{
-          padding: '0.45rem 1.1rem', borderRadius: 8, border: 'none', cursor: 'pointer',
-          background: showAdd ? '#333' : '#f97316', color: '#fff', fontSize: '0.82rem', fontWeight: 600,
-        }}>{showAdd ? 'Cancel' : '+ New Memory'}</button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', gap: '1rem' }}>
+        <h1 style={{ fontSize: '1.5rem', fontWeight: 600 }}>Memory Inspector</h1>
+        {status && <StatusBadge status={statusFor(status.status)} label={status.status} />}
       </div>
 
-      {/* Add memory */}
-      {showAdd && (
-        <div style={{ ...card, marginBottom: '1rem', borderColor: '#f97316' }}>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <input
-              style={{ ...input, flex: 1 }} placeholder="Add a memory..."
-              value={addText} onChange={e => setAddText(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') doAdd(); }}
-              autoFocus
-            />
-            <button onClick={doAdd} disabled={adding} style={{
-              padding: '0.5rem 1.25rem', borderRadius: 6, border: 'none', cursor: 'pointer',
-              background: adding ? '#333' : '#f97316', color: '#fff', fontSize: '0.85rem', fontWeight: 600,
-            }}>{adding ? 'Adding...' : 'Add'}</button>
-          </div>
+      {status && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+          {Object.entries(status.counts || {}).map(([key, value]) => (
+            <div key={key} style={{ ...card, padding: '0.8rem 0.9rem' }}>
+              <div style={{ color: '#666', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.3rem' }}>{key.replace(/_/g, ' ')}</div>
+              <div style={{ color: '#fff', fontSize: '1.25rem', fontWeight: 750 }}>{value}</div>
+            </div>
+          ))}
         </div>
       )}
 
-      {/* Search bar */}
-      <div style={{ ...card, marginBottom: '1rem', padding: '0.75rem 1rem' }}>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+      <div style={{ ...card, marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap', alignItems: 'center' }}>
           <input
-            style={{ ...input, flex: 1, border: '1px solid #333' }}
-            placeholder="Semantic search memories..."
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') doSearch(); }}
+            style={{ ...input, flex: '1 1 260px' }}
+            placeholder="Search memory"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
           />
-          <button onClick={doSearch} disabled={searching} style={{
-            padding: '0.5rem 1rem', borderRadius: 6, border: 'none', cursor: 'pointer',
-            background: '#8b5cf6', color: '#fff', fontSize: '0.82rem', fontWeight: 600,
-          }}>{searching ? '...' : 'Search'}</button>
-          {searchResults.length > 0 && (
-            <button onClick={() => { setSearchResults([]); setSearchQuery(''); }} style={{
-              padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid #333',
-              background: 'transparent', color: '#888', cursor: 'pointer', fontSize: '0.82rem',
-            }}>Clear</button>
-          )}
+          <SelectFilter value={typeFilter} options={filters.types} onChange={setTypeFilter} />
+          <SelectFilter value={sourceFilter} options={filters.sources} onChange={setSourceFilter} />
+          <SelectFilter value={sessionFilter} options={filters.sessions} onChange={setSessionFilter} />
+          <button onClick={() => setShowAdd(!showAdd)} style={{
+            padding: '0.5rem 0.85rem', borderRadius: 6, border: '1px solid #2a2a2a',
+            background: showAdd ? '#1a1a1a' : '#f97316', color: '#fff', cursor: 'pointer', fontWeight: 650,
+          }}>{showAdd ? 'Cancel' : 'New'}</button>
         </div>
+        {showAdd && (
+          <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
+            <input
+              style={{ ...input, flex: 1 }}
+              placeholder="Add durable fact"
+              value={addText}
+              onChange={e => setAddText(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') doAdd(); }}
+            />
+            <button onClick={doAdd} disabled={busy} style={{
+              padding: '0.5rem 1rem', borderRadius: 6, border: 'none',
+              background: busy ? '#333' : '#f97316', color: '#fff', cursor: busy ? 'default' : 'pointer', fontWeight: 650,
+            }}>Add</button>
+          </div>
+        )}
       </div>
 
-      {/* Main content: memory list + detail */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-        {/* Memory list */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 390px', gap: '1rem' }}>
         <div style={card}>
-          <SectionHeader title={searchResults.length > 0 ? `Search Results (${searchResults.length})` : `Memories (${memories.length})`} />
-          <div style={{ maxHeight: 'calc(100vh - 380px)', overflow: 'auto', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-            {displayList.length === 0 && (
-              <div style={{ padding: '2rem', textAlign: 'center', color: '#555' }}>No memories stored yet</div>
+          <SectionHeader title={`Records (${records.length})`} />
+          <div style={{ maxHeight: 'calc(100vh - 420px)', minHeight: 260, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+            {records.length === 0 && (
+              <div style={{ padding: '2rem', color: '#555', textAlign: 'center', fontSize: '0.85rem' }}>
+                Demo: launch reviewers prefer concise technical answers.
+              </div>
             )}
-            {displayList.map(m => (
+            {records.map(record => (
               <div
-                key={m.id}
-                onClick={() => setSelected(m)}
+                key={record.id}
+                onClick={() => setSelected(record)}
                 style={{
-                  padding: '0.65rem 0.75rem', borderRadius: 8, cursor: 'pointer',
-                  background: selected?.id === m.id ? '#1a1a2e' : '#0a0a0a',
-                  border: `1px solid ${selected?.id === m.id ? '#2563eb44' : '#111'}`,
-                  transition: 'background 0.15s',
+                  padding: '0.7rem 0.75rem', borderRadius: 8, cursor: 'pointer',
+                  background: selected?.id === record.id ? '#151a22' : '#0a0a0a',
+                  border: `1px solid ${selected?.id === record.id ? '#3b82f655' : '#151515'}`,
                 }}
               >
-                <div style={{
-                  fontSize: '0.82rem', color: selected?.id === m.id ? '#fff' : '#ccc',
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>{m.memory}</div>
-                {m.created_at && (
-                  <div style={{ fontSize: '0.65rem', color: '#444', marginTop: '0.2rem' }}>
-                    {m.id.slice(0, 8)} · {new Date(m.created_at).toLocaleDateString()}
-                  </div>
-                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: STORE_COLORS[record.type] || '#777', flexShrink: 0 }} />
+                  <span style={{ color: '#888', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{record.type}</span>
+                  <span style={{ color: '#555', fontSize: '0.68rem' }}>{record.source}</span>
+                </div>
+                <div style={{ color: '#ddd', fontSize: '0.84rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{record.memory}</div>
+                <div style={{ marginTop: '0.3rem', color: '#555', fontSize: '0.68rem' }}>{record.session_id || record.user_id || record.template} · {formatDate(record.updated_at)}</div>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Detail / Version History */}
         <div style={card}>
-          <SectionHeader title="Version History" />
+          <SectionHeader title="Detail" />
           {selected ? (
             <div>
-              <div style={{
-                background: '#0a0a0a', borderRadius: 8, padding: '1rem', marginBottom: '1rem',
-                border: '1px solid #1a1a1a',
-              }}>
-                <div style={{ fontSize: '0.9rem', color: '#e0e0e0', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{selected.memory}</div>
+              <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', borderRadius: 8, padding: '0.9rem', marginBottom: '0.9rem' }}>
+                <div style={{ color: '#e5e5e5', fontSize: '0.9rem', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{selected.memory}</div>
               </div>
-              {/* Version timeline */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {selected.updated_at && selected.updated_at !== selected.created_at && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#4ade80', flexShrink: 0 }} />
-                    <div style={{ flex: 1, fontSize: '0.78rem' }}>
-                      <span style={{ color: '#4ade80', fontWeight: 600 }}>Current</span>
-                      <span style={{ color: '#555', marginLeft: '0.5rem' }}>{new Date(selected.updated_at).toLocaleString()}</span>
-                    </div>
-                  </div>
-                )}
-                {selected.created_at && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#333', flexShrink: 0 }} />
-                    <div style={{ flex: 1, fontSize: '0.78rem' }}>
-                      <span style={{ color: '#888' }}>Created</span>
-                      <span style={{ color: '#555', marginLeft: '0.5rem' }}>{new Date(selected.created_at).toLocaleString()}</span>
-                    </div>
-                  </div>
-                )}
+              {[
+                ['ID', selected.id],
+                ['Type', selected.type],
+                ['Source', selected.source],
+                ['Session', selected.session_id || '-'],
+                ['User', selected.user_id || '-'],
+                ['Template', selected.template || '-'],
+                ['Created', formatDate(selected.created_at)],
+                ['Updated', formatDate(selected.updated_at)],
+              ].map(([label, value]) => (
+                <div key={label} style={{ display: 'grid', gridTemplateColumns: '78px 1fr', gap: '0.6rem', marginBottom: '0.42rem', fontSize: '0.74rem' }}>
+                  <span style={{ color: '#555', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+                  <span style={{ color: '#aaa', overflowWrap: 'anywhere' }}>{value}</span>
+                </div>
+              ))}
+              <div style={{ marginTop: '0.85rem' }}>
+                <div style={{ color: '#666', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>Recall</div>
+                <div style={{ color: '#999', fontSize: '0.78rem', lineHeight: 1.45 }}>{selected.recall_reason || '-'}</div>
               </div>
-              {/* Metadata */}
-              <div style={{ marginTop: '1rem', padding: '0.75rem', background: '#0a0a0a', borderRadius: 6, fontSize: '0.72rem', fontFamily: 'monospace', color: '#555' }}>
-                ID: {selected.id}
+              <div style={{ marginTop: '0.85rem' }}>
+                <div style={{ color: '#666', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>Metadata</div>
+                <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#888', background: '#050505', border: '1px solid #181818', borderRadius: 6, padding: '0.65rem', fontSize: '0.72rem', maxHeight: 180, overflow: 'auto' }}>{JSON.stringify(selected.metadata, null, 2)}</pre>
               </div>
+              <button onClick={deleteSelected} disabled={busy} style={{
+                marginTop: '0.85rem', width: '100%', padding: '0.55rem 0.8rem', borderRadius: 6,
+                border: '1px solid #7f1d1d', background: '#1a0505', color: '#fca5a5',
+                cursor: busy ? 'default' : 'pointer', fontWeight: 650,
+              }}>Delete Record</button>
             </div>
           ) : (
-            <div style={{ padding: '3rem', textAlign: 'center', color: '#555' }}>
-              Select a memory to view details
-            </div>
+            <div style={{ padding: '2rem', textAlign: 'center', color: '#555', fontSize: '0.85rem' }}>Select a record</div>
           )}
         </div>
       </div>
 
-      {/* Status bar */}
-      {status && (
-        <div style={{
-          marginTop: '1rem', display: 'flex', gap: '1.5rem', padding: '0.6rem 1rem',
-          background: '#0a0a0a', borderRadius: 8, border: '1px solid #111', fontSize: '0.72rem', color: '#555',
-        }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-            <span style={{ width: 5, height: 5, borderRadius: '50%', background: status.status === 'ok' ? '#4ade80' : '#ef4444' }} />
-            {status.status === 'ok' ? 'Connected' : 'Error'}
-          </span>
-          <span>{status.total_memories} memories</span>
-          <span>Qdrant: {status.qdrant}</span>
+      <div style={{ ...card, marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+          <span style={{ color: '#777', fontSize: '0.8rem' }}>Reset</span>
+          <select value={resetScope} onChange={e => setResetScope(e.target.value)} style={{
+            background: '#0a0a0a', color: '#ddd', border: '1px solid #222', borderRadius: 6,
+            padding: '0.5rem 0.65rem', fontSize: '0.8rem', minWidth: 160,
+          }}>
+            {RESET_SCOPES.map(scope => <option key={scope} value={scope}>{scope}</option>)}
+          </select>
         </div>
-      )}
+        <button onClick={resetMemory} disabled={busy} style={{
+          padding: '0.5rem 0.85rem', borderRadius: 6, border: '1px solid #7f1d1d',
+          background: '#1a0505', color: '#fca5a5', cursor: busy ? 'default' : 'pointer', fontWeight: 650,
+        }}>Reset Scope</button>
+      </div>
 
-      {/* Toast */}
       {toast && (
         <div style={{
           position: 'fixed', bottom: '1.5rem', right: '1.5rem',
           background: '#1a1a2e', color: '#fff', padding: '0.75rem 1.5rem',
-          borderRadius: '8px', fontSize: '0.85rem', zIndex: 9999,
+          borderRadius: 8, fontSize: '0.85rem', zIndex: 9999,
           boxShadow: '0 4px 20px rgba(0,0,0,0.4)', border: '1px solid #2563eb33',
         }}>{toast}</div>
       )}

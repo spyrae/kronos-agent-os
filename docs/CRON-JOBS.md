@@ -1,4 +1,4 @@
-# Kronos II — Cron Jobs
+# Kronos Agent OS (KAOS) — Cron Jobs
 
 All 11 cron jobs are registered in `kronos/cron/setup.py` and run by the built-in async scheduler (`kronos/cron/scheduler.py`). No external dependencies (no APScheduler). Runs inside the main event loop alongside bridges and dashboard.
 
@@ -108,7 +108,7 @@ Weekly expense report:
 2. LLM analysis (DeepSeek lite): totals, by category, top 3 expenses, trend, recommendation
 3. Send HTML report to Telegram
 
-**Dependencies:** NOTION_API_KEY, Expenses DB (ID: `1c89baaf-1594-4df8-9dd9-04164d4716a0`)
+**Dependencies:** NOTION_API_KEY, user-configured expenses database
 **Notification:** Bot API → Telegram Finance topic
 
 ### 8. people-scout

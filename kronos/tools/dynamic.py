@@ -14,6 +14,7 @@ import re
 
 from langchain_core.tools import BaseTool, StructuredTool
 
+from kronos.config import settings
 from kronos.llm import ModelTier, get_model
 from kronos.workspace import ws
 
@@ -113,6 +114,12 @@ async def create_tool(name: str, description: str) -> tuple[BaseTool | None, str
 
     Returns (tool, message). Tool is None on failure.
     """
+    if not settings.enable_dynamic_tools:
+        return None, (
+            "Dynamic tool creation is disabled. "
+            "Set ENABLE_DYNAMIC_TOOLS=true in a trusted local environment."
+        )
+
     # Sanitize name
     clean_name = re.sub(r"[^a-z0-9_]", "_", name.lower().strip())
     if not clean_name:
@@ -139,6 +146,15 @@ async def create_tool(name: str, description: str) -> tuple[BaseTool | None, str
     valid, reason = validate_code(code)
     if not valid:
         return None, f"Generated code rejected: {reason}"
+
+    if settings.require_dynamic_tool_sandbox:
+        from kronos.tools.sandbox import _docker_available
+
+        if not _docker_available():
+            return None, (
+                "Docker sandbox is required before dynamic tools can be created. "
+                "Build the sandbox image or set REQUIRE_DYNAMIC_TOOL_SANDBOX=false for local development only."
+            )
 
     # Execute in restricted namespace to extract function object for registration
     namespace: dict = {}
@@ -183,11 +199,15 @@ async def create_tool(name: str, description: str) -> tuple[BaseTool | None, str
             if stderr:
                 log.warning("Sandbox stderr for %s: %s", _func_name, stderr[:200])
             return stdout or stderr or "No output"
-        else:
-            # Fallback to direct in-process execution
-            if _is_async(func):
-                return await func(*args, **kwargs)
-            return func(*args, **kwargs)
+        if settings.require_dynamic_tool_sandbox:
+            return (
+                "Blocked: Docker sandbox is required for dynamic tools. "
+                "Build the sandbox image or set REQUIRE_DYNAMIC_TOOL_SANDBOX=false for local development only."
+            )
+
+        if _is_async(func):
+            return await func(*args, **kwargs)
+        return func(*args, **kwargs)
 
     _sandboxed_wrapper.__name__ = _func_name
     _sandboxed_wrapper.__doc__ = _func_doc
@@ -208,6 +228,16 @@ async def create_tool(name: str, description: str) -> tuple[BaseTool | None, str
 
 def load_persisted_tools() -> list[BaseTool]:
     """Load previously created dynamic tools from disk."""
+    if not settings.enable_dynamic_tools:
+        return []
+
+    if settings.require_dynamic_tool_sandbox:
+        from kronos.tools.sandbox import _docker_available
+
+        if not _docker_available():
+            log.warning("Skipping persisted dynamic tools: Docker sandbox is required but unavailable")
+            return []
+
     if not TOOLS_DIR.exists():
         return []
 
@@ -256,10 +286,15 @@ def load_persisted_tools() -> list[BaseTool]:
                             if stderr:
                                 log.warning("Sandbox stderr for %s: %s", _name, stderr[:200])
                             return stdout or stderr or "No output"
-                        else:
-                            if _is_async(_func):
-                                return await _func(*args, **kwargs)
-                            return _func(*args, **kwargs)
+                        if settings.require_dynamic_tool_sandbox:
+                            return (
+                                "Blocked: Docker sandbox is required for dynamic tools. "
+                                "Build the sandbox image or set REQUIRE_DYNAMIC_TOOL_SANDBOX=false for local development only."
+                            )
+
+                        if _is_async(_func):
+                            return await _func(*args, **kwargs)
+                        return _func(*args, **kwargs)
 
                     _persisted_sandbox_wrapper.__name__ = _persisted_name
                     _persisted_sandbox_wrapper.__doc__ = _persisted_doc

@@ -19,7 +19,7 @@ log = logging.getLogger("kronos.cron.notify")
 WEBHOOK_URL = "http://127.0.0.1:{port}/webhook"
 DEFAULT_CHAT = int(os.environ.get("DEFAULT_NOTIFY_CHAT", "0"))
 
-# Bot chat topic IDs (topics inside Kronos II bot DM)
+# Bot chat topic IDs (topics inside the KAOS bot DM)
 TOPIC_GENERAL = int(os.environ.get("TOPIC_GENERAL", "0"))
 TOPIC_DIGEST = int(os.environ.get("TOPIC_DIGEST", "0"))
 
@@ -172,7 +172,7 @@ def send_bot_api(
 
 def send_ntfy(
     text: str,
-    title: str = "Kronos II",
+    title: str = "Kronos Agent OS",
     priority: str = "default",
     tags: str = "robot_face",
 ) -> bool:
@@ -201,7 +201,7 @@ def send_ntfy(
         return False
 
 
-def alert(text: str, title: str = "Kronos II Alert") -> None:
+def alert(text: str, title: str = "Kronos Agent OS Alert") -> None:
     """Send alert to both Telegram and NTFY (for critical notifications)."""
     send_webhook(text)
     send_ntfy(text, title=title, priority="urgent", tags="rotating_light,skull")

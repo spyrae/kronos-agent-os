@@ -14,7 +14,7 @@ import logging
 import os
 import urllib.request
 
-from ..state import ASOState, Opportunity
+from ..state import ASOState
 
 log = logging.getLogger("aso.nodes.notify")
 

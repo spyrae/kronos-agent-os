@@ -1,4 +1,4 @@
-"""Main Kronos II agent pipeline.
+"""Main Kronos Agent OS agent pipeline.
 
 Flow: validate → retrieve_memories → route (supervisor or direct) → store_memories → [compact]
 
@@ -12,11 +12,14 @@ Memory integration (Mem0):
 
 import asyncio
 import logging
+from collections.abc import Callable
+from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
 from kronos.config import settings
+from kronos.audit import log_tool_event, reset_tool_audit_context, set_tool_audit_context
 from kronos.engine import react_loop
 from kronos.llm import get_model
 from kronos.memory.context_engine import get_context_engine
@@ -50,6 +53,7 @@ class KronosAgent:
         enable_memory: bool = True,
         enable_supervisor: bool = True,
         session_store: SessionStore | None = None,
+        tool_event_callback: Callable[[str, dict[str, Any]], None] | None = None,
     ):
         self._tools: list[BaseTool] = list(tools or [])
         self._enable_memory = enable_memory
@@ -57,10 +61,15 @@ class KronosAgent:
         self._supervisor = None
         self._system_prompt: str | None = None
         self._session_store = session_store
+        self._external_tool_event_callback = tool_event_callback
 
         self._init_tools()
         self._init_memory(enable_memory)
         self._init_supervisor(enable_supervisor)
+
+    @property
+    def tool_count(self) -> int:
+        return len(self._tools)
 
     def _init_tools(self) -> None:
         """Initialize skill tools, browser tools, gateway tools, etc."""
@@ -79,18 +88,22 @@ class KronosAgent:
             self._tools.extend(browser_tools)
             log.info("Browser tools added: %d", len(browser_tools))
 
-        # MCP gateway management tools
+        # MCP gateway tools. Mutating runtime server management is opt-in.
         from kronos.tools.gateway_tools import get_gateway_tools
         self._tools.extend(get_gateway_tools())
 
-        # Dynamic tools
-        from kronos.tools.dynamic import load_persisted_tools
-        from kronos.tools.dynamic_tools import get_dynamic_management_tools
-        self._tools.extend(get_dynamic_management_tools())
-        persisted = load_persisted_tools()
-        if persisted:
-            self._tools.extend(persisted)
-            log.info("Dynamic tools: %d persisted", len(persisted))
+        # Dynamic tools are powerful but risky; keep disabled in public-safe
+        # defaults unless a trusted local deployment explicitly enables them.
+        if settings.enable_dynamic_tools:
+            from kronos.tools.dynamic import load_persisted_tools
+            from kronos.tools.dynamic_tools import get_dynamic_management_tools
+            self._tools.extend(get_dynamic_management_tools())
+            persisted = load_persisted_tools()
+            if persisted:
+                self._tools.extend(persisted)
+                log.info("Dynamic tools: %d persisted", len(persisted))
+        else:
+            log.info("Dynamic tools disabled (ENABLE_DYNAMIC_TOOLS=false)")
 
         # Session search tool
         from kronos.tools.session_search import session_search
@@ -116,9 +129,15 @@ class KronosAgent:
         """Build supervisor if tools are available."""
         if enable and self._tools:
             from kronos.agents.supervisor import build_supervisor
-            self._supervisor = build_supervisor(self._tools)
+            self._supervisor = build_supervisor(self._tools, on_tool_event=self._emit_tool_event)
             if self._supervisor:
                 log.info("Multi-agent supervisor enabled")
+
+    def _emit_tool_event(self, event: str, payload: dict[str, Any]) -> None:
+        """Persist tool events and fan out to optional runtime callbacks."""
+        log_tool_event(event, payload)
+        if self._external_tool_event_callback:
+            self._external_tool_event_callback(event, payload)
 
     def _get_system_prompt(self) -> str:
         """Build system prompt (cached)."""
@@ -219,20 +238,31 @@ class KronosAgent:
                 log.warning("Memory retrieval failed (non-fatal): %s", e)
 
         # Step 3: Route — supervisor or direct LLM
-        if self._supervisor:
-            result = await self._supervisor(working_history)
-            response_text = result.content
-        else:
-            # Direct LLM call with tools (single-agent mode)
-            tier = classify_tier(message)
-            model = get_model(tier)
-            result = await react_loop(
-                model=model,
-                messages=working_history,
-                tools=self._tools,
-                system_prompt=self._get_system_prompt(),
-            )
-            response_text = result.content
+        audit_token = set_tool_audit_context(
+            agent=settings.agent_name,
+            thread_id=thread_id,
+            user_id=user_id,
+            session_id=session_id,
+            source_kind=source_kind,
+        )
+        try:
+            if self._supervisor:
+                result = await self._supervisor(working_history)
+                response_text = result.content
+            else:
+                # Direct LLM call with tools (single-agent mode)
+                tier = classify_tier(message)
+                model = get_model(tier)
+                result = await react_loop(
+                    model=model,
+                    messages=working_history,
+                    tools=self._tools,
+                    system_prompt=self._get_system_prompt(),
+                    on_tool_event=self._emit_tool_event,
+                )
+                response_text = result.content
+        finally:
+            reset_tool_audit_context(audit_token)
 
         if not is_ephemeral:
             persisted_history.append(AIMessage(content=response_text))

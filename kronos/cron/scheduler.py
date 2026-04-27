@@ -13,10 +13,26 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
+from kronos.config import settings
+
 log = logging.getLogger("kronos.cron.scheduler")
 
 # Persistence file for last_run timestamps (survives restarts)
 _STATE_FILE = Path(__file__).resolve().parents[2] / "data" / "cron_state.json"
+
+
+def _history_file() -> Path:
+    return Path(settings.db_path).parent / "logs" / "cron_runs.jsonl"
+
+
+def _append_run_history(entry: dict) -> None:
+    try:
+        path = _history_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+    except Exception as e:
+        log.debug("Failed to write cron run history: %s", e)
 
 # UTC+8 timezone for scheduling
 UTC8 = timezone(timedelta(hours=8))
@@ -124,6 +140,9 @@ class Scheduler:
         job.last_run = time.time()
         log.info("[cron] Starting: %s", job.name)
         start = time.monotonic()
+        started_at = datetime.now(UTC).isoformat()
+        status = "ok"
+        error = ""
 
         try:
             await job.func()
@@ -131,9 +150,20 @@ class Scheduler:
             log.info("[cron] Completed: %s (%.1fs)", job.name, duration)
         except Exception as e:
             duration = time.monotonic() - start
+            status = "error"
+            error = str(e)
             log.error("[cron] Failed: %s (%.1fs): %s", job.name, duration, e)
         finally:
             job._running = False
+            _append_run_history({
+                "ts": started_at,
+                "job": job.name,
+                "status": status,
+                "duration_ms": round(duration * 1000),
+                "error": error,
+                "enabled": job.enabled,
+                "agent": settings.agent_name,
+            })
             self._save_state()
 
     async def run(self) -> None:

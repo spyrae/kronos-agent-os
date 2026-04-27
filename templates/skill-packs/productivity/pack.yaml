@@ -1,0 +1,8 @@
+name: Productivity Pack
+description: Task planning, meeting briefs, and follow-up workflows.
+capabilities:
+  - local notes
+skills:
+  - task-breakdown
+examples:
+  - Convert a messy request into a prioritized checklist.

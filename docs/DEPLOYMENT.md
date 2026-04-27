@@ -1,189 +1,189 @@
-# Kronos II — Deployment
+# Kronos Agent OS (KAOS) Deployment
 
-## VPS
+KAOS is local-first. Start with CLI/demo mode, then add Telegram, dashboard, MCP, cron jobs, and optional swarm processes as needed.
 
-| Parameter | Value |
-|-----------|-------|
-| Host | `user@your-server-ip` |
-| Path | `/opt/kronos-ii/` |
-| Service | `kronos-ii.service` (systemd) |
-| Python | 3.11+ |
-| Ports | 8788 (webhook), 3000 (dashboard) |
-
-## Deploy Process
-
-Local development → scp → restart:
+## Local Runtime
 
 ```bash
-# 1. From local machine
-scp -r kronos/ user@your-server-ip:/opt/kronos-ii/kronos/
-scp pyproject.toml user@your-server-ip:/opt/kronos-ii/
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev,memory]"
 
-# 2. On server
-ssh user@your-server-ip
-cd /opt/kronos-ii
-pip install -e ".[dev]"
-sudo systemctl restart kronos-ii
-
-# 3. Check status
-sudo systemctl status kronos-ii
-journalctl -u kronos-ii -f
+kaos demo
+cp .env.example .env
+kaos doctor
+kaos chat
+kaos dashboard
 ```
 
-## Systemd Service
+Telegram/userbot mode:
+
+```bash
+python scripts/auth-userbot.py
+python -m kronos
+```
+
+Optional ASO automation dependencies:
+
+```bash
+pip install -e ".[aso]"
+```
+
+Dashboard UI development requires Node.js 18.18+:
+
+```bash
+nvm use
+cd dashboard-ui
+npm install
+npm run dev
+```
+
+## Docker Compose
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+The compose file binds exposed ports to `127.0.0.1` on the host. Inside the container, `DASHBOARD_HOST=0.0.0.0` is safe because the host port mapping remains localhost-only.
+
+The default Compose command starts `kaos dashboard`, not the Telegram bridge. This keeps the Docker quickstart usable without Telegram credentials. After provider and Telegram credentials are configured, run the full runtime with `python -m kronos` or override the Compose command.
+
+## Environment
+
+At least one LLM provider is required for chat/runtime use:
+
+```bash
+FIREWORKS_API_KEY=fw_...
+DEEPSEEK_API_KEY=sk-...
+```
+
+Telegram:
+
+```bash
+TG_API_ID=12345678
+TG_API_HASH=abcdef...
+TG_BOT_TOKEN=
+ALLOWED_USERS=123456789
+ALLOW_ALL_USERS=false
+```
+
+Dashboard:
+
+```bash
+DASHBOARD_HOST=127.0.0.1
+DASHBOARD_PORT=8789
+DASHBOARD_USERNAME=admin
+DASHBOARD_PASSWORD=
+```
+
+If `DASHBOARD_PASSWORD` is empty, KAOS generates a temporary password at startup and logs it locally.
+
+Capability gates:
+
+```bash
+ENABLE_DYNAMIC_TOOLS=false
+REQUIRE_DYNAMIC_TOOL_SANDBOX=true
+ENABLE_MCP_GATEWAY_MANAGEMENT=false
+ENABLE_DYNAMIC_MCP_SERVERS=false
+ENABLE_SERVER_OPS=false
+```
+
+Enable these only in trusted deployments.
+
+## Systemd
+
+Example single-agent unit:
 
 ```ini
 [Unit]
-Description=Kronos II AI Agent
+Description=Kronos Agent OS
 After=network.target
 
 [Service]
 Type=simple
-User=kronos
-WorkingDirectory=/opt/kronos-ii
-ExecStart=/usr/bin/python -m kronos
+User=kaos
+WorkingDirectory=/opt/kaos/app
+ExecStart=/opt/kaos/app/.venv/bin/python -m kronos
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/opt/kaos/app/.env
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-## .env Configuration
-
-Required environment variables (in `/opt/kronos-ii/.env`):
-
-### LLM Providers (at least one required)
-```bash
-ANTHROPIC_API_KEY=sk-ant-...        # Claude Sonnet 4 (standard tier)
-DEEPSEEK_API_KEY=sk-...             # DeepSeek V3 (lite tier + memory extraction)
-GOOGLE_API_KEY=AIza...              # Gemini 2.0 Flash (fallback)
-```
-
-### Telegram (required)
-```bash
-TG_API_ID=12345678                  # Telethon app ID
-TG_API_HASH=abcdef...              # Telethon app hash
-TG_BOT_TOKEN=123:ABC...            # Bot API token (optional — enables bot mode)
-ALLOWED_USER_IDS=                  # Comma-separated user IDs (empty = allow all)
-```
-
-### Discord (optional)
-```bash
-DISCORD_BOT_TOKEN=...              # Discord bot token
-DISCORD_ALLOWED_GUILDS=123,456     # Comma-separated guild IDs
-```
-
-### Webhook
-```bash
-WEBHOOK_SECRET=random-secret-here   # Authenticates webhook requests
-WEBHOOK_PORT=8788                   # Default: 8788
-```
-
-### Memory
-```bash
-MEM0_QDRANT_PATH=data/qdrant_data  # Qdrant local storage path
-CONTEXT_STRATEGY=summarize          # summarize | sliding_window | hybrid
-```
-
-### MCP Tool Servers
-```bash
-BRAVE_API_KEY=...                   # Brave Search
-EXA_API_KEY=...                     # Exa deep search
-NOTION_API_KEY=ntn_...              # Notion integration
-GOOGLE_OAUTH_CLIENT_ID=...          # Google Workspace (Gmail, Calendar)
-GOOGLE_OAUTH_CLIENT_SECRET=...
-```
-
-### Voice
-```bash
-GROQ_API_KEY=gsk_...               # Groq Whisper STT
-```
-
-### Cron Topics
-```bash
-DEFAULT_NOTIFY_CHAT=               # Default chat for cron notifications
-NEWS_TOPIC_ID=                     # Telegram topic for news digest
-DIGEST_TOPIC_ID=                   # Telegram topic for group digest
-SCOUT_TOPIC_ID=                    # Telegram topic for people scout
-FINANCE_TOPIC_ID=0                 # Telegram topic for finance reports
-```
-
-### Database
-```bash
-DB_PATH=data/kronos.db             # SQLite checkpointer path
-```
-
-### Observability
-```bash
-LANGFUSE_PUBLIC_KEY=...            # Langfuse tracing (optional)
-LANGFUSE_SECRET_KEY=...
-LANGFUSE_HOST=...
-```
-
-## MCP Servers
-
-11 static MCP servers configured in `kronos/tools/mcp_servers.py`. Each requires specific env vars:
-
-| Server | Required Env | Binary |
-|--------|-------------|--------|
-| brave-search | `BRAVE_API_KEY` | npx @brave/brave-search-mcp-server |
-| exa | `EXA_API_KEY` | npx exa-mcp-server |
-| fetch | — | uvx mcp-server-fetch |
-| content-core | — | uvx content-core-mcp |
-| reddit | — | npx reddit-mcp-buddy |
-| notion | `NOTION_API_KEY` | npx @notionhq/notion-mcp-server |
-| google-workspace | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` | uvx workspace-mcp |
-| youtube | — | npx @kimtaeyoon83/mcp-server-youtube-transcript |
-| markitdown | — | uvx markitdown-mcp |
-| yahoo-finance | — | uvx mcp-yahoo-finance |
-| filesystem | — | npx @modelcontextprotocol/server-filesystem |
-
-**Dependencies:** `npx` (Node.js) and `uvx` (uv) must be installed on the server.
-
-## Data Directory
-
-```
-/opt/kronos-ii/
-├── kronos/                ← Source code
-├── workspace/             ← Persona, skills, dynamic tools
-├── data/                  ← Runtime data (gitignored)
-│   ├── kronos.db
-│   ├── memory_fts.db
-│   ├── knowledge_graph.db
-│   ├── mcp_registry.db
-│   ├── qdrant_data/
-│   └── logs/
-│       └── audit.jsonl
-├── .env                   ← Secrets (gitignored)
-├── pyproject.toml
-└── kronos-ii.session      ← Telethon session file
-```
-
-## Health Check
+Install/update:
 
 ```bash
-# Service status
-sudo systemctl status kronos-ii
-
-# Logs (follow)
-journalctl -u kronos-ii -f
-
-# Health endpoint
-curl http://localhost:8788/health
-# {"status": "ok", "agent": "kronos-ii"}
-
-# Webhook test
-curl -X POST http://localhost:8788/webhook \
-  -H "Content-Type: application/json" \
-  -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
-  -d '{"text": "Test message"}'
+cd /opt/kaos/app
+python3 -m venv .venv
+.venv/bin/pip install -e ".[memory]"
+sudo systemctl restart kaos
 ```
 
-## Workspace Backup
+## Multi-Agent / Swarm Mode
 
-Automated backup via cron (every 6 hours):
-- rsync workspace → backup directory
-- git commit + push to backup repo
-- NTFY notification on success/failure
+Each agent should run as a separate process with its own:
+
+- `AGENT_NAME`
+- Telegram session file
+- Telegram credentials/account where applicable
+- `WEBHOOK_PORT` if using webhook notifications
+- workspace at `workspaces/<agent>/`
+
+The shared swarm ledger is configured by:
+
+```bash
+SWARM_DB_PATH=./data/swarm.db
+```
+
+For systemd-managed sub-agents, copy the template unit and create one private
+env file per agent:
+
+```bash
+sudo cp systemd/kaos@.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now kaos@kaos-worker
+```
+
+## Server Ops
+
+Server operations are disabled by default. To enable:
+
+```bash
+ENABLE_SERVER_OPS=true
+SERVER_REGISTRY_PATH=/opt/kaos/servers.yaml
+```
+
+Use `servers.example.yaml` as the template. Keep `servers.yaml` private and gitignored.
+
+## Health Checks
+
+```bash
+kaos doctor
+curl http://127.0.0.1:8788/health
+curl http://127.0.0.1:8789/api/health
+```
+
+## Data Layout
+
+```text
+/opt/kaos/
+├── kronos/
+├── dashboard/
+├── dashboard-ui/
+├── workspaces/              # local runtime state
+│   └── _template/           # public starter template
+├── data/
+│   ├── <agent>/session.db
+│   ├── <agent>/memory_fts.db
+│   ├── <agent>/knowledge_graph.db
+│   └── swarm.db
+├── .env
+├── agents.yaml
+└── servers.yaml
+```
+
+`data/`, `.env`, `agents.yaml`, `servers.yaml`, `*.session`, and live `workspaces/<agent>/` files should not be committed.

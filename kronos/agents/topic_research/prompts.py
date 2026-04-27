@@ -1,6 +1,6 @@
 """System prompts for Topic Research Agent nodes."""
 
-DISCOVER_PROMPT = """Ты — Topic Researcher для блога futurecraft.pro (AI, DevTools, Automation).
+DISCOVER_PROMPT = """Ты — Topic Researcher для блога в нише AI, DevTools и Automation.
 
 Домен: {domain}
 Seed keywords: {seed_keywords}
@@ -20,7 +20,7 @@ Seed keywords: {seed_keywords}
 
 Правила:
 - Только темы с реальным поисковым спросом (есть в результатах)
-- Фокус на темы, где futurecraft.pro может дать уникальную экспертизу
+- Фокус на темы, где проект может дать уникальную экспертизу
 - Не предлагай банальные темы ("What is AI", "Introduction to...")
 - Приоритет: практические how-to, сравнения, data-driven анализы
 
@@ -90,7 +90,7 @@ Medium priority: {medium_count}
 Топ темы:
 {top_topics}
 
-Сформируй краткий отчёт для Романа:
+Сформируй краткий отчёт для пользователя:
 1. Сводка: сколько тем, по каким категориям
 2. Топ-5 тем с обоснованием (почему они лучшие)
 3. Quick wins — темы которые можно написать быстро

@@ -1,11 +1,11 @@
 [Unit]
-Description=Kronos II Health Check
-After=kronos-ii.service
+Description=Kronos Agent OS Health Check
+After=kaos.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/kronos-ii/app/scripts/health-check.sh --alert
-EnvironmentFile=/opt/kronos-ii/app/.env
+ExecStart=/opt/kaos/app/scripts/health-check.sh --alert
+EnvironmentFile=/opt/kaos/app/.env
 
 StandardOutput=journal+console
 StandardError=journal+console

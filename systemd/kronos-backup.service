@@ -1,11 +1,11 @@
 [Unit]
-Description=Kronos II Workspace Backup
-After=kronos-ii.service
+Description=Kronos Agent OS Workspace Backup
+After=kaos.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/kronos-ii/app/scripts/workspace-backup.sh
-EnvironmentFile=/opt/kronos-ii/app/.env
+ExecStart=/opt/kaos/app/scripts/workspace-backup.sh
+EnvironmentFile=/opt/kaos/app/.env
 
 StandardOutput=journal+console
 StandardError=journal+console

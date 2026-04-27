@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
@@ -20,12 +21,44 @@ def _find_tool(tools: list[BaseTool], name_prefix: str) -> BaseTool | None:
     return None
 
 
-async def discover_topics(state: TopicResearchState, tools: list[BaseTool]) -> dict:
+async def _audited_tool_call(tool: BaseTool, args: dict, on_tool_event=None):
+    call_id = f"manual_{tool.name}_{time.time_ns()}"
+    if on_tool_event:
+        on_tool_event("tool_call", {
+            "name": tool.name,
+            "call_id": call_id,
+            "args": args,
+        })
+    started = time.perf_counter()
+    try:
+        result = await tool.ainvoke(args)
+        if on_tool_event:
+            on_tool_event("tool_result", {
+                "name": tool.name,
+                "call_id": call_id,
+                "ok": True,
+                "content": result,
+                "duration_ms": round((time.perf_counter() - started) * 1000),
+            })
+        return result
+    except Exception as e:
+        if on_tool_event:
+            on_tool_event("tool_result", {
+                "name": tool.name,
+                "call_id": call_id,
+                "ok": False,
+                "content": f"[ERROR] {e}",
+                "duration_ms": round((time.perf_counter() - started) * 1000),
+            })
+        raise
+
+
+async def discover_topics(state: TopicResearchState, tools: list[BaseTool], on_tool_event=None) -> dict:
     """Search multiple sources and extract raw topic ideas."""
     domain = state.get("domain", "")
     seeds = state.get("seed_keywords", [])
     audience = state.get("target_audience", "developers and tech leaders")
-    blog_context = state.get("blog_context", "futurecraft.pro — AI, DevTools, Automation blog")
+    blog_context = state.get("blog_context", "AI, DevTools, Automation blog")
 
     brave = _find_tool(tools, "brave")
     exa = _find_tool(tools, "exa")
@@ -42,7 +75,7 @@ async def discover_topics(state: TopicResearchState, tools: list[BaseTool]) -> d
         for q in queries:
             try:
                 if brave:
-                    result = await brave.ainvoke({"query": q, "count": 5})
+                    result = await _audited_tool_call(brave, {"query": q, "count": 5}, on_tool_event)
                     all_results.append(f"[Brave: {q}]\n{result}")
             except Exception as e:
                 log.debug("Brave search failed for '%s': %s", q, e)
@@ -50,11 +83,11 @@ async def discover_topics(state: TopicResearchState, tools: list[BaseTool]) -> d
         # Exa semantic search
         if exa:
             try:
-                result = await exa.ainvoke({
+                result = await _audited_tool_call(exa, {
                     "query": f"{keyword} insights analysis",
                     "numResults": 5,
                     "type": "auto",
-                })
+                }, on_tool_event)
                 all_results.append(f"[Exa: {keyword}]\n{result}")
             except Exception as e:
                 log.debug("Exa search failed for '%s': %s", keyword, e)

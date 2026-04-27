@@ -10,7 +10,7 @@ Uses the Edits API flow:
 
 Environment:
     PLAY_SERVICE_ACCOUNT_JSON   Path to Google Cloud service account JSON
-    PLAY_PACKAGE_NAME           Package name (default: co.journeybay.app)
+    PLAY_PACKAGE_NAME           Package name (default: com.example.app)
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import httpx
 log = logging.getLogger("aso.tools.play_store")
 
 PLAY_BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/applications"
-DEFAULT_PACKAGE = os.environ.get("PLAY_PACKAGE_NAME", "co.journeybay.app")
+DEFAULT_PACKAGE = os.environ.get("PLAY_PACKAGE_NAME", "com.example.app")
 
 
 # --- Auth via Service Account ---

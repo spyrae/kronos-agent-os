@@ -7,7 +7,7 @@ An external cron job or manual trigger resumes the graph.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from langgraph.types import interrupt
 
@@ -27,7 +27,7 @@ def wait(state: ASOState) -> dict:
     days = plan.get("measurement_period_days", 14)
     changes = state.get("changes_applied", {})
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     resume_at = now + timedelta(days=days)
 
     log.info(
@@ -60,5 +60,5 @@ def wait(state: ASOState) -> dict:
     return {
         "phase": "measuring",
         "wait_started": now.isoformat(),
-        "wait_ended": datetime.now(timezone.utc).isoformat(),
+        "wait_ended": datetime.now(UTC).isoformat(),
     }

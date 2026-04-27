@@ -1,0 +1,10 @@
+prune .venv
+prune build
+prune data
+prune dashboard-ui/dist
+prune dashboard-ui/node_modules
+prune workspaces
+
+global-exclude .DS_Store
+global-exclude __pycache__
+global-exclude *.py[cod]

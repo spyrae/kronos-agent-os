@@ -1,0 +1,29 @@
+[Unit]
+Description=Kronos Agent OS agent %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kronos
+WorkingDirectory=/opt/kaos/app
+ExecStart=/opt/kaos/app/.venv/bin/python -m kronos
+Restart=on-failure
+RestartSec=10
+
+Environment=AGENT_NAME=%i
+EnvironmentFile=/opt/kaos/app/.env.%i
+
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+LimitNOFILE=65536
+MemoryMax=2G
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kaos-%i
+
+[Install]
+WantedBy=multi-user.target

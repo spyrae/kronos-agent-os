@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest an improvement to KAOS
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should KAOS do?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Runtime
+        - Memory
+        - Skills
+        - MCP / tools
+        - Automations
+        - Dashboard
+        - Swarm / sub-agents
+        - CLI / quickstart
+        - Docs
+        - Security
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety considerations
+      description: Does this touch shell, filesystem, network, dynamic tools, MCP management, server ops, or private data?

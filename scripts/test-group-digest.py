@@ -2,7 +2,7 @@
 """Test run of group digest cron job.
 
 Usage:
-    cd /opt/kronos-ii/app && .venv/bin/python scripts/test-group-digest.py
+    cd /opt/kaos/app && .venv/bin/python scripts/test-group-digest.py
 """
 
 import asyncio

@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     tg_api_hash: str = ""
     tg_bot_token: str = ""  # Bot API token (alternative to userbot)
     allowed_users: str = ""  # comma-separated user IDs
+    allow_all_users: bool = False  # if false, empty ALLOWED_USERS blocks DMs
     webhook_secret: str = ""
 
     # Voice STT
@@ -32,6 +33,15 @@ class Settings(BaseSettings):
     notion_api_key: str = ""
     exa_api_key: str = ""
     composio_api_key: str = ""
+
+    # Capability gates — public-safe defaults.
+    # Risky runtime mutation and infrastructure actions are opt-in for trusted
+    # local deployments. Demo/fresh-clone mode should stay read-mostly.
+    enable_dynamic_tools: bool = False
+    require_dynamic_tool_sandbox: bool = True
+    enable_mcp_gateway_management: bool = False
+    enable_dynamic_mcp_servers: bool = False
+    enable_server_ops: bool = False
 
     # Memory — per-agent isolation (resolved in model_post_init from agent_name
     # when left empty). Explicit env overrides still win.
@@ -131,9 +141,43 @@ class Settings(BaseSettings):
 
     @property
     def allowed_user_ids(self) -> set[int]:
+        return {int(uid) for uid in self._allowed_user_tokens()[0]}
+
+    @property
+    def invalid_allowed_user_tokens(self) -> tuple[str, ...]:
+        return self._allowed_user_tokens()[1]
+
+    def _allowed_user_tokens(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
         if not self.allowed_users:
-            return set()
-        return {int(uid.strip()) for uid in self.allowed_users.split(",") if uid.strip()}
+            return (), ()
+
+        valid: list[str] = []
+        invalid: list[str] = []
+        for raw_uid in self.allowed_users.split(","):
+            uid = raw_uid.strip()
+            if not uid or uid.startswith("#"):
+                continue
+            if uid.isdecimal():
+                valid.append(uid)
+            else:
+                invalid.append(uid)
+        return tuple(valid), tuple(invalid)
+
+    @property
+    def telegram_access_description(self) -> str:
+        allowed_count = len(self.allowed_user_ids)
+        if allowed_count:
+            suffix = "user" if allowed_count == 1 else "users"
+            return f"configured ({allowed_count} {suffix})"
+        if self.allow_all_users:
+            return "ALL (ALLOW_ALL_USERS=true)"
+        return "NONE (set ALLOWED_USERS or ALLOW_ALL_USERS=true)"
+
+    def is_telegram_user_allowed(self, user_id: int) -> bool:
+        allowed = self.allowed_user_ids
+        if allowed:
+            return user_id in allowed
+        return self.allow_all_users
 
 
 settings = Settings()

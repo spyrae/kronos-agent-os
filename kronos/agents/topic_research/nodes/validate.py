@@ -6,7 +6,7 @@ import logging
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 
-from kronos.agents.topic_research.nodes.discover import _find_tool
+from kronos.agents.topic_research.nodes.discover import _audited_tool_call, _find_tool
 from kronos.agents.topic_research.prompts import VALIDATE_PROMPT
 from kronos.agents.topic_research.state import TopicResearchState
 from kronos.llm import ModelTier, get_model
@@ -14,7 +14,7 @@ from kronos.llm import ModelTier, get_model
 log = logging.getLogger("kronos.agents.topic_research.validate")
 
 
-async def validate_topics(state: TopicResearchState, tools: list[BaseTool]) -> dict:
+async def validate_topics(state: TopicResearchState, tools: list[BaseTool], on_tool_event=None) -> dict:
     """Validate each topic against real SERP data."""
     raw_topics = state.get("raw_topics", [])
     brave = _find_tool(tools, "brave")
@@ -33,7 +33,7 @@ async def validate_topics(state: TopicResearchState, tools: list[BaseTool]) -> d
         serp_results = ""
         if brave:
             try:
-                result = await brave.ainvoke({"query": keyword, "count": 5})
+                result = await _audited_tool_call(brave, {"query": keyword, "count": 5}, on_tool_event)
                 serp_results = str(result)[:2000]
             except Exception as e:
                 log.debug("SERP check failed for '%s': %s", keyword, e)

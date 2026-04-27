@@ -31,7 +31,7 @@ def _fetch_url(url: str, timeout: int = 15) -> str:
         urllib.error.URLError: On network errors.
         urllib.error.HTTPError: On non-2xx HTTP responses.
     """
-    req = urllib.request.Request(url, headers={"User-Agent": "kronos-ii/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "kaos/1.0"})
     resp = urllib.request.urlopen(req, timeout=timeout)
     return resp.read().decode("utf-8")
 

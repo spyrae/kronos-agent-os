@@ -14,6 +14,7 @@ No LangGraph — uses LLM tool-calling for routing decisions.
 
 import logging
 from collections.abc import Callable
+from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool, StructuredTool
@@ -23,7 +24,6 @@ from kronos.agents.competitor_monitor import create_competitor_monitor_agent
 from kronos.agents.deep_research.graph import create_deep_research_agent
 from kronos.agents.finance import create_finance_agent
 from kronos.agents.research import create_research_agent
-from kronos.agents.server_ops import create_server_ops_agent
 from kronos.agents.task import create_task_agent
 from kronos.agents.telegram_channels import create_telegram_channels_agent
 from kronos.agents.topic_research.graph import create_topic_research_agent
@@ -103,7 +103,10 @@ def _make_delegation_tool(agent_name: str, description: str, agent_fn: Callable)
     )
 
 
-def build_supervisor(tools: list[BaseTool]):
+def build_supervisor(
+    tools: list[BaseTool],
+    on_tool_event: Callable[[str, dict[str, Any]], None] | None = None,
+):
     """Build supervisor as an async callable.
 
     Creates delegation tools for each sub-agent, then uses react_loop
@@ -118,7 +121,7 @@ def build_supervisor(tools: list[BaseTool]):
 
     # Deep Research — multi-step pipeline
     try:
-        deep_research = create_deep_research_agent(tools)
+        deep_research = create_deep_research_agent(tools, on_tool_event=on_tool_event)
         delegation_tools.append(_make_delegation_tool(
             "deep_research",
             'Глубокое исследование (multi-step: plan → search → evaluate → synthesize). '
@@ -135,7 +138,7 @@ def build_supervisor(tools: list[BaseTool]):
 
     # Topic Research — blog topic discovery pipeline
     try:
-        topic_research = create_topic_research_agent(tools)
+        topic_research = create_topic_research_agent(tools, on_tool_event=on_tool_event)
         delegation_tools.append(_make_delegation_tool(
             "topic_research",
             'Поиск и валидация тем для блога. '
@@ -151,7 +154,7 @@ def build_supervisor(tools: list[BaseTool]):
         log.warning("Topic Research agent failed to create: %s", e)
 
     # Research — quick web search
-    research = create_research_agent(tools)
+    research = create_research_agent(tools, on_tool_event=on_tool_event)
     if research:
         delegation_tools.append(_make_delegation_tool(
             "research",
@@ -162,7 +165,7 @@ def build_supervisor(tools: list[BaseTool]):
         log.info("Research agent created")
 
     # Task — productivity (ONLY way to write to Notion)
-    task = create_task_agent(tools)
+    task = create_task_agent(tools, on_tool_event=on_tool_event)
     if task:
         delegation_tools.append(_make_delegation_tool(
             "task",
@@ -178,7 +181,7 @@ def build_supervisor(tools: list[BaseTool]):
         log.info("Task agent created")
 
     # Finance — market data
-    finance = create_finance_agent(tools)
+    finance = create_finance_agent(tools, on_tool_event=on_tool_event)
     if finance:
         delegation_tools.append(_make_delegation_tool(
             "finance",
@@ -240,19 +243,28 @@ def build_supervisor(tools: list[BaseTool]):
 
     # Server Ops — SSH-based server diagnostics and management
     try:
-        server_ops = create_server_ops_agent()
-        delegation_tools.append(_make_delegation_tool(
-            "server_ops",
-            'Диагностика и управление серверами через SSH: логи, статус сервисов, ошибки, '
-            'рестарт, диск, swarm.db. Для "серверы", "логи", "рестартни", "ошибки на сервере", '
-            '"что упало", "диск забит", "swarm.db"',
-            server_ops,
-        ))
-        descriptions.append(
-            '- **delegate_to_server_ops**: SSH-диагностика серверов '
-            '(логи, статус, ошибки, рестарт сервисов, диск, swarm.db)'
-        )
-        log.info("Server Ops agent created")
+        if settings.enable_server_ops:
+            from kronos.agents.server_ops import create_server_ops_agent
+
+            server_ops = create_server_ops_agent(on_tool_event=on_tool_event)
+        else:
+            server_ops = None
+
+        if server_ops is not None:
+            delegation_tools.append(_make_delegation_tool(
+                "server_ops",
+                'Диагностика и управление серверами через SSH: логи, статус сервисов, ошибки, '
+                'рестарт, диск, swarm.db. Для "серверы", "логи", "рестартни", "ошибки на сервере", '
+                '"что упало", "диск забит", "swarm.db"',
+                server_ops,
+            ))
+            descriptions.append(
+                '- **delegate_to_server_ops**: SSH-диагностика серверов '
+                '(логи, статус, ошибки, рестарт сервисов, диск, swarm.db)'
+            )
+            log.info("Server Ops agent created")
+        else:
+            log.info("Server Ops agent disabled (ENABLE_SERVER_OPS=false)")
     except Exception as e:
         log.warning("Server Ops agent failed to create: %s", e)
 
@@ -301,6 +313,7 @@ def build_supervisor(tools: list[BaseTool]):
             tools=all_tools,
             system_prompt=prompt,
             max_turns=10,  # supervisor shouldn't need many turns
+            on_tool_event=on_tool_event,
         )
 
     run.__name__ = "supervisor"

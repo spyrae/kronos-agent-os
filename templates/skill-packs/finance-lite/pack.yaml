@@ -1,0 +1,8 @@
+name: Finance Lite Pack
+description: Lightweight personal finance summaries without trading automation.
+capabilities:
+  - local notes
+skills:
+  - finance-summary
+examples:
+  - Summarize expenses or portfolio notes without giving personalized trading instructions.

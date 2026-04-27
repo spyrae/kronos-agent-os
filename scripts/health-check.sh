@@ -1,6 +1,6 @@
 #!/bin/bash
-# health-check.sh — Composite health check for Kronos II stack
-# Checks: kronos-ii systemd service, bridge health (port 8788), dashboard health (port 8789), disk, memory
+# health-check.sh — Composite health check for Kronos Agent OS stack
+# Checks: kaos systemd service, bridge health (port 8788), dashboard health (port 8789), disk, memory
 #
 # Usage: health-check.sh [--verbose] [--alert]
 # Exit codes: 0 = all healthy, 1 = one or more components unhealthy
@@ -16,9 +16,9 @@ WEBHOOK_URL="${REMINDER_WEBHOOK_URL:-http://127.0.0.1:8788/webhook}"
 WEBHOOK_SECRET="${WEBHOOK_SECRET:-}"
 
 # NTFY config (loaded from .env if available)
-if [ -f /opt/kronos-ii/app/.env ]; then
+if [ -f /opt/kaos/app/.env ]; then
   # shellcheck disable=SC1091
-  source /opt/kronos-ii/app/.env 2>/dev/null || true
+  source /opt/kaos/app/.env 2>/dev/null || true
 fi
 NTFY_URL="${NTFY_URL:-${NTFY_URL:-https://ntfy.sh}}"
 NTFY_TOKEN="${NTFY_TOKEN:-}"
@@ -54,12 +54,12 @@ check_warn() {
   warnings+=("$1")
 }
 
-# --- Check 1: kronos-ii systemd service ---
-service_active=$(systemctl is-active kronos-ii 2>/dev/null)
+# --- Check 1: kaos systemd service ---
+service_active=$(systemctl is-active kaos 2>/dev/null)
 if [ "$service_active" = "active" ]; then
-  check_pass "kronos-ii service active"
+  check_pass "kaos service active"
 else
-  check_fail "kronos-ii service: ${service_active:-unknown}"
+  check_fail "kaos service: ${service_active:-unknown}"
 fi
 
 # --- Check 2: Bridge health endpoint (port 8788) ---
@@ -132,7 +132,7 @@ fi
 # --- Alert if requested ---
 if [ "$failed" -gt 0 ]; then
   if [ "$ALERT" = "--alert" ] || [ "$VERBOSE" = "--alert" ]; then
-    alert_text=$(printf '🚨 Kronos II Health Alert\n\nFailed checks (%d/%d):\n' "$failed" "$total_checks")
+    alert_text=$(printf '🚨 Kronos Agent OS Health Alert\n\nFailed checks (%d/%d):\n' "$failed" "$total_checks")
     for err in "${errors[@]}"; do
       alert_text+="- $err"$'\n'
     done
@@ -149,7 +149,7 @@ if [ "$failed" -gt 0 ]; then
     # Send to NTFY (phone push notification)
     if [ -n "$NTFY_TOKEN" ]; then
       curl -s -d "$alert_text" \
-        -H "Title: Kronos II Health Alert" \
+        -H "Title: Kronos Agent OS Health Alert" \
         -H "Priority: urgent" \
         -H "Tags: rotating_light,skull" \
         -H "Authorization: Bearer $NTFY_TOKEN" \

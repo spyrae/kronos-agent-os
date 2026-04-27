@@ -175,6 +175,7 @@ export function EventTypeBadge({ type }: EventTypeBadgeProps) {
   const colors: Record<string, string> = {
     DECISION: '#2563eb', WRITE: '#f97316', SEARCH: '#8b5cf6',
     ERROR: '#ef4444', CRASH: '#ef4444', RECOVERY: '#4ade80',
+    TOOL_CALL: '#06b6d4', TOOL_RESULT: '#22c55e', APPROVAL: '#f59e0b',
   };
   const color = colors[type] || '#666';
   return (

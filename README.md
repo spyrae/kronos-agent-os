@@ -1,139 +1,31 @@
-# Kronos Swarm
+# Kronos Agent OS (KAOS)
 
 [![CI](https://github.com/spyrae/kronos-swarm/actions/workflows/ci.yml/badge.svg)](https://github.com/spyrae/kronos-swarm/actions/workflows/ci.yml)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![License: BSL 1.1](https://img.shields.io/badge/license-BSL--1.1-orange.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](pyproject.toml)
 
-A full-featured multi-agent AI system. Each agent has its own persona, memory, skills, sub-agents, and tools -- and they coordinate autonomously in group chats via atomic SQLite arbitration.
+Self-hosted runtime for durable AI agents that remember, use skills, call MCP tools, run scheduled work, and coordinate optional sub-agents.
 
-**Not just chatbots in a group.** Each agent is a complete AI system with a supervisor that orchestrates chains of specialized sub-agents (research, finance, competitor analysis, task management), 11 MCP tool servers, 4-layer memory, browser automation, server ops, scheduled jobs, and a security layer. The swarm coordination in group chats is one capability, not the only one.
+KAOS is an agent operating layer:
 
-## What Makes This Different
+![KAOS durable agent demo](docs/assets/kaos-durable-agent-demo.gif)
 
-| | Traditional Frameworks | Kronos Swarm |
-|---|---|---|
-| **Architecture** | Central orchestrator dispatches tasks | Independent processes, each a full agent |
-| **Coordination** | Predefined handoff chains | Atomic SQLite arbitration, no Redis/pub-sub |
-| **Routing** | Explicit: "send to agent X" | Implicit: agents decide relevance themselves |
-| **Persona** | System prompt string | Three-Space architecture (identity + knowledge + ops) |
-| **Memory** | Shared or none | Per-agent Mem0 + shared user facts via FTS5 |
-| **Sub-agents** | Framework-specific | Supervisor with pluggable ReAct sub-agents |
-| **Scaling** | Single process | N processes, one shared SQLite file |
+- **Runtime**: local agent loop with CLI, Telegram, Discord, webhook, and cron entry points.
+- **Memory**: session history, FTS5 recall, Mem0 vectors, knowledge graph, and sleep-time consolidation.
+- **Skills**: workspace-local procedures and references the agent can load on demand.
+- **Tool gateway**: MCP tools, custom tools, browser tools, and audit-friendly execution.
+- **Automations**: scheduled jobs for digests, monitoring, analytics, and self-improvement.
+- **Control room**: dashboard/API surfaces for memory, jobs, tool calls, and system status.
+- **Coordination**: optional sub-agent and swarm mode with SQLite arbitration.
 
-## Architecture
-
-```
-                          Telegram / Discord
-                                 |
-                    every message to all agents
-                     |        |        |        |
-                 +-------+ +------+ +-------+ +---+
-                 |Kronos | |Nexus | |Lacuna | |...N|   <-- independent OS processes
-                 +-------+ +------+ +-------+ +---+
-                     |
-              GroupRouter (Tier 1/2/3)
-                     |
-         +-----------+-----------+
-         |                       |
-   claim/arbitrate         KronosAgent
-   (shared swarm.db)            |
-                          +-----+------+
-                          |            |
-                     Supervisor    4-Layer Memory
-                     (LLM router)  Mem0 + FTS5 + KG
-                          |
-            +------+------+------+------+------+
-            |      |      |      |      |      |
-         Research Task  Finance Compete Deep   Telegram
-         Agent   Agent  Agent  Monitor Research Channels
-                          |
-                  +-------+-------+-------+
-                  |       |       |       |
-               11 MCP  Browser  Server  Dynamic
-               Servers  (PW)    Ops(SSH) Tools
-```
-
-### How It Works
-
-1. **Message arrives** in Telegram group -- all N agent processes see it simultaneously
-2. **GroupRouter** in each agent decides: is this for me? (Tier 1: @mention, Tier 2: topic relevance, Tier 3: peer reaction)
-3. **Claim arbitration** -- agent inserts a claim into shared `swarm.db`, atomic transaction picks the winner (`ORDER BY tier ASC, eta_ts ASC, agent_name ASC`)
-4. **Supervisor** routes to the right sub-agent chain (research, task management, finance, competitor analysis...)
-5. **Sub-agents** use MCP tools, browser, SSH, and memory to complete the task
-6. **Reply** goes back to the chat; memories are stored in background
-
-## Features
-
-### Agent Engine
-- **Custom ReAct engine** -- 200 lines, no LangGraph, just `langchain_core`
-- **Supervisor** -- LLM tool-calling router that dispatches to specialized sub-agents
-- **Sub-agents** -- Research, Task (Notion/Calendar/Email), Finance, Competitor Monitor, Deep Research (multi-step pipeline), Topic Research, Telegram Channels
-- **Skills system** -- progressive disclosure, self-improving skills, importable from external sources
-- **Dynamic tools** -- agents can create new tools at runtime via LLM
-
-### Swarm Coordination
-- **Atomic SQLite arbitration** -- `reply_claims` with IMMEDIATE transactions, no Redis
-- **Tier 1/2/3 routing** -- explicit @mention > topic relevance > peer reaction
-- **Cross-agent addressing guard** -- "@nexus" message goes only to Nexus
-- **Shared user facts** -- FTS5 cross-agent view of the user
-- **Ephemeral peer reactions** -- agents react to each other without polluting history
-
-### Memory (4 Layers)
-- **L1** Session persistence (SQLite per-agent)
-- **L2** Hybrid search: Mem0 vectors + FTS5 keywords with MMR re-ranking
-- **L3** Knowledge graph: entities, relations, graph context injection
-- **L4** Sleep-time compute: nightly entity extraction, insight generation, stale cleanup
-- **Pluggable context engine** -- summarize / sliding window / hybrid strategies
-
-### Tools & Integrations
-- **11 MCP servers** -- Brave Search, Exa, Notion, Google Workspace (Gmail, Calendar), YouTube, Reddit, filesystem, Yahoo Finance, web fetch, content extraction, Markdown conversion
-- **Browser automation** -- Playwright-based with URL security validation
-- **Server ops** -- SSH-based diagnostics and management (configurable server registry)
-- **Composio** -- 250+ third-party integrations (optional)
-
-### Transport
-- **Telegram** -- Telethon userbot (full message visibility in groups), Bot API for notifications
-- **Discord** -- discord.py bridge (experimental)
-- **Webhook server** -- HTTP endpoint for cron and external integrations
-- **Voice** -- Groq Whisper STT for voice messages, Edge-TTS for voice responses
-
-### Autonomous Operations (18 Cron Jobs)
-- Heartbeat (health check every 30 min)
-- Daily news monitor (Reddit, Twitter, web)
-- Group chat digest (daily summary of monitored Telegram groups)
-- Competitor monitoring (daily digest + weekly deep report + real-time alerts)
-- Business analytics (11 data sources: Zabbix, Grafana, Sentry, Supabase, PostHog, RevenueCat, LiteLLM, Linear, Yandex Metrika, GA4, App Store)
-- Expense tracking (Gmail parsing + Notion)
-- User modeling (behavioral analysis, weekly pattern updates)
-- Self-improvement (skill refinement, learning records)
-- Sleep-time compute (memory consolidation, knowledge graph updates)
-- Workspace backup
-
-### Security
-- Prompt injection shield (28 regex patterns, EN + RU)
-- Output validator
-- Cost guardian (per-request and daily limits)
-- Loop detector (prevents infinite agent-to-agent chains)
-- Browser URL allowlist
-
-### Persona (Three-Space Architecture)
-```
-workspaces/<agent>/
-  self/       -- WHO I AM (identity, soul, methodology, skills)
-  notes/      -- WHAT I KNOW (user model, contacts, world knowledge)
-  ops/        -- WHAT I DO (heartbeat, sessions, task queue, dynamic tools)
-```
-6 included agent personas with distinct cognitive profiles, communication styles, and domain expertise. Create your own from the template.
-
-### Dashboard
-- React UI for agent monitoring
-- Memory inspector, skill manager, persona editor
-- Performance metrics, audit trail, anomaly detection
-- MCP server status, knowledge graph explorer
+The default public posture is local-first and conservative: dynamic tools, dynamic MCP server management, and SSH/server operations are disabled unless explicitly enabled.
 
 ## Quickstart
 
-### 1. Install
+Requirements:
+
+- Python 3.11+
+- Node.js 18.18+ for the optional dashboard UI
 
 ```bash
 git clone https://github.com/spyrae/kronos-swarm.git
@@ -141,165 +33,197 @@ cd kronos-swarm
 
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[memory]"    # core + Mem0 + local embeddings
-```
+pip install -e ".[dev]"
 
-### 2. Configure
-
-```bash
+kaos demo
 cp .env.example .env
-cp agents.example.yaml agents.yaml
+kaos doctor
+kaos init personal-operator --role "personal operator for research and tasks"
 ```
 
-Edit `.env` -- minimum required:
+If you work on the dashboard UI, run `nvm use` from the repository root before
+`npm install` in `dashboard-ui/`.
+
+For memory features:
+
 ```bash
-FIREWORKS_API_KEY=fw_...      # or DEEPSEEK_API_KEY for lite-only mode
-TG_API_ID=12345678            # from https://my.telegram.org
-TG_API_HASH=abc123...
-ALLOWED_USERS=                # your Telegram user ID
-AGENT_NAME=kronos             # picks workspaces/kronos/
+pip install -e ".[dev,memory]"
 ```
 
-### 3. Create Telegram session
+For ASO automation:
+
+```bash
+pip install -e ".[dev,aso]"
+```
+
+For Telegram:
 
 ```bash
 python scripts/auth-userbot.py
-```
-
-### 4. Run
-
-```bash
 python -m kronos
 ```
 
-### Multi-Agent Setup
-
-Each agent runs as a separate process:
+Docker quickstart starts the safe local dashboard/control room:
 
 ```bash
-AGENT_NAME=kronos python -m kronos    # Terminal 1
-AGENT_NAME=nexus python -m kronos     # Terminal 2
-AGENT_NAME=lacuna python -m kronos    # Terminal 3
+cp .env.example .env
+docker compose up --build
 ```
 
-Or use systemd units from `systemd/` for production, or `docker-compose.yml`.
+The Compose ports bind to `127.0.0.1` on the host. The full Telegram/webhook runtime is still `python -m kronos` after credentials are configured.
 
-### Docker
+Dashboard demo state for screenshots and local demos:
+
+![KAOS Control Room dashboard](docs/assets/kaos-dashboard-control-room.svg)
 
 ```bash
-cp .env.example .env  # fill in values
-docker compose up
+kaos demo-seed --reset
+AGENT_NAME=demo DB_DIR=data/demo DB_PATH=data/demo/session.db SWARM_DB_PATH=data/demo/swarm.db WORKSPACE_PATH=workspaces/demo kaos dashboard
 ```
 
-## Adding a New Agent
+The seeded data is deterministic and public-safe: no private Telegram IDs, live memories, tokens, or personal workspace names.
 
-1. `cp -r workspaces/_template workspaces/my-agent`
-2. Edit `IDENTITY.md` and `SOUL.md` with your agent's persona
-3. Add to `agents.yaml`:
-   ```yaml
-   my-agent:
-     username: myagent_bot
-     aliases: ["my agent"]
-     role: "domain expert for X"
-   ```
-4. Create `.env.my-agent` with unique Telegram credentials
-5. `AGENT_NAME=my-agent python -m kronos`
+## Mental Model
+
+```mermaid
+flowchart LR
+    U["User / Cron / Connector"] --> R["KAOS Runtime"]
+    R --> M["Memory"]
+    R --> S["Skills"]
+    R --> G["Tool Gateway"]
+    R --> A["Automations"]
+    R --> W["Sub-Agent Coordination"]
+    G --> MCP["MCP Servers"]
+    G --> CT["Custom Tools"]
+    A --> R
+    R --> D["Dashboard Control Room"]
+    M --> D
+    G --> D
+    A --> D
+    W --> D
+```
+
+Sub-agent coordination is one subsystem inside KAOS. Each agent can run as a separate process with its own persona, workspace, Telegram account, and local memory while sharing a SQLite coordination ledger.
+
+## Core Commands
+
+```bash
+kaos --version       # print installed KAOS version
+kaos doctor          # validate local setup and safety defaults
+kaos init <name>     # create a local agent workspace
+kaos demo            # offline walkthrough, no LLM key required
+kaos chat            # local CLI chat without Telegram
+kaos chat -p "..."   # one-shot local message
+kaos chat --no-memory # local chat without long-term memory
+kaos chat --tools    # local CLI chat with configured static MCP tools
+kaos dashboard       # start the local dashboard API/UI
+kaos demo-seed --reset # seed public-safe dashboard demo data
+kaos connect telegram # guided Telegram setup check
+kaos templates list  # list bundled agent templates
+kaos skills packs    # list bundled skill packs
+python -m kronos     # run the Telegram/webhook runtime
+```
+
+`kaos demo` is deterministic and runs without Telegram, Docker, or provider keys. Use `kaos demo --live` when you want the same safety gates with a real LLM-backed chat. Demo mode forces conservative defaults for dynamic tools, dynamic MCP, and server ops even if the local environment enables them.
 
 ## Configuration
 
-| File | Purpose |
-|------|---------|
-| `.env` | API keys and secrets (gitignored) |
-| `agents.yaml` | Agent profiles: username, aliases, role for routing |
-| `servers.yaml` | Server registry for SSH ops tools (gitignored) |
-| `workspaces/<name>/` | Per-agent persona, knowledge, runtime state |
-| `competitors.yaml` | Competitor list for monitoring |
+Copy `.env.example` to `.env`. Minimum useful local setup:
 
-See [`.env.example`](.env.example) for all environment variables with descriptions.
+```bash
+FIREWORKS_API_KEY=fw_...      # or DEEPSEEK_API_KEY
+AGENT_NAME=kronos             # uses workspaces/kronos/
+```
 
-## Tech Stack
+Telegram requires:
 
-- **Engine**: Custom ReAct loop (`engine.py`) -- no LangGraph, no framework lock-in
-- **LLM**: Kimi K2.5 (standard) / DeepSeek V3 (lite) via `langchain_core`
-- **Memory**: Mem0 (Qdrant local) + SQLite FTS5 + Knowledge Graph
-- **Coordination**: SQLite WAL mode with IMMEDIATE transactions
-- **Transport**: Telethon (Telegram) + discord.py (Discord)
-- **Tools**: `langchain-mcp-adapters` (11 MCP servers) + Playwright + asyncssh
-- **Observability**: Langfuse (optional)
-- **Dashboard**: FastAPI + React (Vite)
+```bash
+TG_API_ID=12345678
+TG_API_HASH=abc123...
+ALLOWED_USERS=123456789       # comma-separated Telegram user IDs
+ALLOW_ALL_USERS=false         # keep false unless this is a private/trusted account
+```
+
+Public-safe capability gates:
+
+```bash
+ENABLE_DYNAMIC_TOOLS=false
+REQUIRE_DYNAMIC_TOOL_SANDBOX=true
+ENABLE_MCP_GATEWAY_MANAGEMENT=false
+ENABLE_DYNAMIC_MCP_SERVERS=false
+ENABLE_SERVER_OPS=false
+```
+
+Enable risky capabilities only in trusted local deployments where you understand the tool surface.
 
 ## Project Structure
 
-```
+```text
 kronos/
-  engine.py             # Custom ReAct loop (200 lines)
-  graph.py              # KronosAgent pipeline
-  bridge.py             # Telegram transport + webhook server
-  discord_bridge.py     # Discord transport
-  group_router.py       # Tier-based swarm routing
-  swarm_store.py        # Shared SQLite ledger + arbitration
-  config.py             # Pydantic Settings
-  persona.py            # System prompt builder from workspace
-  agents/               # Supervisor + sub-agents
-    supervisor.py       #   LLM tool-calling router
-    research.py         #   Web research agent
-    task.py             #   Notion/Calendar/Email agent
-    finance.py          #   Finance agent
-    competitor_monitor.py
-    deep_research/      #   Multi-step research pipeline
-    topic_research/     #   Topic discovery pipeline
-    telegram_channels.py
-    server_ops.py       #   SSH diagnostics agent
-  memory/               # 4-layer memory system
-    store.py            #   Mem0 integration
-    fts.py              #   FTS5 keyword search
-    hybrid.py           #   Vector + keyword merge
-    knowledge_graph.py  #   Entity-relation graph
-    context_engine.py   #   Pluggable compaction strategies
-    compaction.py       #   LLM summarization
-  tools/                # Tool integrations
-    mcp_servers.py      #   11 MCP server configs
-    browser/            #   Playwright automation
-    server_ops.py       #   SSH tools (configurable registry)
-    dynamic_tools.py    #   Runtime tool creation
-    expense.py          #   Notion expense tracking + FIFO budget
-    gateway.py          #   MCP gateway management
-  security/             # Security layer
-    shield.py           #   Prompt injection detection (28 patterns)
-    cost_guardian.py    #   Spend limits
-    loop_detector.py    #   Anti-loop for agent chains
-    output_validator.py #   Response validation
-  skills/               # Progressive skill system
-  cron/                 # 18 scheduled jobs
-  competitors/          # Competitor monitoring subsystem
-  analytics/            # Business intelligence (11 data sources)
+  engine.py            # custom ReAct loop
+  graph.py             # main runtime pipeline
+  bridge.py            # Telethon transport
+  cli.py               # kaos doctor/chat/demo
+  group_router.py      # group routing and addressing
+  swarm_store.py       # SQLite swarm ledger and claim arbitration
+  config.py            # Pydantic settings
+  agents/              # specialized sub-agents
+  memory/              # Mem0, FTS5, knowledge graph, context engine
+  skills/              # skill loading and approval tools
+  tools/               # MCP, browser, dynamic, server ops, custom tools
+  cron/                # scheduled jobs
+dashboard/             # API/backend dashboard surfaces
+dashboard-ui/          # web control room UI
 workspaces/
-  _template/            # Skeleton for new agents
-  kronos/               # Strategist (INTJ)
-  nexus/                # Data Analyst
-  lacuna/               # Creative Director
-  resonant/             # UX Advocate
-  keystone/             # Quality Engineer
-  impulse/              # Action Catalyst
-dashboard/              # FastAPI backend
-dashboard-ui/           # React frontend (Vite)
-systemd/                # Production systemd units
-scripts/                # Ops: deploy, health check, backup
+  _template/           # public starter workspace for kaos init
+  <agent>/             # local runtime state, gitignored
+templates/
+  agents/              # bundled safe agent profiles
+  skill-packs/         # bundled reusable skill packs
+docs/                  # docs index, runtime, memory, skills, MCP, automations, coordination
 ```
+
+## Sub-Agents And Swarm Mode
+
+KAOS Swarm Mode is the optional multi-agent coordination layer inside the broader Agent OS.
+
+- Agents observe the same group message independently.
+- Tier-based routing decides whether an agent should respond.
+- SQLite `IMMEDIATE` transactions prevent duplicate implicit replies.
+- Peer reactions let agents disagree or add perspective without polluting long-term memory.
+
+This is useful for multi-persona group chats and expert panels, but the default KAOS runtime also works as a single durable agent.
+
+## Safety
+
+KAOS can connect to tools, memory, external services, and scheduled jobs. The public defaults are intentionally conservative:
+
+- Dynamic Python tools are disabled by default.
+- Dynamic MCP add/remove/reload is disabled by default.
+- Persisted dynamic MCP servers are not loaded by default.
+- SSH/server operations are disabled by default.
+- Dynamic tool execution requires a Docker sandbox by default.
+- Telegram DMs are blocked until `ALLOWED_USERS` is set, unless `ALLOW_ALL_USERS=true`.
+
+See [docs/SECURITY.md](docs/SECURITY.md) and [SECURITY.md](SECURITY.md).
 
 ## Documentation
 
-| Doc | Content |
-|-----|---------|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design and data flow |
-| [MEMORY.md](docs/MEMORY.md) | 4-layer memory system in detail |
-| [SECURITY.md](docs/SECURITY.md) | Security model and threat mitigation |
-| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production setup with systemd |
-| [SKILLS.md](docs/SKILLS.md) | Skill system and progressive disclosure |
-| [CRON-JOBS.md](docs/CRON-JOBS.md) | All 18 scheduled jobs |
-| [CHANGELOG.md](CHANGELOG.md) | Release history |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
+- [Roadmap](ROADMAP.md)
+- [Landing Page Content](docs/LANDING.md)
+- [Demo](docs/DEMO.md)
+- [Personal Operator Demo](docs/PERSONAL_OPERATOR_DEMO.md)
+- [Swarm Mode Demo](docs/SWARM_DEMO.md)
+- [Launch Copy](docs/LAUNCH_COPY.md)
+- [v0.1.0 Release Notes Draft](docs/RELEASE_NOTES_v0.1.0.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Security](docs/SECURITY.md)
+- [Dashboard](docs/DASHBOARD.md)
+- [Memory](docs/MEMORY.md)
+- [Skills](docs/SKILLS.md)
+- [Cron Jobs](docs/CRON-JOBS.md)
+- [Deployment](docs/DEPLOYMENT.md)
 
 ## License
 
-[Business Source License 1.1](LICENSE) -- free for personal, internal, academic, and integration use. Cannot be used to build a competing multi-agent swarm service. Converts to Apache 2.0 on 2030-04-26.
+MIT

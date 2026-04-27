@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """List all Telegram groups/supergroups the user is a member of.
 
-Run on VPS where Telethon session is active:
-    cd /opt/kronos-ii/app && python scripts/list-groups.py
+Run on a host where the Telethon session is active:
+    cd /opt/kaos/app && python scripts/list-groups.py
 
 Outputs a markdown table ready to paste into GROUPS.md.
 """

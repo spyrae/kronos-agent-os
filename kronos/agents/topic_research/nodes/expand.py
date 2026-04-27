@@ -5,7 +5,7 @@ import logging
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 
-from kronos.agents.topic_research.nodes.discover import _find_tool, _parse_json_array
+from kronos.agents.topic_research.nodes.discover import _audited_tool_call, _find_tool, _parse_json_array
 from kronos.agents.topic_research.prompts import EXPAND_PROMPT
 from kronos.agents.topic_research.state import TopicResearchState
 from kronos.llm import ModelTier, get_model
@@ -13,7 +13,7 @@ from kronos.llm import ModelTier, get_model
 log = logging.getLogger("kronos.agents.topic_research.expand")
 
 
-async def expand_topics(state: TopicResearchState, tools: list[BaseTool]) -> dict:
+async def expand_topics(state: TopicResearchState, tools: list[BaseTool], on_tool_event=None) -> dict:
     """Expand topics with PAA questions, competitor audit, Reddit mining."""
     raw_topics = state.get("raw_topics", [])
     seeds = state.get("seed_keywords", [])
@@ -33,7 +33,7 @@ async def expand_topics(state: TopicResearchState, tools: list[BaseTool]) -> dic
         for q in paa_queries:
             try:
                 if brave:
-                    result = await brave.ainvoke({"query": q, "count": 5})
+                    result = await _audited_tool_call(brave, {"query": q, "count": 5}, on_tool_event)
                     result_str = str(result)
                     # Extract question-like strings from results
                     for line in result_str.split("\n"):
@@ -49,10 +49,10 @@ async def expand_topics(state: TopicResearchState, tools: list[BaseTool]) -> dic
         for keyword in seeds[:2]:
             try:
                 if brave:
-                    result = await brave.ainvoke({
+                    result = await _audited_tool_call(brave, {
                         "query": f"site:{blog.replace(' ', '')} {keyword}",
                         "count": 3,
-                    })
+                    }, on_tool_event)
                     competitor_topics.append(f"[{blog}] {result}")
             except Exception as e:
                 log.debug("Competitor search failed: %s", e)
@@ -61,10 +61,10 @@ async def expand_topics(state: TopicResearchState, tools: list[BaseTool]) -> dic
     for keyword in seeds[:2]:
         try:
             if brave:
-                result = await brave.ainvoke({
+                result = await _audited_tool_call(brave, {
                     "query": f"site:reddit.com {keyword} question advice",
                     "count": 5,
-                })
+                }, on_tool_event)
                 result_str = str(result)
                 for line in result_str.split("\n"):
                     if "?" in line and len(line) > 20:

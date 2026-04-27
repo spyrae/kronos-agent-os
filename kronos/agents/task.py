@@ -53,7 +53,7 @@ Split = true → сумма делится пополам.
 - Язык: русский"""
 
 
-def create_task_agent(tools: list[BaseTool]):
+def create_task_agent(tools: list[BaseTool], on_tool_event=None):
     """Create task agent with productivity tools."""
     task_tools = [
         t for t in tools
@@ -71,4 +71,5 @@ def create_task_agent(tools: list[BaseTool]):
         tools=task_tools,
         system_prompt=TASK_SYSTEM_PROMPT,
         name="task_agent",
+        on_tool_event=on_tool_event,
     )

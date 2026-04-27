@@ -8,6 +8,7 @@ import McpPage from './pages/McpPage';
 import SkillsPage from './pages/SkillsPage';
 import AgentsPage from './pages/AgentsPage';
 import GraphPage from './pages/GraphPage';
+import SwarmPage from './pages/SwarmPage';
 import ConfigPage from './pages/ConfigPage';
 import MemoryPage from './pages/MemoryPage';
 import PerformancePage from './pages/PerformancePage';
@@ -58,7 +59,7 @@ function Login() {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           margin: '0 auto 1rem', fontSize: '1.5rem', color: '#fff', fontWeight: 700,
         }}>K</div>
-        <div style={{ fontSize: '1.75rem', fontWeight: 600, marginBottom: '0.25rem' }}>Kronos II</div>
+        <div style={{ fontSize: '1.75rem', fontWeight: 600, marginBottom: '0.25rem' }}>Kronos Agent OS</div>
         <div style={{ fontSize: '0.85rem', color: '#555', marginBottom: '2.5rem' }}>Agent Operations Dashboard</div>
         <input
           type="text" placeholder="Username" value={username}
@@ -117,6 +118,7 @@ const NAV_SECTIONS: NavSection[] = [
       { path: '/mcp', label: 'MCP Servers', icon: 'S' },
       { path: '/skills', label: 'Skills', icon: 'K' },
       { path: '/graph', label: 'Graph', icon: 'G' },
+      { path: '/swarm', label: 'Swarm', icon: 'Q' },
       { path: '/persona', label: 'Persona', icon: 'W' },
       { path: '/config', label: 'Settings', icon: 'C' },
     ],
@@ -126,7 +128,7 @@ const NAV_SECTIONS: NavSection[] = [
 const ICON_COLORS: Record<string, string> = {
   '~': '#f97316', A: '#3b82f6', M: '#8b5cf6', L: '#4ade80',
   P: '#f59e0b', N: '#06b6d4', T: '#ec4899',
-  '!': '#ef4444', S: '#6366f1', K: '#14b8a6', G: '#a78bfa', W: '#f472b6', C: '#64748b',
+  '!': '#ef4444', S: '#6366f1', K: '#14b8a6', G: '#a78bfa', Q: '#22c55e', W: '#f472b6', C: '#64748b',
 };
 
 /* ── Layout with grouped sidebar ── */
@@ -190,7 +192,7 @@ function Layout({ children }: { children: React.ReactNode }) {
               fontSize: '0.85rem', color: '#fff', fontWeight: 700,
             }}>K</div>
             <div>
-              <div style={{ fontSize: '1rem', fontWeight: 600, color: '#fff', letterSpacing: '-0.02em' }}>Kronos II</div>
+              <div style={{ fontSize: '1rem', fontWeight: 600, color: '#fff', letterSpacing: '-0.02em' }}>Kronos Agent OS</div>
               <div style={{ fontSize: '0.65rem', color: '#4ade80', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                 <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#4ade80', display: 'inline-block' }} />
                 Online {uptime > 0 ? `(${formatUptime(uptime)})` : ''}
@@ -273,7 +275,7 @@ function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Footer */}
         <div style={{ padding: '0.75rem 0.5rem', borderTop: '1px solid #1a1a1a', marginTop: '0.5rem' }}>
-          <div style={{ fontSize: '0.65rem', color: '#333', marginBottom: '0.5rem' }}>v0.2.0 · Kronos II</div>
+          <div style={{ fontSize: '0.65rem', color: '#333', marginBottom: '0.5rem' }}>v0.2.0 · Kronos Agent OS</div>
           <button
             onClick={() => { localStorage.removeItem('kronos_token'); window.location.reload(); }}
             style={{
@@ -312,6 +314,7 @@ export default function App() {
           <Route path="/mcp" element={<McpPage />} />
           <Route path="/skills" element={<SkillsPage />} />
           <Route path="/graph" element={<GraphPage />} />
+          <Route path="/swarm" element={<SwarmPage />} />
           <Route path="/persona" element={<PersonaPage />} />
           <Route path="/config" element={<ConfigPage />} />
         </Routes>

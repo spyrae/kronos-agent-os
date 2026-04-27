@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { api } from '../api/client';
-import { EventTypeBadge } from '../components/Charts';
+import { EventTypeBadge, StatusBadge } from '../components/Charts';
 
 interface AuditEvent {
   id: string; type: string; agent: string;
@@ -8,10 +9,50 @@ interface AuditEvent {
   metadata: { duration_ms?: number; cost_usd?: number };
 }
 
+interface ToolCallEvent {
+  id: string;
+  timestamp: string;
+  event: string;
+  status: string;
+  tool: string;
+  capability: string;
+  approval_status: string;
+  agent: string;
+  session_id: string;
+  thread_id: string;
+  source_kind: string;
+  call_id: string;
+  turn?: number;
+  args_summary: string;
+  result_summary: string;
+  error: boolean;
+  duration_ms?: number;
+  cost_usd?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+}
+
+interface ToolCallResponse {
+  events: ToolCallEvent[];
+  counts: {
+    by_status: Record<string, number>;
+    by_capability: Record<string, number>;
+    by_tool: Record<string, number>;
+  };
+  filters: {
+    sessions: string[];
+    tools: string[];
+    capabilities: string[];
+    statuses: string[];
+  };
+  total: number;
+}
+
 const EVENT_TYPES = ['all', 'WRITE', 'SEARCH', 'DECISION', 'ERROR', 'CRASH', 'RECOVERY'] as const;
 const TYPE_COLORS: Record<string, string> = {
   DECISION: '#2563eb', WRITE: '#f97316', SEARCH: '#8b5cf6',
   ERROR: '#ef4444', CRASH: '#ef4444', RECOVERY: '#4ade80',
+  TOOL_CALL: '#06b6d4', TOOL_RESULT: '#22c55e', APPROVAL: '#f59e0b',
 };
 
 function timeAgo(ts: string): string {
@@ -25,11 +66,50 @@ function timeAgo(ts: string): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+function statusBadge(status: string): 'running' | 'stopped' | 'error' | 'warning' {
+  if (status === 'ok') return 'running';
+  if (status === 'called') return 'warning';
+  if (status === 'error' || status === 'blocked') return 'error';
+  return 'stopped';
+}
+
+function SelectFilter({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: 140 }}>
+      <span style={{ color: '#666', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+      <select value={value} onChange={e => onChange(e.target.value)} style={{
+        background: '#0a0a0a', color: '#ddd', border: '1px solid #222', borderRadius: 6,
+        padding: '0.45rem 0.55rem', fontSize: '0.78rem',
+      }}>
+        <option value="all">All</option>
+        {options.map(option => <option key={option} value={option}>{option}</option>)}
+      </select>
+    </label>
+  );
+}
+
 export default function AuditTrailPage() {
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [filter, setFilter] = useState('all');
   const [total, setTotal] = useState(0);
+  const [toolCalls, setToolCalls] = useState<ToolCallEvent[]>([]);
+  const [toolResponse, setToolResponse] = useState<ToolCallResponse | null>(null);
+  const [toolFilter, setToolFilter] = useState('all');
+  const [sessionFilter, setSessionFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [capabilityFilter, setCapabilityFilter] = useState('all');
+  const [selectedToolEvent, setSelectedToolEvent] = useState<ToolCallEvent | null>(null);
 
   useEffect(() => {
     api<{ events: AuditEvent[]; counts: Record<string, number>; total: number }>(
@@ -41,13 +121,123 @@ export default function AuditTrailPage() {
     }).catch(() => {});
   }, [filter]);
 
-  const card: React.CSSProperties = {
-    background: '#111', border: '1px solid #1a1a1a', borderRadius: '12px', padding: '1.25rem',
+  useEffect(() => {
+    const params = new URLSearchParams({
+      session: sessionFilter,
+      tool: toolFilter,
+      status: statusFilter,
+      capability: capabilityFilter,
+      limit: '100',
+    });
+    api<ToolCallResponse>(`/api/audit-trail/tool-calls?${params.toString()}`)
+      .then(r => {
+        setToolCalls(r.events);
+        setToolResponse(r);
+        if (selectedToolEvent && !r.events.some(event => event.id === selectedToolEvent.id)) {
+          setSelectedToolEvent(null);
+        }
+      })
+      .catch(() => {});
+  }, [sessionFilter, toolFilter, statusFilter, capabilityFilter, selectedToolEvent]);
+
+  const card: CSSProperties = {
+    background: '#111', border: '1px solid #1a1a1a', borderRadius: 8, padding: '1.25rem',
   };
 
   return (
     <div>
       <h1 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '1.25rem' }}>Audit Trail</h1>
+
+      <div style={{ ...card, marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem' }}>
+          <h2 style={{ fontSize: '0.9rem', fontWeight: 650, color: '#fff', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Tool Calls</h2>
+          <span style={{ color: '#777', fontSize: '0.75rem' }}>{toolResponse?.total || 0} events</span>
+        </div>
+
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+          <SelectFilter label="Session" value={sessionFilter} options={toolResponse?.filters.sessions || []} onChange={setSessionFilter} />
+          <SelectFilter label="Tool" value={toolFilter} options={toolResponse?.filters.tools || []} onChange={setToolFilter} />
+          <SelectFilter label="Status" value={statusFilter} options={toolResponse?.filters.statuses || []} onChange={setStatusFilter} />
+          <SelectFilter label="Capability" value={capabilityFilter} options={toolResponse?.filters.capabilities || []} onChange={setCapabilityFilter} />
+        </div>
+
+        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+          {Object.entries(toolResponse?.counts.by_status || {}).map(([key, value]) => (
+            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <StatusBadge status={statusBadge(key)} label={key} />
+              <span style={{ color: '#aaa', fontSize: '0.78rem' }}>{value}</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: selectedToolEvent ? 'minmax(0, 1fr) 360px' : '1fr', gap: '1rem' }}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', minWidth: 820, borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #222' }}>
+                  {['Time', 'Event', 'Status', 'Tool', 'Capability', 'Session', 'Latency'].map(header => (
+                    <th key={header} style={{ padding: '0.55rem 0.6rem', textAlign: 'left', color: '#555', fontSize: '0.68rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{header}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {toolCalls.map(event => (
+                  <tr
+                    key={event.id}
+                    onClick={() => setSelectedToolEvent(event)}
+                    style={{
+                      borderBottom: '1px solid #171717',
+                      cursor: 'pointer',
+                      background: selectedToolEvent?.id === event.id ? '#17120c' : 'transparent',
+                    }}
+                  >
+                    <td style={{ padding: '0.6rem', color: '#777', whiteSpace: 'nowrap' }}>{timeAgo(event.timestamp)}</td>
+                    <td style={{ padding: '0.6rem' }}><EventTypeBadge type={event.event.toUpperCase()} /></td>
+                    <td style={{ padding: '0.6rem' }}><StatusBadge status={statusBadge(event.status)} label={event.status} /></td>
+                    <td style={{ padding: '0.6rem', color: '#e0e0e0', fontWeight: 600, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.tool}</td>
+                    <td style={{ padding: '0.6rem', color: '#888' }}>{event.capability}</td>
+                    <td style={{ padding: '0.6rem', color: '#888', maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.session_id || '-'}</td>
+                    <td style={{ padding: '0.6rem', color: '#888' }}>{event.duration_ms ? `${event.duration_ms}ms` : '-'}</td>
+                  </tr>
+                ))}
+                {toolCalls.length === 0 && (
+                  <tr><td colSpan={7} style={{ padding: '2rem', textAlign: 'center', color: '#555' }}>No tool events found</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {selectedToolEvent && (
+            <div style={{ background: '#0a0a0a', border: '1px solid #1f1f1f', borderRadius: 8, padding: '0.9rem', minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                <span style={{ color: '#fff', fontWeight: 650, fontSize: '0.86rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedToolEvent.tool}</span>
+                <StatusBadge status={statusBadge(selectedToolEvent.status)} label={selectedToolEvent.status} />
+              </div>
+              {[
+                ['Capability', selectedToolEvent.capability],
+                ['Approval', selectedToolEvent.approval_status || '-'],
+                ['Session', selectedToolEvent.session_id || '-'],
+                ['Thread', selectedToolEvent.thread_id || '-'],
+                ['Call ID', selectedToolEvent.call_id || '-'],
+                ['Agent', selectedToolEvent.agent || '-'],
+              ].map(([label, value]) => (
+                <div key={label} style={{ display: 'grid', gridTemplateColumns: '86px 1fr', gap: '0.6rem', marginBottom: '0.4rem', fontSize: '0.73rem' }}>
+                  <span style={{ color: '#555', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+                  <span style={{ color: '#bbb', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>
+                </div>
+              ))}
+              <div style={{ marginTop: '0.9rem' }}>
+                <div style={{ color: '#666', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>Args</div>
+                <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#aaa', background: '#050505', border: '1px solid #181818', borderRadius: 6, padding: '0.65rem', fontSize: '0.72rem', maxHeight: 140, overflow: 'auto' }}>{selectedToolEvent.args_summary || '{}'}</pre>
+              </div>
+              <div style={{ marginTop: '0.75rem' }}>
+                <div style={{ color: '#666', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>Result</div>
+                <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#aaa', background: '#050505', border: '1px solid #181818', borderRadius: 6, padding: '0.65rem', fontSize: '0.72rem', maxHeight: 180, overflow: 'auto' }}>{selectedToolEvent.result_summary || '-'}</pre>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Filter pills */}
       <div style={{ display: 'flex', gap: '0.3rem', marginBottom: '1rem', flexWrap: 'wrap' }}>

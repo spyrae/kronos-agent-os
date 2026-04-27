@@ -1,0 +1,29 @@
+name: Docs improvement
+description: Report unclear, missing, or outdated KAOS documentation
+title: "[Docs]: "
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for docs gaps, confusing setup steps, missing examples, or outdated product framing.
+        Do not include secrets, private workspace data, Telegram IDs, or live logs.
+  - type: textarea
+    id: page
+    attributes:
+      label: Page or section
+      description: Link or name the README/docs section that needs work.
+      placeholder: "docs/SECURITY.md > Public-Safe Capability Defaults"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is unclear or missing?
+    validations:
+      required: true
+  - type: textarea
+    id: suggested
+    attributes:
+      label: Suggested fix
+      description: Optional wording, command, screenshot, or example that would help.

@@ -330,7 +330,7 @@ def add_tranche(
 ) -> str:
     """Add a new IDR budget tranche for FIFO expense tracking.
 
-    Call when Roman says something like "у нас 10 млн рупий по курсу 207.6"
+    Call when the user says something like "у нас 10 млн рупий по курсу 207.6"
     or "пополни бюджет 7 млн по 195".
 
     Args:
@@ -380,7 +380,7 @@ def replace_tranche(
 ) -> str:
     """Replace an existing tranche with a new rate (and optionally new amount).
 
-    Use when Roman says "поменяй курс транша 1 на 4.82" or
+    Use when the user says "поменяй курс транша 1 на 4.82" or
     "обнови транш — остаток тот же, курс 5.10".
 
     Args:
@@ -428,7 +428,7 @@ def replace_tranche(
 def get_budget() -> str:
     """Show current budget status — active tranches, remaining amounts, rates.
 
-    Call when Roman asks "какой остаток?", "сколько осталось?", "бюджет", "транши".
+    Call when the user asks "какой остаток?", "сколько осталось?", "бюджет", "транши".
     """
     budget_file = _budget_path()
     if not os.path.isfile(budget_file):
@@ -439,7 +439,7 @@ def get_budget() -> str:
 
     tranches = _parse_tranches(text)
     if not tranches:
-        return "Нет активных траншей. Попроси Романа добавить бюджет."
+        return "Нет активных траншей. Попроси пользователя добавить бюджет."
 
     lines = ["**Активные транши:**"]
     total_remaining = 0

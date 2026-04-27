@@ -1,10 +1,10 @@
 #!/bin/bash
-# security-audit.sh — Kronos II Security Audit Report
+# security-audit.sh — Kronos Agent OS Security Audit Report
 # Usage: security-audit.sh [today|week|all]
 
-SECURITY_LOG="/opt/kronos-ii/data/security.jsonl"
-AUDIT_LOG="/opt/kronos-ii/data/audit.jsonl"
-WORKSPACE_PATH="/opt/kronos-ii/workspace"
+SECURITY_LOG="/opt/kaos/data/security.jsonl"
+AUDIT_LOG="/opt/kaos/data/audit.jsonl"
+WORKSPACE_PATH="/opt/kaos/workspace"
 
 PERIOD="${1:-today}"
 TODAY=$(date -u +%Y-%m-%d)
@@ -17,7 +17,7 @@ case "$PERIOD" in
 esac
 
 echo "═══════════════════════════════════════════════"
-echo "  Kronos II Security Audit: $LABEL"
+echo "  Kronos Agent OS Security Audit: $LABEL"
 echo "═══════════════════════════════════════════════"
 echo ""
 
@@ -102,8 +102,8 @@ echo ""
 echo "▸ System Checks"
 
 # Check services
-echo -n "  kronos-ii:         "
-systemctl is-active kronos-ii 2>/dev/null || echo "UNKNOWN"
+echo -n "  kaos:         "
+systemctl is-active kaos 2>/dev/null || echo "UNKNOWN"
 echo -n "  heartbeat timer:   "
 systemctl is-active kronos-heartbeat.timer 2>/dev/null || echo "UNKNOWN"
 
@@ -120,7 +120,7 @@ fi
 # Check log sizes
 echo ""
 echo "▸ Log Sizes"
-for logfile in "$SECURITY_LOG" "$AUDIT_LOG" "/opt/kronos-ii/data/router-cost.jsonl"; do
+for logfile in "$SECURITY_LOG" "$AUDIT_LOG" "/opt/kaos/data/router-cost.jsonl"; do
   if [ -f "$logfile" ]; then
     SIZE=$(du -h "$logfile" | cut -f1)
     LINES=$(wc -l < "$logfile")

@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install ruff
-      - run: ruff check kronos/ tests/
+      - run: ruff check kronos/ dashboard/ aso/ tests/
 
   test:
     runs-on: ubuntu-latest
@@ -27,4 +27,27 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -e ".[dev]"
+      - run: kaos --help
+      - run: kaos doctor
+      - run: kaos demo
+      - run: kaos init smoke-agent --role "CI smoke test agent" --dry-run
+      - run: kaos connect telegram
       - run: pytest -m "not integration" -v
+
+  dashboard-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: dashboard-ui/package-lock.json
+      - run: npm ci
+        working-directory: dashboard-ui
+      - run: npm audit --audit-level=moderate
+        working-directory: dashboard-ui
+      - run: npm run lint
+        working-directory: dashboard-ui
+      - run: npm run build
+        working-directory: dashboard-ui

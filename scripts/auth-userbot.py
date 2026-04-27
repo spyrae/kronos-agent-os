@@ -5,10 +5,10 @@ Creates <agent_name>.session file for the specified agent.
 Run interactively — will ask for phone number and Telegram code.
 
 Usage:
-    cd /opt/kronos-ii/app
+    cd /opt/kaos/app
 
     # Auth specific agent (reads from its .env.<agent>):
-    AGENT_NAME=resonant TG_API_ID=... TG_API_HASH=... .venv/bin/python scripts/auth-userbot.py
+    AGENT_NAME=kaos-worker TG_API_ID=... TG_API_HASH=... .venv/bin/python scripts/auth-userbot.py
 
     # Or with default agent from .env:
     .venv/bin/python scripts/auth-userbot.py

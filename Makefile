@@ -20,18 +20,18 @@ test-all:
 
 # Lint
 lint:
-	ruff check kronos/ tests/
+	ruff check kronos/ dashboard/ aso/ tests/
 
 # Auto-format
 format:
-	ruff format kronos/ tests/
-	ruff check --fix kronos/ tests/
+	ruff format kronos/ dashboard/ aso/ tests/
+	ruff check --fix kronos/ dashboard/ aso/ tests/
 
-# Deploy to VPS (requires KRONOS_VPS in .env)
+# Deploy to remote host (requires KAOS_REMOTE in .env)
 deploy:
 	bash scripts/deploy.sh
 
-# First-time VPS setup
+# First-time remote setup
 deploy-init:
 	bash scripts/deploy.sh --first-run
 

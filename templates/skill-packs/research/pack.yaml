@@ -1,0 +1,8 @@
+name: Research Pack
+description: Safe research workflows for briefs, source checks, and comparisons.
+capabilities:
+  - optional web/search tools
+skills:
+  - research-brief
+examples:
+  - Create a sourced brief on a technical decision.

@@ -38,19 +38,18 @@ SERVER_REGISTRY: dict[str, dict] = _load_registry()
 
 _EXAMPLE_REGISTRY: dict[str, dict] = {
     # See servers.example.yaml for full format
-    # Example: see servers.example.yaml for full format
-    "my-vps": {
+    "primary": {
         "host": "1.2.3.4",
         "username": "deploy",
-        "app_path": "/opt/kronos-swarm/app",
-        "data_path": "/opt/kronos-swarm/app/data",
-        "description": "Main VPS — Kronos Swarm agents",
-        "services": ["kronos", "nexus"],
+        "app_path": "/opt/kaos/app",
+        "data_path": "/opt/kaos/data",
+        "description": "Main KAOS deployment host",
+        "services": ["kaos", "nexus"],
         "projects": {
-            "kronos-swarm": {
-                "path": "/opt/kronos-swarm/app",
-                "services": ["kronos", "nexus"],
-                "description": "AI agent swarm",
+            "kaos": {
+                "path": "/opt/kaos/app",
+                "services": ["kaos", "nexus"],
+                "description": "Kronos Agent OS deployment",
             },
         },
     },
@@ -108,7 +107,7 @@ _SSH_TIMEOUT = 30  # seconds
 async def _ssh_run(
     host: str,
     command: str,
-    username: str = "roman",
+    username: str = "deploy",
     timeout: int = _SSH_TIMEOUT,
 ) -> str:
     """Execute a command over SSH and return stdout.
@@ -152,11 +151,11 @@ def _get_server(server_name: str) -> dict | None:
 
 
 @tool
-async def server_status(server_name: str = "fra-01") -> str:
+async def server_status(server_name: str = "primary") -> str:
     """Get server overview: uptime, load, memory, disk usage.
 
     Args:
-        server_name: Server name from registry (default: kronos).
+        server_name: Server name from registry.
     """
     srv = _get_server(server_name)
     if not srv:
@@ -174,13 +173,13 @@ async def server_status(server_name: str = "fra-01") -> str:
 @tool
 async def server_service_status(
     service_name: str,
-    server_name: str = "fra-01",
+    server_name: str = "primary",
 ) -> str:
     """Check systemd service status (active/failed, uptime, recent logs).
 
     Args:
-        service_name: Service name (e.g. 'kronos-ii', 'impulse', 'nexus').
-        server_name: Server from registry (default: kronos).
+        service_name: Service name (e.g. 'kaos', 'worker', 'nexus').
+        server_name: Server from registry.
     """
     srv = _get_server(server_name)
     if not srv:
@@ -194,11 +193,11 @@ async def server_service_status(
 
 
 @tool
-async def server_all_services(server_name: str = "fra-01") -> str:
+async def server_all_services(server_name: str = "primary") -> str:
     """Quick status of ALL services on the server (one-line per service).
 
     Args:
-        server_name: Server from registry (default: kronos).
+        server_name: Server from registry.
     """
     srv = _get_server(server_name)
     if not srv:
@@ -216,15 +215,15 @@ async def server_logs(
     service_name: str,
     lines: int = 50,
     grep_pattern: str = "",
-    server_name: str = "fra-01",
+    server_name: str = "primary",
 ) -> str:
     """View recent logs for a systemd service via journalctl.
 
     Args:
-        service_name: Service name (e.g. 'impulse').
+        service_name: Service name (e.g. 'kaos').
         lines: Number of lines to fetch (default 50, max 200).
         grep_pattern: Optional grep filter (e.g. 'ERROR', 'timeout').
-        server_name: Server from registry (default: kronos).
+        server_name: Server from registry.
     """
     srv = _get_server(server_name)
     if not srv:
@@ -249,14 +248,14 @@ async def server_logs(
 async def server_errors(
     service_name: str = "",
     minutes: int = 30,
-    server_name: str = "fra-01",
+    server_name: str = "primary",
 ) -> str:
     """Find recent errors across one or all services.
 
     Args:
         service_name: Specific service, or empty for all agent services.
         minutes: Look back N minutes (default 30, max 1440).
-        server_name: Server from registry (default: kronos).
+        server_name: Server from registry.
     """
     srv = _get_server(server_name)
     if not srv:
@@ -281,7 +280,7 @@ async def server_errors(
 @tool
 async def server_query_swarm(
     query: str,
-    server_name: str = "fra-01",
+    server_name: str = "primary",
 ) -> str:
     """Run a READ-ONLY SQL query on swarm.db (shared cross-agent ledger).
 
@@ -293,7 +292,7 @@ async def server_query_swarm(
 
     Args:
         query: SQL SELECT query.
-        server_name: Server from registry (default: kronos).
+        server_name: Server from registry.
     """
     srv = _get_server(server_name)
     if not srv:
@@ -316,11 +315,11 @@ async def server_query_swarm(
 
 
 @tool
-async def server_disk_detail(server_name: str = "fra-01") -> str:
+async def server_disk_detail(server_name: str = "primary") -> str:
     """Detailed disk usage: largest dirs, SQLite DB sizes, /tmp, log size.
 
     Args:
-        server_name: Server from registry (default: kronos).
+        server_name: Server from registry.
     """
     srv = _get_server(server_name)
     if not srv:
@@ -341,7 +340,7 @@ async def server_disk_detail(server_name: str = "fra-01") -> str:
 @tool
 async def server_restart_service(
     service_name: str,
-    server_name: str = "fra-01",
+    server_name: str = "primary",
 ) -> str:
     """Restart a systemd service. Only whitelisted services allowed.
 
@@ -349,7 +348,7 @@ async def server_restart_service(
 
     Args:
         service_name: Service to restart (must be in whitelist).
-        server_name: Server from registry (default: kronos).
+        server_name: Server from registry.
     """
     srv = _get_server(server_name)
     if not srv:
@@ -374,13 +373,13 @@ async def server_restart_service(
 @tool
 async def server_clear_journal(
     older_than: str = "3d",
-    server_name: str = "fra-01",
+    server_name: str = "primary",
 ) -> str:
     """Clear old systemd journal logs to free disk space.
 
     Args:
         older_than: Keep logs newer than this (e.g. '3d', '1w'). Default: 3d.
-        server_name: Server from registry (default: kronos).
+        server_name: Server from registry.
     """
     srv = _get_server(server_name)
     if not srv:
@@ -401,7 +400,7 @@ async def server_clear_journal(
 
 
 @tool
-async def docker_ps(server_name: str = "fra-01") -> str:
+async def docker_ps(server_name: str = "primary") -> str:
     """List running Docker containers on a server.
 
     Args:
@@ -419,7 +418,7 @@ async def docker_ps(server_name: str = "fra-01") -> str:
 async def docker_logs(
     container_name: str,
     lines: int = 50,
-    server_name: str = "fra-01",
+    server_name: str = "primary",
 ) -> str:
     """View recent logs for a Docker container.
 
@@ -444,7 +443,7 @@ async def docker_logs(
 @tool
 async def docker_restart(
     container_name: str,
-    server_name: str = "fra-01",
+    server_name: str = "primary",
 ) -> str:
     """Restart a Docker container.
 
@@ -492,6 +491,12 @@ def get_server_ops_tools() -> list:
 
     Returns Level 1 (read-only) and Level 2 (whitelist actions) tools.
     """
+    from kronos.config import settings
+
+    if not settings.enable_server_ops:
+        log.info("server_ops tools disabled (ENABLE_SERVER_OPS=false)")
+        return []
+
     return [
         # Discovery
         server_list,

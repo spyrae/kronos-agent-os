@@ -1,5 +1,5 @@
 [Unit]
-Description=Kronos II Workspace Backup (every 6h)
+Description=Kronos Agent OS Workspace Backup (every 6h)
 
 [Timer]
 OnCalendar=*-*-* 00/6:00:00

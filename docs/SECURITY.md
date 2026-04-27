@@ -1,4 +1,37 @@
-# Kronos II — Security
+# Kronos Agent OS (KAOS) — Security
+
+KAOS is a self-hosted agent runtime with memory, skills, MCP tools, scheduled jobs, optional swarm mode, and optional infrastructure tooling. The security model is capability-first: risky surfaces are disabled by default and must be explicitly enabled in trusted local deployments.
+
+## Public-Safe Capability Defaults
+
+```bash
+ENABLE_DYNAMIC_TOOLS=false
+REQUIRE_DYNAMIC_TOOL_SANDBOX=true
+ENABLE_MCP_GATEWAY_MANAGEMENT=false
+ENABLE_DYNAMIC_MCP_SERVERS=false
+ENABLE_SERVER_OPS=false
+ALLOW_ALL_USERS=false
+```
+
+These defaults mean a fresh clone can run local chat/demo flows without allowing the agent to create Python tools, mutate MCP server configuration, load persisted dynamic MCP servers, or touch SSH/server operations. If a deployment enables these flags, treat it as a trusted automation system with access to the tools and credentials you provide.
+
+Telegram DMs are blocked until `ALLOWED_USERS` is configured, unless `ALLOW_ALL_USERS=true` is set explicitly.
+
+## Tool-Call Audit Trail
+
+Every ReAct tool lifecycle event is persisted to `data/<agent>/logs/tool_calls.jsonl`.
+
+Stored fields include timestamp, event phase (`tool_call` / `tool_result`), session/thread/user context, tool name, inferred capability, approval status, redacted args summary, redacted result summary, error flag, and latency. The dashboard reads this file through `/api/audit-trail/tool-calls` and supports filtering by session, tool, status, and capability.
+
+Raw tool payloads are not stored. Secret-like keys (`token`, `secret`, `password`, `api_key`, `authorization`, and suffix variants) are replaced with `***REDACTED***`; bearer tokens, `sk-*` keys, and URL query tokens are redacted inside strings before storage.
+
+## Capability Approvals
+
+The dashboard exposes capability policy as read-mostly runtime state. Change requests go to `data/<agent>/logs/approval_queue.jsonl` instead of mutating the live process directly.
+
+Approving a request records human intent and reason, but it still does not silently flip dangerous env flags. Operators must deliberately update env and restart the service. This keeps fresh clones and demo deployments conservative: high-risk capabilities such as dynamic tools, dynamic MCP servers, MCP gateway management, and server ops cannot be enabled accidentally from the UI.
+
+## Defense Layers
 
 5-layer defense system protecting against prompt injection, data leaks, cost overrun, and agent loops.
 

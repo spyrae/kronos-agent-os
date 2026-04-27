@@ -10,8 +10,10 @@ No LangGraph dependency. Uses langchain_core messages and tools directly.
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
@@ -23,6 +25,7 @@ log = logging.getLogger("kronos.engine")
 
 MAX_REACT_TURNS = 25
 TOOL_TIMEOUT_SECONDS = 120
+ToolEventCallback = Callable[[str, dict[str, Any]], None]
 
 
 @dataclass
@@ -75,6 +78,7 @@ async def react_loop(
     system_prompt: str | None = None,
     max_turns: int = MAX_REACT_TURNS,
     error_handler: Callable[[Exception], str] = classify_tool_error,
+    on_tool_event: ToolEventCallback | None = None,
 ) -> AgentResult:
     """Run the ReAct loop: LLM → tool_calls → execute → LLM → ...
 
@@ -104,6 +108,14 @@ async def react_loop(
         call_messages = [SystemMessage(content=system_prompt)] + call_messages
 
     total_tool_calls = 0
+
+    def emit_tool_event(event: str, payload: dict[str, Any]) -> None:
+        if not on_tool_event:
+            return
+        try:
+            on_tool_event(event, payload)
+        except Exception as e:
+            log.debug("Tool event callback failed: %s", e)
 
     for turn in range(max_turns):
         # Call LLM
@@ -136,18 +148,42 @@ async def react_loop(
         for tc in response.tool_calls:
             total_tool_calls += 1
             tool_name = tc.get("name", "")
+            tool_call_id = tc.get("id", "")
             tool = tool_map.get(tool_name)
+            emit_tool_event("tool_call", {
+                "name": tool_name,
+                "call_id": tool_call_id,
+                "args": tc.get("args", {}),
+                "turn": turn + 1,
+            })
+            tool_started = time.perf_counter()
 
             if tool is None:
                 log.warning("Unknown tool called: '%s'", tool_name)
                 tm = ToolMessage(
                     content=f"[ERROR] Unknown tool: '{tool_name}'. Available: {list(tool_map.keys())}",
-                    tool_call_id=tc.get("id", ""),
+                    tool_call_id=tool_call_id,
                 )
+                emit_tool_event("tool_result", {
+                    "name": tool_name,
+                    "call_id": tool_call_id,
+                    "ok": False,
+                    "content": tm.content,
+                    "turn": turn + 1,
+                    "duration_ms": round((time.perf_counter() - tool_started) * 1000),
+                })
             else:
                 log.info("Executing tool: %s (args: %s)", tool_name, str(tc.get("args", {}))[:200])
                 tm = await execute_tool(tool, tc, error_handler)
                 log.info("Tool result: %s → %s", tool_name, str(tm.content)[:200])
+                emit_tool_event("tool_result", {
+                    "name": tool_name,
+                    "call_id": tool_call_id,
+                    "ok": not str(tm.content).startswith("[ERROR]"),
+                    "content": tm.content,
+                    "turn": turn + 1,
+                    "duration_ms": round((time.perf_counter() - tool_started) * 1000),
+                })
 
             tool_messages.append(tm)
 
@@ -172,6 +208,7 @@ def create_agent(
     name: str = "agent",
     max_turns: int = MAX_REACT_TURNS,
     error_handler: Callable[[Exception], str] = classify_tool_error,
+    on_tool_event: ToolEventCallback | None = None,
 ):
     """Create a reusable agent function (replaces create_react_agent).
 
@@ -197,6 +234,7 @@ def create_agent(
             system_prompt=system_prompt,
             max_turns=max_turns,
             error_handler=error_handler,
+            on_tool_event=on_tool_event,
         )
 
     run.__name__ = name

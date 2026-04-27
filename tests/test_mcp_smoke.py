@@ -46,8 +46,8 @@ def test_mcp_config_has_filesystem(mcp_config):
 
     On a dev machine that hasn't populated ``workspaces/<agent>/`` yet the
     directory may be missing; ``build_mcp_config`` logs a warning and
-    skips the server. Skip the test in that case — on VPS the directory
-    is always present and the assertion runs normally.
+    skips the server. Skip the test in that case; production deployments
+    should create the workspace during setup.
     """
 
     from kronos.config import settings

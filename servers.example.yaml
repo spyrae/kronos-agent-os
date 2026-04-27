@@ -1,20 +1,19 @@
-# Server Registry — SSH-accessible servers for the server_ops agent tool.
+# Server Registry — SSH-accessible servers for the optional server_ops agent tool.
 # Copy to servers.yaml and fill in your values.
 # servers.yaml is gitignored.
 
-my-vps:
+primary:
   host: "1.2.3.4"
   username: "deploy"
-  app_path: "/opt/kronos-swarm/app"
-  data_path: "/opt/kronos-swarm/app/data"
-  description: "Main VPS — Kronos Swarm agents"
+  app_path: "/opt/kaos"
+  data_path: "/opt/kaos/data"
+  description: "Main KAOS deployment host"
   services:
-    - kronos
-    - nexus
-    - lacuna
+    - kaos
+    - kaos-worker
   docker: []
   projects:
-    kronos-swarm:
-      path: "/opt/kronos-swarm/app"
-      services: ["kronos", "nexus", "lacuna"]
-      description: "AI agent swarm"
+    kaos:
+      path: "/opt/kaos"
+      services: ["kaos", "kaos-worker"]
+      description: "Kronos Agent OS deployment"

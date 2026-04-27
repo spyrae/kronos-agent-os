@@ -5,6 +5,7 @@ import logging
 
 from langchain_core.tools import tool
 
+from kronos.config import settings
 from kronos.tools.gateway import get_gateway
 
 log = logging.getLogger("kronos.tools.gateway_tools")
@@ -21,6 +22,12 @@ def mcp_add_server(name: str, command: str, args: str = "", env_json: str = "{}"
         args: Space-separated arguments (e.g. '-y @slack/mcp-server')
         env_json: JSON string with environment variables (e.g. '{"SLACK_TOKEN": "xoxb-..."}')
     """
+    if not settings.enable_mcp_gateway_management:
+        return (
+            "Blocked: dynamic MCP server management is disabled. "
+            "Set ENABLE_MCP_GATEWAY_MANAGEMENT=true in a trusted local environment."
+        )
+
     try:
         env = json.loads(env_json) if env_json and env_json != "{}" else {}
     except json.JSONDecodeError:
@@ -46,6 +53,12 @@ def mcp_remove_server(name: str) -> str:
     Args:
         name: Server name to remove
     """
+    if not settings.enable_mcp_gateway_management:
+        return (
+            "Blocked: dynamic MCP server management is disabled. "
+            "Set ENABLE_MCP_GATEWAY_MANAGEMENT=true in a trusted local environment."
+        )
+
     gateway = get_gateway()
     return gateway.remove_server(name)
 
@@ -71,10 +84,18 @@ def mcp_list_servers() -> str:
 @tool
 async def mcp_reload() -> str:
     """Reload all MCP tools from all servers. Use after adding/removing servers."""
+    if not settings.enable_mcp_gateway_management:
+        return (
+            "Blocked: MCP gateway reload is disabled. "
+            "Set ENABLE_MCP_GATEWAY_MANAGEMENT=true in a trusted local environment."
+        )
+
     gateway = get_gateway()
     return await gateway.reload()
 
 
 def get_gateway_tools() -> list:
     """Get all gateway management tools."""
+    if not settings.enable_mcp_gateway_management:
+        return [mcp_list_servers]
     return [mcp_add_server, mcp_remove_server, mcp_list_servers, mcp_reload]

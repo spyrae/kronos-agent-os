@@ -7,10 +7,10 @@ Records baseline metrics before changes (for live apps).
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ..state import ASOState
-from ..tools import app_store, keyword_tracker
+from ..tools import app_store
 
 log = logging.getLogger("aso.nodes.execute")
 
@@ -78,7 +78,7 @@ async def execute(state: ASOState) -> dict:
                     "old_value": change.get("current", ""),
                     "new_value": proposed,
                     "localization_id": localization_id,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": datetime.now(UTC).isoformat(),
                 })
                 log.info("Applied: %s.%s → %s", locale, field, proposed[:50])
             except Exception as e:
@@ -140,7 +140,7 @@ async def execute(state: ASOState) -> dict:
                         "field": field,
                         "old_value": change.get("current", ""),
                         "new_value": proposed,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "timestamp": datetime.now(UTC).isoformat(),
                     })
                     log.info("Applied (Android): %s.%s → %s", locale, field, proposed[:50])
                 except Exception as e:
@@ -199,7 +199,7 @@ def _map_field_name(field: str) -> str:
 async def _collect_baseline(state: ASOState) -> dict:
     """Collect current metrics as baseline for comparison."""
     baseline = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "keyword_positions": {},
         "ratings": {},
     }

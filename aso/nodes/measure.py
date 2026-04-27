@@ -7,7 +7,7 @@ as the baseline to enable delta comparison.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ..state import ASOState
 from ..tools import app_store, keyword_tracker
@@ -20,7 +20,7 @@ async def measure(state: ASOState) -> dict:
     log.info("=== MEASURE: collecting post-change metrics ===")
 
     post_metrics: dict = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "keyword_positions": {},
         "ratings": {},
     }

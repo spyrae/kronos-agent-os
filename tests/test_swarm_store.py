@@ -108,58 +108,58 @@ class TestArbitration:
 
     def test_earliest_eta_wins_at_same_tier(self, swarm):
         self._claim(swarm, "kronos", tier=2, eta_offset=1.0)
-        self._claim(swarm, "nexus", tier=2, eta_offset=2.0)
+        self._claim(swarm, "analyst", tier=2, eta_offset=2.0)
         assert self._can_send(swarm, "kronos", tier=2).won is True
-        assert self._can_send(swarm, "nexus", tier=2).won is False
+        assert self._can_send(swarm, "analyst", tier=2).won is False
 
     def test_lower_tier_beats_earlier_eta(self, swarm):
         """Tier ordering dominates eta_ts — Tier 2 beats Tier 3 even if T3 eta is earlier."""
         self._claim(swarm, "kronos", tier=3, eta_offset=0.1)
-        self._claim(swarm, "nexus", tier=2, eta_offset=5.0)
-        assert self._can_send(swarm, "nexus", tier=2).won is True
+        self._claim(swarm, "analyst", tier=2, eta_offset=5.0)
+        assert self._can_send(swarm, "analyst", tier=2).won is True
         assert self._can_send(swarm, "kronos", tier=3).won is False
 
     def test_tier1_bypasses_arbitration(self, swarm):
         """Explicit @mention always sends, even against earlier Tier 2 claim."""
-        self._claim(swarm, "nexus", tier=2, eta_offset=0.1)
-        self._claim(swarm, "impulse", tier=1, eta_offset=5.0)
-        out = self._can_send(swarm, "impulse", tier=1)
+        self._claim(swarm, "analyst", tier=2, eta_offset=0.1)
+        self._claim(swarm, "operator", tier=1, eta_offset=5.0)
+        out = self._can_send(swarm, "operator", tier=1)
         assert out.won is True
         assert "tier-1" in out.reason.lower()
 
     def test_cancel_releases_slot(self, swarm):
         self._claim(swarm, "kronos", tier=2, eta_offset=1.0, msg_id=1)
-        self._claim(swarm, "nexus", tier=2, eta_offset=2.0, msg_id=2)
+        self._claim(swarm, "analyst", tier=2, eta_offset=2.0, msg_id=2)
         swarm.cancel_claim(
             chat_id=100, topic_id=None, trigger_msg_id=1,
             agent_name="kronos", reason="test",
         )
-        # Now nexus is the last remaining active claim → wins.
-        assert self._can_send(swarm, "nexus", tier=2).won is True
+        # Now analyst is the last remaining active claim → wins.
+        assert self._can_send(swarm, "analyst", tier=2).won is True
 
     def test_cap_enforced_for_implicit_replies(self, swarm):
         """Default cap = 2 implicit replies per root, across agents and tiers > 1."""
-        for i, agent in enumerate(["kronos", "nexus"], start=1):
+        for i, agent in enumerate(["kronos", "analyst"], start=1):
             self._claim(swarm, agent, tier=2, eta_offset=i * 0.1, msg_id=i)
             swarm.mark_sent(
                 chat_id=100, topic_id=None, trigger_msg_id=i,
                 agent_name=agent, reply_msg_id=i * 100,
             )
-        self._claim(swarm, "lacuna", tier=2, eta_offset=0.3, msg_id=3)
-        out = self._can_send(swarm, "lacuna", tier=2)
+        self._claim(swarm, "reviewer", tier=2, eta_offset=0.3, msg_id=3)
+        out = self._can_send(swarm, "reviewer", tier=2)
         assert out.won is False
         assert "cap" in out.reason.lower()
 
     def test_tier1_ignores_cap(self, swarm):
         """Explicit addressing wins even after the implicit cap is full."""
-        for i, agent in enumerate(["kronos", "nexus"], start=1):
+        for i, agent in enumerate(["kronos", "analyst"], start=1):
             self._claim(swarm, agent, tier=2, eta_offset=i * 0.1, msg_id=i)
             swarm.mark_sent(
                 chat_id=100, topic_id=None, trigger_msg_id=i,
                 agent_name=agent, reply_msg_id=i * 100,
             )
-        self._claim(swarm, "lacuna", tier=1, eta_offset=0.3, msg_id=3)
-        assert self._can_send(swarm, "lacuna", tier=1).won is True
+        self._claim(swarm, "reviewer", tier=1, eta_offset=0.3, msg_id=3)
+        assert self._can_send(swarm, "reviewer", tier=1).won is True
 
 
 class TestSharedUserFacts:

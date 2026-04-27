@@ -1,7 +1,7 @@
 [project]
 name = "kronos-aso"
 version = "0.1.0"
-description = "ASO pipeline for JourneyBay — continuous App Store Optimization"
+description = "ASO pipeline for KAOS — continuous App Store Optimization"
 requires-python = ">=3.11"
 dependencies = [
     "langgraph>=0.4",

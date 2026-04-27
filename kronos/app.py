@@ -23,8 +23,8 @@ _LEGACY_MOVES: tuple[tuple[str, str], ...] = (
     # (legacy_relative_path, new_relative_path_inside_db_dir)
     # Per-agent flat DBs collapse into the per-agent directory.
     ("{agent}.db", "session.db"),
-    # Hyphenated qdrant dir (from an earlier manual isolation attempt on
-    # VPS — e.g. ``data/impulse-qdrant/``) is the per-agent form we want.
+    # Hyphenated qdrant dir from an earlier manual isolation attempt
+    # (e.g. ``data/impulse-qdrant/``) is the per-agent form we want.
     ("{agent}-qdrant", "qdrant"),
     # Shared-by-accident files: the canonical "kronos" agent adopts them,
     # other agents start fresh (historical contents were corrupt anyway).
@@ -87,8 +87,8 @@ def _ensure_data_dirs() -> None:
 
 
 async def main():
-    """Start Kronos II: build agent, start bridge + cron scheduler."""
-    log.info("Starting Kronos II v0.1.0")
+    """Start Kronos Agent OS: build agent, start bridge + cron scheduler."""
+    log.info("Starting Kronos Agent OS v0.1.0")
     _ensure_data_dirs()
 
     session_store = SessionStore(settings.db_path, agent_name=settings.agent_name)

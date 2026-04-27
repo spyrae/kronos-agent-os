@@ -234,7 +234,7 @@ class SkillStore:
             })
         return {
             "version": "1.0.0",
-            "agent": "kronos-ii",
+            "agent": "kaos",
             "skills": skills_list,
             "generated_at": datetime.now(UTC).isoformat(),
         }

@@ -1,0 +1,80 @@
+name: Bug report
+description: Report a reproducible KAOS bug
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Remove secrets, private paths, Telegram IDs, and live workspace data before submitting.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Exact commands or steps.
+      placeholder: |
+        1. Run `kaos doctor`
+        2. Run ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: "0.1.0 / commit SHA"
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.11.x"
+  - type: input
+    id: os
+    attributes:
+      label: OS / environment
+      placeholder: "macOS 14, Ubuntu 22.04, Docker, etc."
+  - type: textarea
+    id: install
+    attributes:
+      label: Install and command context
+      description: Include the exact install mode and command. Paste redacted `kaos doctor` output if relevant.
+      placeholder: |
+        pip install -e ".[dev]"
+        kaos doctor
+        kaos demo
+  - type: checkboxes
+    id: capabilities
+    attributes:
+      label: Enabled capability gates
+      description: Check only capabilities you explicitly enabled.
+      options:
+        - label: ENABLE_DYNAMIC_TOOLS=true
+        - label: ENABLE_MCP_GATEWAY_MANAGEMENT=true
+        - label: ENABLE_DYNAMIC_MCP_SERVERS=true
+        - label: ENABLE_SERVER_OPS=true
+        - label: ALLOW_ALL_USERS=true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste only redacted logs.
+      render: text

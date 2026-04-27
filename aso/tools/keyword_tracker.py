@@ -41,7 +41,7 @@ def load_target_keywords() -> list[dict]:
 
 
 def _default_keywords() -> list[dict]:
-    """Baseline keywords for JourneyBay."""
+    """Baseline keywords for the configured app."""
     return [
         {"keyword": "travel planner", "locale": "en", "priority": "high"},
         {"keyword": "trip planner", "locale": "en", "priority": "high"},
@@ -78,7 +78,7 @@ async def search_itunes(term: str, *, country: str = "us", limit: int = 50) -> l
 
 async def find_app_position(
     term: str,
-    bundle_id: str = "co.journeybay.app",
+    bundle_id: str = "com.example.app",
     *,
     country: str = "us",
 ) -> dict:
@@ -110,7 +110,7 @@ async def find_app_position(
     }
 
 
-async def track_all_keywords(bundle_id: str = "co.journeybay.app") -> dict[str, dict]:
+async def track_all_keywords(bundle_id: str = "com.example.app") -> dict[str, dict]:
     """Track positions for all target keywords.
 
     Returns {keyword: {position, country, found, ...}}.
@@ -154,7 +154,7 @@ async def track_all_keywords(bundle_id: str = "co.journeybay.app") -> dict[str, 
     return results
 
 
-async def get_app_info(bundle_id: str = "co.journeybay.app", country: str = "us") -> dict | None:
+async def get_app_info(bundle_id: str = "com.example.app", country: str = "us") -> dict | None:
     """Lookup app info from iTunes API (ratings, reviews count, etc)."""
     params = {
         "bundleId": bundle_id,

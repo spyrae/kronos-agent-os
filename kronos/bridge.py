@@ -239,7 +239,23 @@ async def _send_bot_api_message(chat_id: int, text: str, topic_id: int) -> None:
                         async with session.post(url, json=body, timeout=aiohttp.ClientTimeout(total=15)) as retry:
                             if retry.status != 200:
                                 err = await retry.text()
-                                log.error("Bot API send failed: %s %s", retry.status, err[:200])
+                                if retry.status == 400 and "message_thread" in err:
+                                    no_topic_body = dict(body)
+                                    no_topic_body.pop("message_thread_id", None)
+                                    async with session.post(
+                                        url,
+                                        json=no_topic_body,
+                                        timeout=aiohttp.ClientTimeout(total=15),
+                                    ) as no_topic_retry:
+                                        if no_topic_retry.status != 200:
+                                            fallback_err = await no_topic_retry.text()
+                                            log.error(
+                                                "Bot API send failed after topic fallback: %s %s",
+                                                no_topic_retry.status,
+                                                fallback_err[:200],
+                                            )
+                                else:
+                                    log.error("Bot API send failed: %s %s", retry.status, err[:200])
         except Exception as e:
             log.error("Bot API send error: %s", e)
         if len(chunks) > 1:
@@ -424,7 +440,7 @@ async def _handle_history(request: web.Request) -> web.Response:
 
 
 async def _handle_health(request: web.Request) -> web.Response:
-    return web.json_response({"status": "ok", "agent": "kronos-ii"})
+    return web.json_response({"status": "ok", "agent": "kaos"})
 
 
 async def _start_webhook_server() -> None:
@@ -500,7 +516,7 @@ async def run_bridge(agent: KronosAgent) -> None:
 
     is_bot = bool(settings.tg_bot_token)
     log.info("Starting %s bridge (mode: %s)", settings.agent_name, "bot" if is_bot else "userbot")
-    log.info("Allowed users: %s", settings.allowed_user_ids or "ALL")
+    log.info("Allowed users: %s", settings.telegram_access_description)
 
     @_client.on(events.NewMessage(incoming=True))
     async def handle_message(event):
@@ -639,7 +655,8 @@ async def run_bridge(agent: KronosAgent) -> None:
                     return
 
         # DM: check allowed users
-        if is_dm and settings.allowed_user_ids and user_id not in settings.allowed_user_ids:
+        if is_dm and not settings.is_telegram_user_allowed(user_id):
+            log.info("Ignoring DM from unauthorized Telegram user %s", user_id)
             return
 
         # Voice transcription
@@ -816,9 +833,11 @@ async def run_bridge(agent: KronosAgent) -> None:
 
         sent_msg = None
         if not voice_sent:
-            if topic_id:
-                # Use Bot API with message_thread_id (forums and DM topics)
+            if topic_id and settings.tg_bot_token:
+                # Use Bot API with message_thread_id when a bot token is configured.
                 await _send_bot_api_message(event.chat_id, reply, topic_id)
+            elif topic_id:
+                sent_msg = await _client.send_message(event.chat_id, reply, reply_to=topic_id)
             elif len(reply) > 4000:
                 chunks = [reply[i:i + 4000] for i in range(0, len(reply), 4000)]
                 for i, chunk in enumerate(chunks):
