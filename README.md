@@ -1,6 +1,8 @@
 # Kronos Agent OS (KAOS)
 
 [![CI](https://github.com/spyrae/kronos-agent-os/actions/workflows/ci.yml/badge.svg)](https://github.com/spyrae/kronos-agent-os/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/kronos-agent-os.svg)](https://pypi.org/project/kronos-agent-os/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/kronos-agent-os.svg)](https://pypi.org/project/kronos-agent-os/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](pyproject.toml)
 
@@ -27,6 +29,23 @@ Requirements:
 - Python 3.11+
 - Node.js 18.18+ for the optional dashboard UI
 
+Install from PyPI:
+
+```bash
+pip install kronos-agent-os
+kaos demo
+```
+
+`kaos demo` runs offline, no LLM key needed. To go further:
+
+```bash
+kaos doctor
+kaos init personal-operator --role "personal operator for research and tasks"
+# edit ~/.kaos/.env or your project .env: at least one real LLM key, or Ollama/local
+```
+
+For development or to track `main`:
+
 ```bash
 git clone https://github.com/spyrae/kronos-agent-os.git
 cd kronos-agent-os
@@ -37,9 +56,7 @@ pip install -e ".[dev]"
 
 kaos demo
 cp .env.example .env
-# edit .env: add at least one real LLM key, or configure Ollama/local
 kaos doctor
-kaos init personal-operator --role "personal operator for research and tasks"
 ```
 
 Bring your own LLM by editing `.env`. The default chain is Fireworks/Kimi plus
