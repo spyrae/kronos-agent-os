@@ -85,6 +85,24 @@ if [ "${1:-}" = "--first-run" ]; then
     set -euo pipefail
     cd "$KAOS_REMOTE_DIR"
 
+    if ! python3 - <<'PY' >/dev/null 2>&1
+import ensurepip
+PY
+    then
+      if command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3-venv
+      else
+        echo "FATAL: python3 venv/ensurepip is unavailable and apt-get was not found."
+        exit 1
+      fi
+    fi
+
+    if [ -d app/.venv ] && [ ! -x app/.venv/bin/pip ]; then
+      echo "Removing incomplete virtualenv from previous failed setup."
+      rm -rf app/.venv
+    fi
+
     # Create venv
     python3 -m venv app/.venv
     app/.venv/bin/pip install -e "app/.[dev]"
