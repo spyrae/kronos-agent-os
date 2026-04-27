@@ -49,6 +49,40 @@ The compose file binds exposed ports to `127.0.0.1` on the host. Inside the cont
 
 The default Compose command starts `kaos dashboard`, not the Telegram bridge. This keeps the Docker quickstart usable without Telegram credentials. After provider and Telegram credentials are configured, run the full runtime with `python -m kronos` or override the Compose command.
 
+## GitHub Actions Deploy
+
+Production deploys can run through a self-hosted GitHub Actions runner on the
+target server. The runner should be registered to the repository with the label
+`kaos-deploy`.
+
+Current target:
+
+```text
+roman@178.105.30.82
+runner: fkv-kaos-deploy
+labels: self-hosted, kaos-deploy, linux, x64
+deploy root: /opt/kaos
+```
+
+Use **Actions -> Deploy -> Run workflow**.
+
+Inputs:
+
+- `first_run=true`: create `/opt/kaos/app`, Python venv, and systemd units.
+- `first_run=false`: sync code, reinstall package, restart services, and verify
+  `systemctl is-active`.
+- `agents`: space-separated systemd services to restart and check, default
+  `kaos`.
+- `health_url`: optional required HTTP health check after restart.
+
+The workflow runs `scripts/deploy.sh` with `KAOS_DEPLOY_MODE=local`, so no SSH
+private key is needed in GitHub. Runtime state is preserved: `.env`, `.env.*`,
+`data/`, `workspaces/`, `.venv/`, and `*.session` are excluded from rsync.
+
+After every deploy, the workflow checks service state. If deploy fails, it prints
+`systemctl status`, recent `journalctl` logs, disk, and memory diagnostics in the
+GitHub Actions run.
+
 ## Environment
 
 At least one LLM provider is required for chat/runtime use:

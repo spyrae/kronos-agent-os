@@ -1,0 +1,76 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      first_run:
+        description: "Install venv/systemd units instead of restarting services"
+        required: true
+        type: boolean
+        default: false
+      agents:
+        description: "Space-separated systemd services to restart/check"
+        required: true
+        type: string
+        default: "kaos"
+      remote_dir:
+        description: "Deployment root on the self-hosted runner server"
+        required: true
+        type: string
+        default: "/opt/kaos"
+      health_url:
+        description: "Optional post-deploy health URL to require"
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: kaos-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy on self-hosted runner
+    runs-on: [self-hosted, kaos-deploy]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy
+        env:
+          KAOS_DEPLOY_MODE: local
+          KAOS_REMOTE_DIR: ${{ inputs.remote_dir }}
+          KAOS_AGENTS: ${{ inputs.agents }}
+          KAOS_HEALTH_URL: ${{ inputs.health_url }}
+          KAOS_HEALTH_REQUIRED: "true"
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.first_run }}" = "true" ]; then
+            scripts/deploy.sh --first-run
+          else
+            scripts/deploy.sh
+          fi
+
+      - name: Post-deploy diagnostics on failure
+        if: failure()
+        env:
+          KAOS_AGENTS: ${{ inputs.agents }}
+        run: |
+          set +e
+          echo "Runner host:"
+          hostname
+          echo ""
+          echo "Disk:"
+          df -h / /opt || true
+          echo ""
+          echo "Memory:"
+          free -h || true
+          echo ""
+          for svc in $KAOS_AGENTS; do
+            echo "=== systemctl status: $svc ==="
+            systemctl status "$svc" --no-pager || true
+            echo ""
+            echo "=== journal: $svc ==="
+            journalctl -u "$svc" -n 120 --no-pager || true
+            echo ""
+          done

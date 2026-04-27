@@ -1,5 +1,5 @@
 #!/bin/bash
-# deploy.sh — Deploy Kronos Agent OS to a remote host
+# deploy.sh — Deploy Kronos Agent OS to a remote host or local runner host
 #
 # Usage: deploy.sh [--first-run]
 #
@@ -16,29 +16,72 @@ if [ -f "$ENV_FILE" ]; then
     set -a; source "$ENV_FILE"; set +a
 fi
 
-REMOTE="${KAOS_REMOTE:?Set KAOS_REMOTE=user@host in .env or environment}"
+DEPLOY_MODE="${KAOS_DEPLOY_MODE:-remote}"
 REMOTE_DIR="${KAOS_REMOTE_DIR:-/opt/kaos}"
 AGENTS="${KAOS_AGENTS:-kaos}"
+SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+if [ "$DEPLOY_MODE" != "local" ] && [ "$DEPLOY_MODE" != "remote" ]; then
+  echo "FATAL: KAOS_DEPLOY_MODE must be 'local' or 'remote'."
+  exit 1
+fi
+
+if [ "$DEPLOY_MODE" = "remote" ]; then
+  REMOTE="${KAOS_REMOTE:?Set KAOS_REMOTE=user@host in .env or environment}"
+else
+  REMOTE=""
+fi
 
 echo "=== Deploying Kronos Agent OS ==="
+echo "Mode: $DEPLOY_MODE"
+echo "Target dir: $REMOTE_DIR"
+echo "Agents: $AGENTS"
 
-# Sync code — explicitly exclude everything that must survive deploy
-echo "Syncing files..."
-rsync -avz --delete \
-  --exclude='.git/' \
-  --exclude='__pycache__/' \
-  --exclude='*.egg-info/' \
-  --exclude='data/' \
-  --exclude='.env' \
-  --exclude='.env.*' \
-  --exclude='*.session' \
-  --exclude='.venv/' \
-  --exclude='workspaces/' \
-  "$(dirname "$0")/../" "$REMOTE:$REMOTE_DIR/app/"
+sync_files() {
+  local target
+
+  if [ "$DEPLOY_MODE" = "local" ]; then
+    sudo mkdir -p "$REMOTE_DIR/app"
+    sudo chown -R "$(id -un):$(id -gn)" "$REMOTE_DIR"
+    target="$REMOTE_DIR/app/"
+  else
+    target="$REMOTE:$REMOTE_DIR/app/"
+  fi
+
+  # Sync code — explicitly exclude everything that must survive deploy.
+  echo "Syncing files..."
+  rsync -avz --delete \
+    --exclude='.git/' \
+    --exclude='__pycache__/' \
+    --exclude='*.egg-info/' \
+    --exclude='build/' \
+    --exclude='dist/' \
+    --exclude='data/' \
+    --exclude='.env' \
+    --exclude='.env.*' \
+    --exclude='*.session' \
+    --exclude='.venv/' \
+    --exclude='workspaces/' \
+    "$SOURCE_DIR/" "$target"
+}
+
+target_bash() {
+  if [ "$DEPLOY_MODE" = "local" ]; then
+    KAOS_REMOTE_DIR="$REMOTE_DIR" \
+    KAOS_AGENTS="$AGENTS" \
+    KAOS_HEALTH_URL="${KAOS_HEALTH_URL:-}" \
+    KAOS_HEALTH_REQUIRED="${KAOS_HEALTH_REQUIRED:-true}" \
+    bash -s
+  else
+    ssh "$REMOTE" "KAOS_REMOTE_DIR='$REMOTE_DIR' KAOS_AGENTS='$AGENTS' KAOS_HEALTH_URL='${KAOS_HEALTH_URL:-}' KAOS_HEALTH_REQUIRED='${KAOS_HEALTH_REQUIRED:-true}' bash -s"
+  fi
+}
+
+sync_files
 
 if [ "${1:-}" = "--first-run" ]; then
   echo "First run setup..."
-  ssh "$REMOTE" "KAOS_REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE_SCRIPT'
+  target_bash <<'TARGET_SCRIPT'
     set -euo pipefail
     cd "$KAOS_REMOTE_DIR"
 
@@ -50,7 +93,7 @@ if [ "${1:-}" = "--first-run" ]; then
     # Install systemd units (replace default User=kronos with actual remote user)
     REMOTE_USER=$(whoami)
     for f in app/systemd/*.service app/systemd/*.timer; do
-      sudo sed "s/User=kronos/User=$REMOTE_USER/" "$f" > /etc/systemd/system/$(basename "$f")
+      sudo sed "s/User=kronos/User=$REMOTE_USER/" "$f" | sudo tee "/etc/systemd/system/$(basename "$f")" >/dev/null
     done
     sudo systemctl daemon-reload
 
@@ -59,10 +102,10 @@ if [ "${1:-}" = "--first-run" ]; then
     echo "  1. Create .env files from .env.example"
     echo "  2. Run auth-userbot.py for each agent"
     echo "  3. sudo systemctl enable --now kaos"
-REMOTE_SCRIPT
+TARGET_SCRIPT
 else
-  echo "Deploying to remote host..."
-  ssh "$REMOTE" "KAOS_REMOTE_DIR='$REMOTE_DIR' KAOS_AGENTS='$AGENTS' bash -s" <<'REMOTE_SCRIPT'
+  echo "Deploying to target host..."
+  target_bash <<'TARGET_SCRIPT'
     set -euo pipefail
     cd "$KAOS_REMOTE_DIR"
 
@@ -97,7 +140,7 @@ else
     # Update systemd units if changed (replace default User=kronos with actual remote user)
     REMOTE_USER=$(whoami)
     for f in app/systemd/*.service app/systemd/*.timer; do
-      [ -f "$f" ] && sudo sed "s/User=kronos/User=$REMOTE_USER/" "$f" > /etc/systemd/system/$(basename "$f")
+      [ -f "$f" ] && sudo sed "s/User=kronos/User=$REMOTE_USER/" "$f" | sudo tee "/etc/systemd/system/$(basename "$f")" >/dev/null
     done
     sudo systemctl daemon-reload
 
@@ -114,13 +157,32 @@ else
     echo ""
     echo "Agent status:"
     for svc in $KAOS_AGENTS; do
-      STATUS=$(systemctl is-active $svc)
+      if ! STATUS=$(systemctl is-active "$svc"); then
+        echo "  $svc: $STATUS"
+        echo ""
+        echo "Last logs for $svc:"
+        journalctl -u "$svc" -n 80 --no-pager || true
+        exit 1
+      fi
       echo "  $svc: $STATUS"
     done
 
+    if [ -n "${KAOS_HEALTH_URL:-}" ]; then
+      echo ""
+      echo "Health check: $KAOS_HEALTH_URL"
+      if ! curl -fsS --max-time 10 "$KAOS_HEALTH_URL"; then
+        echo ""
+        echo "Health check failed: $KAOS_HEALTH_URL"
+        if [ "${KAOS_HEALTH_REQUIRED:-true}" = "true" ]; then
+          exit 1
+        fi
+      fi
+      echo ""
+    fi
+
     echo ""
     echo "Deploy complete."
-REMOTE_SCRIPT
+TARGET_SCRIPT
 fi
 
 echo "=== Done ==="
