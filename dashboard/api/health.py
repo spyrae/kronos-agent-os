@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from dashboard.auth import create_session, verify_credentials
+from kronos.config import settings
 
 router = APIRouter(tags=["health"])
 
@@ -21,7 +22,7 @@ class LoginRequest(BaseModel):
 async def health():
     return {
         "status": "ok",
-        "agent": "kaos",
+        "agent": settings.agent_name,
         "uptime_seconds": int(time.time() - _start_time),
     }
 

@@ -20,6 +20,28 @@ def _job(**overrides):
 
 
 @pytest.mark.asyncio
+async def test_cost_history_aggregates_daily_values(tmp_path, monkeypatch):
+    logs = tmp_path / "kaos" / "logs"
+    logs.mkdir(parents=True)
+    monkeypatch.setattr(monitoring.settings, "db_path", str(tmp_path / "kaos" / "session.db"))
+    (logs / "cost.jsonl").write_text(
+        "\n".join([
+            json.dumps({"ts": "2026-04-26T10:00:00+00:00", "cost_usd": 0.0123}),
+            json.dumps({"ts": "2026-04-26T11:00:00+00:00", "cost_usd": 0.0044}),
+            json.dumps({"ts": "2026-04-27T10:00:00+00:00", "cost_usd": 0.02}),
+        ]),
+        encoding="utf-8",
+    )
+
+    result = await monitoring.get_cost_history(days=7)
+
+    assert result["days"] == [
+        {"date": "2026-04-26", "cost_usd": 0.0167, "requests": 2},
+        {"date": "2026-04-27", "cost_usd": 0.02, "requests": 1},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_jobs_endpoint_reports_schedule_and_controls(monkeypatch):
     fake_scheduler = SimpleNamespace(jobs={
         "heartbeat": _job(last_run=1777284000.0),

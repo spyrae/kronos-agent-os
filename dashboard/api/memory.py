@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from dashboard.auth import verify_token
 from kronos.config import settings
+from kronos.memory import fts
 from kronos.memory.store import add_memories, get_all_memories, get_memory, search_memories
 
 router = APIRouter(prefix="/api/memory", tags=["memory"], dependencies=[Depends(verify_token)])
@@ -395,12 +396,15 @@ class AddMemory(BaseModel):
 @router.post("/add")
 async def add(body: AddMemory):
     """Manually add a memory."""
-    try:
-        messages = [{"role": "user", "content": body.text}]
-        add_memories(messages, user_id=body.user_id)
-        return {"ok": True}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "text is required")
+
+    user_id = body.user_id or settings.agent_name
+    # Manual dashboard add must work in lightweight installs without optional
+    # vector-memory dependencies or provider credentials.
+    indexed = fts.index_facts_batch([text], user_id)
+    return {"ok": indexed > 0, "indexed": indexed, "user_id": user_id}
 
 
 @router.post("/test")

@@ -275,7 +275,7 @@ function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Footer */}
         <div style={{ padding: '0.75rem 0.5rem', borderTop: '1px solid #1a1a1a', marginTop: '0.5rem' }}>
-          <div style={{ fontSize: '0.65rem', color: '#333', marginBottom: '0.5rem' }}>v0.2.0 · Kronos Agent OS</div>
+          <div style={{ fontSize: '0.65rem', color: '#333', marginBottom: '0.5rem' }}>v0.1.0 · Kronos Agent OS</div>
           <button
             onClick={() => { localStorage.removeItem('kronos_token'); window.location.reload(); }}
             style={{

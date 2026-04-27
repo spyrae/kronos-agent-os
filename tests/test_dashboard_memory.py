@@ -4,6 +4,8 @@ import sqlite3
 import pytest
 
 from dashboard.api import memory
+from kronos import db
+from kronos.memory import fts
 
 
 def _configure_memory_paths(tmp_path, monkeypatch):
@@ -40,19 +42,31 @@ def _seed_memory_dbs(db_dir, swarm_db):
         conn.execute("INSERT INTO memory_fts VALUES (1, 'User prefers Python examples')")
 
     with sqlite3.connect(db_dir / "knowledge_graph.db") as conn:
-        conn.execute("CREATE TABLE entities (id INTEGER PRIMARY KEY, name TEXT, type TEXT, properties TEXT, created_at TEXT, updated_at TEXT)")
-        conn.execute("CREATE TABLE relations (id INTEGER PRIMARY KEY, source_id INTEGER, target_id INTEGER, relation_type TEXT, properties TEXT, created_at TEXT)")
-        conn.execute("INSERT INTO entities VALUES (1, 'KAOS', 'project', '{}', '2026-04-27T10:00:00+00:00', '2026-04-27T10:00:00+00:00')")
+        conn.execute(
+            "CREATE TABLE entities (id INTEGER PRIMARY KEY, name TEXT, type TEXT, properties TEXT, created_at TEXT, updated_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE relations (id INTEGER PRIMARY KEY, source_id INTEGER, target_id INTEGER, relation_type TEXT, properties TEXT, created_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO entities VALUES (1, 'KAOS', 'project', '{}', '2026-04-27T10:00:00+00:00', '2026-04-27T10:00:00+00:00')"
+        )
 
     with sqlite3.connect(swarm_db) as conn:
-        conn.execute("CREATE TABLE shared_user_facts (id INTEGER PRIMARY KEY, user_id TEXT, fact TEXT, source_agent TEXT, created_at REAL, last_accessed_at REAL, access_count INTEGER)")
+        conn.execute(
+            "CREATE TABLE shared_user_facts (id INTEGER PRIMARY KEY, user_id TEXT, fact TEXT, source_agent TEXT, created_at REAL, last_accessed_at REAL, access_count INTEGER)"
+        )
         conn.execute("INSERT INTO shared_user_facts VALUES (1, 'u1', 'Shared launch preference', 'kaos', 100.0, 200.0, 2)")
 
     with sqlite3.connect(db_dir / "session.db") as conn:
         conn.execute("CREATE TABLE sessions (thread_id TEXT PRIMARY KEY, messages TEXT, updated_at TEXT)")
         conn.execute(
             "INSERT INTO sessions VALUES (?, ?, ?)",
-            ("thread-1", json.dumps([{"type": "HumanMessage", "content": "remember Python"}]), "2026-04-27T12:00:00+00:00"),
+            (
+                "thread-1",
+                json.dumps([{"type": "HumanMessage", "content": "remember Python"}]),
+                "2026-04-27T12:00:00+00:00",
+            ),
         )
 
 
@@ -96,3 +110,22 @@ async def test_memory_reset_requires_confirmation_and_resets_scope(tmp_path, mon
     assert reset["ok"] is True
     assert reset["scope"] == "sessions"
     assert result["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_manual_memory_add_indexes_fact_for_inspector(tmp_path, monkeypatch):
+    monkeypatch.setattr(memory.settings, "agent_name", "demo")
+    monkeypatch.setattr(memory.settings, "db_dir", str(tmp_path / "data" / "demo"))
+    monkeypatch.setattr(memory.settings, "db_path", str(tmp_path / "data" / "demo" / "session.db"))
+    monkeypatch.setattr(memory.settings, "swarm_db_path", str(tmp_path / "data" / "swarm.db"))
+    db._instances.clear()
+    monkeypatch.setattr(fts, "_schema_initialized", False)
+
+    added = await memory.add(memory.AddMemory(text="QA smoke fact: dashboard memory add works."))
+    records = await memory.list_memory_records(query="dashboard", type="all", source="all", session="all", limit=200)
+
+    assert added["ok"] is True
+    assert added["indexed"] == 1
+    assert added["user_id"] == "demo"
+    assert records["total"] == 1
+    assert records["records"][0]["memory"] == "QA smoke fact: dashboard memory add works."

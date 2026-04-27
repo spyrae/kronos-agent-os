@@ -11,6 +11,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from dashboard.api.agents import router as agents_router
 from dashboard.api.anomalies import router as anomalies_router
@@ -38,6 +39,18 @@ from dashboard.config import (
 from dashboard.ws.handlers import install_log_handler, ws_logs
 
 log = logging.getLogger("kronos.dashboard")
+
+
+class SPAStaticFiles(StaticFiles):
+    """Serve index.html for client-side dashboard routes."""
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404 and scope.get("method") in {"GET", "HEAD"}:
+                return await super().get_response("index.html", scope)
+            raise
 
 
 def create_app(scheduler=None, agent=None) -> FastAPI:
@@ -84,7 +97,7 @@ def create_app(scheduler=None, agent=None) -> FastAPI:
     # Serve React frontend (if built)
     static_dir = Path(__file__).parent.parent / "dashboard-ui" / "dist"
     if static_dir.is_dir():
-        app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="ui")
+        app.mount("/", SPAStaticFiles(directory=str(static_dir), html=True), name="ui")
         log.info("Serving UI from %s", static_dir)
 
     # Install WebSocket log handler

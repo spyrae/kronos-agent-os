@@ -127,6 +127,13 @@ def test_dashboard_ui_declares_node_engine():
     assert package["devDependencies"]["@vitejs/plugin-react"].startswith("^4.")
 
 
+def test_dashboard_ui_displays_current_release_version():
+    app = (ROOT / "dashboard-ui" / "src" / "App.tsx").read_text(encoding="utf-8")
+
+    assert "v0.1.0 · Kronos Agent OS" in app
+    assert "v0.2.0" not in app
+
+
 def test_python_package_has_public_metadata():
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = pyproject["project"]

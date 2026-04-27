@@ -251,7 +251,7 @@ async def get_cost_history(days: int = Query(7, le=90)):
                 continue
 
     result = [
-        {"date": date, "cost_usd": round(cost, 4), "requests": daily_count[date]}
+        {"date": date, "cost_usd": round(daily[date], 4), "requests": daily_count[date]}
         for date in sorted(daily.keys())[-days:]
     ]
     return {"days": result}
