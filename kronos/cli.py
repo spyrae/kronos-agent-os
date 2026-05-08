@@ -19,7 +19,12 @@ from typing import Any
 
 from kronos import __version__
 from kronos.config import settings
-from kronos.llm import ModelTier, describe_provider_chain, is_runtime_llm_configured
+from kronos.llm import (
+    ModelTier,
+    describe_custom_provider_chain,
+    describe_provider_chain,
+    is_runtime_llm_configured,
+)
 from kronos.logging import install_pii_filter
 from kronos.security.pii import mask_pii
 
@@ -315,6 +320,24 @@ def run_doctor() -> int:
             ok(f"LLM {tier.value}", " -> ".join(configured))
         else:
             warn(f"LLM {tier.value}", f"No configured providers in chain: {', '.join(missing) or '(empty)'}")
+        provider_lines.extend(configured)
+
+    if settings.kaos_orchestrator_provider_chain.strip():
+        rows = describe_custom_provider_chain([
+            provider.strip().lower().replace("-", "_")
+            for provider in settings.kaos_orchestrator_provider_chain.split(",")
+            if provider.strip()
+        ])
+        configured = [
+            f"{row['provider']}:{row['model']}"
+            for row in rows
+            if row["configured"]
+        ]
+        missing = [str(row["provider"]) for row in rows if not row["configured"]]
+        if configured:
+            ok("LLM orchestrator", " -> ".join(configured))
+        else:
+            warn("LLM orchestrator", f"No configured providers in chain: {', '.join(missing) or '(empty)'}")
         provider_lines.extend(configured)
 
     if provider_lines:

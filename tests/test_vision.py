@@ -31,7 +31,7 @@ async def test_analyze_image_bytes_sends_responses_image_input(monkeypatch):
             self.responses = FakeResponses()
 
     monkeypatch.setattr(settings, "kaos_vision_provider", "openai-api")
-    monkeypatch.setattr(settings, "kaos_vision_model", "gpt-5.2-codex")
+    monkeypatch.setattr(settings, "kaos_vision_model", "gpt-5.5")
     monkeypatch.setattr(settings, "openai_api_key", "sk-test")
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI))
 
@@ -42,9 +42,9 @@ async def test_analyze_image_bytes_sends_responses_image_input(monkeypatch):
     )
 
     assert result.text == "Текст на картинке: hello"
-    assert result.model == "gpt-5.2-codex"
+    assert result.model == "gpt-5.5"
     request = calls[0]
-    assert request["model"] == "gpt-5.2-codex"
+    assert request["model"] == "gpt-5.5"
     content = request["input"][0]["content"]
     assert content[0]["type"] == "input_text"
     assert "Сделай OCR" in content[0]["text"]
@@ -57,7 +57,7 @@ async def test_analyze_image_bytes_sends_responses_image_input(monkeypatch):
 async def test_analyze_image_bytes_requires_configuration(monkeypatch):
     monkeypatch.setattr(settings, "kaos_vision_provider", "openai-api")
     monkeypatch.setattr(settings, "openai_api_key", "")
-    monkeypatch.setattr(settings, "kaos_vision_model", "gpt-5.2-codex")
+    monkeypatch.setattr(settings, "kaos_vision_model", "gpt-5.5")
 
     with pytest.raises(RuntimeError, match="OpenAI API vision is not configured"):
         await analyze_image_bytes(b"fake-image", mime_type="image/jpeg")
@@ -83,7 +83,7 @@ async def test_analyze_image_bytes_uses_codex_cli_without_api_key(monkeypatch):
 
     monkeypatch.setattr(settings, "kaos_vision_provider", "codex-cli")
     monkeypatch.setattr(settings, "kaos_codex_command", "codex")
-    monkeypatch.setattr(settings, "kaos_vision_model", "gpt-5.2-codex")
+    monkeypatch.setattr(settings, "kaos_vision_model", "gpt-5.5")
     monkeypatch.setattr(settings, "openai_api_key", "")
     monkeypatch.setattr(vision.shutil, "which", lambda command: f"/usr/local/bin/{command}")
     monkeypatch.setattr(vision.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
@@ -91,7 +91,7 @@ async def test_analyze_image_bytes_uses_codex_cli_without_api_key(monkeypatch):
     result = await analyze_image_bytes(b"fake-image", mime_type="image/jpeg", context="OCR")
 
     assert result.text == "Detected text: halo"
-    assert result.model == "gpt-5.2-codex"
+    assert result.model == "gpt-5.5"
     assert calls[0][:2] == ["codex", "exec"]
     assert "--images" in calls[0]
     assert "--ephemeral" in calls[0]

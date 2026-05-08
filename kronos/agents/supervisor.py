@@ -29,7 +29,7 @@ from kronos.agents.telegram_channels import create_telegram_channels_agent
 from kronos.agents.topic_research.graph import create_topic_research_agent
 from kronos.config import settings
 from kronos.engine import AgentResult, react_loop
-from kronos.llm import ModelTier, get_model
+from kronos.llm import get_orchestrator_model
 
 log = logging.getLogger("kronos.agents.supervisor")
 
@@ -288,7 +288,7 @@ def build_supervisor(
         persona_context=persona_snippet,
     )
 
-    model = get_model(ModelTier.STANDARD)
+    model = get_orchestrator_model()
 
     # Supervisor-only tools: skills, gateway, dynamic tools
     SUPERVISOR_TOOL_NAMES = {

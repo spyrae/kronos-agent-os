@@ -18,6 +18,14 @@ DEEPSEEK_API_KEY=sk-...
 Provider chains are ordered fallback lists. If the first provider is missing,
 fails, or enters cooldown, KAOS tries the next provider.
 
+The top-level supervisor/orchestrator can be routed through a separate chain:
+
+```env
+KAOS_ORCHESTRATOR_PROVIDER_CHAIN=codex-cli
+```
+
+If this is unset, the orchestrator uses the `standard` chain.
+
 ## Built-In Presets
 
 | Provider id | Adapter | Default model | Key env | Notes |
@@ -26,6 +34,7 @@ fails, or enters cooldown, KAOS tries the next provider.
 | `fireworks` | OpenAI-compatible | `accounts/fireworks/routers/kimi-k2p5-turbo` | `FIREWORKS_API_KEY` | Same default, easier to override |
 | `deepseek` | DeepSeek SDK | `deepseek-chat` | `DEEPSEEK_API_KEY` | Good lite/default fallback |
 | `openai` | OpenAI-compatible | `gpt-4.1-mini` | `OPENAI_API_KEY` | Official OpenAI endpoint |
+| `codex-cli` | Codex CLI | `gpt-5.5` | none | Uses local Codex OAuth/API login |
 | `openrouter` | OpenAI-compatible | `openai/gpt-4.1-mini` | `OPENROUTER_API_KEY` | Route many hosted models |
 | `groq` | OpenAI-compatible | `llama-3.3-70b-versatile` | `GROQ_API_KEY` | Fast hosted inference |
 | `together` | OpenAI-compatible | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | `TOGETHER_API_KEY` | Hosted open models |
@@ -41,9 +50,39 @@ fails, or enters cooldown, KAOS tries the next provider.
 KAOS_STANDARD_PROVIDER_CHAIN=openai
 KAOS_LITE_PROVIDER_CHAIN=openai
 KAOS_PROVIDER_OPENAI_MODEL=gpt-4.1-mini
+OPENAI_API_KEY=sk-proj-...
+```
+
+### OpenAI / ChatGPT OAuth via Codex CLI
+
+Use this when you want the main supervisor/orchestrator to use the machine's
+Codex CLI login instead of an OpenAI API key:
+
+```env
+KAOS_ORCHESTRATOR_PROVIDER_CHAIN=codex-cli
+KAOS_CODEX_COMMAND=codex
+KAOS_CODEX_MODEL=gpt-5.5
+KAOS_CODEX_TIMEOUT_SECONDS=180
+```
+
+On the machine that runs KAOS:
+
+```bash
+codex login --device-auth
+kaos doctor
+```
+
+`codex-cli` is best for the orchestrator because it can use ChatGPT/Codex OAuth
+credentials while KAOS still executes its own tools. Keep `lite` tasks on
+DeepSeek or another fast provider unless you explicitly want every background
+cron/model call to spawn Codex CLI.
+
+For image/OCR intake:
+
+```env
 # Default Telegram image/OCR intake uses Codex CLI OAuth credentials.
 KAOS_VISION_PROVIDER=codex-cli
-KAOS_VISION_MODEL=gpt-5.2-codex
+KAOS_VISION_MODEL=gpt-5.5
 ```
 
 Telegram image messages use Codex CLI by default, so `OPENAI_API_KEY` is not
@@ -57,7 +96,7 @@ If you want to bypass Codex CLI and call the OpenAI Responses API directly:
 ```env
 KAOS_VISION_PROVIDER=openai-api
 OPENAI_API_KEY=sk-proj-...
-KAOS_VISION_MODEL=gpt-5.2-codex
+KAOS_VISION_MODEL=gpt-5.5
 ```
 
 ### OpenRouter
@@ -128,6 +167,7 @@ KAOS_PROVIDER_MY_LAB_TEMPERATURE=0.5
 | Fireworks/Kimi | yes | provider/model dependent | no | `standard` | KAOS default standard model |
 | DeepSeek | yes | provider/model dependent | no | `lite`, fallback | KAOS default lite model |
 | OpenAI | yes | strong | no | `standard` or `lite` | Most predictable for tools |
+| Codex CLI | yes | KAOS JSON bridge | local CLI | `orchestrator` | Uses `codex login`; slower startup per call |
 | OpenRouter | yes | model dependent | no | `standard` | Choose a model with tool support |
 | Groq | yes | model dependent | no | `lite` or fast standard | Very fast, check tool support per model |
 | Together | yes | model dependent | no | `standard` | Good hosted open-model option |
@@ -137,7 +177,9 @@ KAOS_PROVIDER_MY_LAB_TEMPERATURE=0.5
 ## Troubleshooting
 
 - Run `kaos doctor` after editing `.env`; it prints the resolved standard/lite
-  provider chains.
+  provider chains and the orchestrator chain when set.
+- For `codex-cli`, `kaos doctor` must run under the same OS user that runs KAOS.
+  Complete `codex login --device-auth` for that user.
 - If a provider shows missing, check the chain id and key env var.
 - If a provider is OpenAI-compatible but not listed above, configure it with
   `KAOS_PROVIDER_<ID>_MODEL`, `BASE_URL`, and `API_KEY_ENV`.

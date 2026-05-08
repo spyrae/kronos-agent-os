@@ -8,6 +8,7 @@ from kronos.llm import (
     ModelTier,
     describe_provider_chain,
     get_model,
+    get_orchestrator_model,
     is_runtime_llm_configured,
     provider_chain,
     reset_provider_state,
@@ -21,6 +22,10 @@ def _clear_llm_keys(monkeypatch):
     monkeypatch.setattr(settings, "openai_api_key", "")
     monkeypatch.setattr(settings, "groq_api_key", "")
     monkeypatch.setattr(settings, "litellm_admin_key", "")
+    monkeypatch.setattr(settings, "kaos_orchestrator_provider_chain", "")
+    monkeypatch.setattr(settings, "kaos_codex_command", "codex")
+    monkeypatch.setattr(settings, "kaos_codex_model", "gpt-5.5")
+    monkeypatch.setattr(settings, "kaos_codex_timeout_seconds", 180)
     for name in [
         "FIREWORKS_API_KEY",
         "DEEPSEEK_API_KEY",
@@ -31,6 +36,9 @@ def _clear_llm_keys(monkeypatch):
         "LITELLM_API_KEY",
         "OLLAMA_API_KEY",
         "MY_LAB_API_KEY",
+        "KAOS_PROVIDER_CODEX_CLI_COMMAND",
+        "KAOS_PROVIDER_CODEX_CLI_MODEL",
+        "KAOS_PROVIDER_CODEX_CLI_TIMEOUT_SECONDS",
     ]:
         monkeypatch.delenv(name, raising=False)
 
@@ -90,6 +98,49 @@ def test_local_openai_compatible_provider_does_not_require_api_key(monkeypatch):
     assert config.ready is True
     assert config.api_key_required is False
     assert config.base_url == "http://127.0.0.1:11434/v1"
+
+
+def test_codex_cli_provider_uses_command_not_api_key(monkeypatch):
+    _clear_llm_keys(monkeypatch)
+    monkeypatch.setattr("kronos.llm.shutil.which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(settings, "kaos_codex_command", "codex")
+    monkeypatch.setattr(settings, "kaos_codex_model", "gpt-5.5")
+    monkeypatch.setattr(settings, "kaos_codex_timeout_seconds", 240)
+
+    config = resolve_provider_config("codex-cli")
+
+    assert config is not None
+    assert config.adapter == "codex-cli"
+    assert config.ready is True
+    assert config.api_key_required is False
+    assert config.api_key == ""
+    assert config.command == "codex"
+    assert config.model == "gpt-5.5"
+    assert config.timeout_seconds == 240
+
+
+def test_get_orchestrator_model_uses_separate_chain(monkeypatch):
+    _clear_llm_keys(monkeypatch)
+    reset_provider_state()
+    calls = []
+
+    class FakeCodex:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setitem(sys.modules, "kronos.llm_codex", SimpleNamespace(ChatCodexCLI=FakeCodex))
+    monkeypatch.setattr("kronos.llm.shutil.which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(settings, "kaos_orchestrator_provider_chain", "codex-cli")
+    monkeypatch.setattr(settings, "kaos_standard_provider_chain", "kimi")
+    monkeypatch.setattr(settings, "kaos_codex_command", "codex")
+    monkeypatch.setattr(settings, "kaos_codex_model", "gpt-5.5")
+
+    model = get_orchestrator_model()
+
+    assert isinstance(model, FakeCodex)
+    assert calls[0]["model_name"] == "gpt-5.5"
+    assert calls[0]["command"] == "codex"
+    reset_provider_state()
 
 
 def test_get_model_uses_openai_compatible_adapter(monkeypatch):

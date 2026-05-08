@@ -21,6 +21,7 @@ agents.yaml
 data/
 *.db
 *.sqlite
+*.log
 
 # Local agent workspaces are runtime state. Keep only public templates/docs.
 workspaces/*

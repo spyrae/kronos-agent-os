@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -49,9 +50,13 @@ class ProviderConfig:
     max_tokens: int = 4096
     temperature: float = 0.5
     api_key_required: bool = True
+    command: str = ""
+    timeout_seconds: int = 180
 
     @property
     def ready(self) -> bool:
+        if self.adapter in {"codex-cli", "codex_cli"}:
+            return bool(self.model and self.command and shutil.which(self.command))
         return bool(self.model) and (bool(self.api_key) or not self.api_key_required)
 
     @property
@@ -73,6 +78,8 @@ class ProviderConfig:
             self.max_tokens,
             self.temperature,
             self.api_key_required,
+            self.command,
+            self.timeout_seconds,
         )
 
 
@@ -196,6 +203,13 @@ _PRESETS: dict[str, dict[str, object]] = {
         "api_key_env": "OPENAI_API_KEY",
         "max_tokens": 4096,
     },
+    "codex_cli": {
+        "adapter": "codex-cli",
+        "model": "gpt-5.5",
+        "api_key_required": False,
+        "max_tokens": 4096,
+        "timeout_seconds": 180,
+    },
     "openrouter": {
         "adapter": "openai-compatible",
         "model": "openai/gpt-4.1-mini",
@@ -247,7 +261,19 @@ _PRESETS: dict[str, dict[str, object]] = {
 def get_model(tier: ModelTier = ModelTier.STANDARD) -> BaseChatModel:
     """Get the first available chat model for the given tier."""
     chain = provider_chain(tier)
+    return _get_model_from_chain(chain, tier.value)
 
+
+def get_orchestrator_model() -> BaseChatModel:
+    """Get the model used by the top-level supervisor/orchestrator."""
+    raw = settings.kaos_orchestrator_provider_chain.strip()
+    if not raw:
+        return get_model(ModelTier.STANDARD)
+    return _get_model_from_chain(_parse_chain(raw), "orchestrator")
+
+
+def _get_model_from_chain(chain: list[str], label: str) -> BaseChatModel:
+    """Get the first available chat model from an explicit provider chain."""
     for provider in chain:
         if not _has_key(provider):
             continue
@@ -267,7 +293,7 @@ def get_model(tier: ModelTier = ModelTier.STANDARD) -> BaseChatModel:
             return model
 
     configured = ", ".join(chain) or "(empty chain)"
-    raise RuntimeError(f"No API keys configured for {tier.value} tier: {configured}")
+    raise RuntimeError(f"No configured LLM providers for {label}: {configured}")
 
 
 def get_fallback_model() -> BaseChatModel:
@@ -343,11 +369,10 @@ def invoke_with_fallback(
 
 def is_runtime_llm_configured() -> bool:
     """Return whether any provider in either configured chain is ready."""
-    return any(
-        _has_key(provider)
-        for tier in (ModelTier.STANDARD, ModelTier.LITE)
-        for provider in provider_chain(tier)
-    )
+    chains = [provider_chain(ModelTier.STANDARD), provider_chain(ModelTier.LITE)]
+    if settings.kaos_orchestrator_provider_chain.strip():
+        chains.append(_parse_chain(settings.kaos_orchestrator_provider_chain))
+    return any(_has_key(provider) for chain in chains for provider in chain)
 
 
 def provider_chain(tier: ModelTier = ModelTier.STANDARD) -> list[str]:
@@ -363,8 +388,15 @@ def provider_chain(tier: ModelTier = ModelTier.STANDARD) -> list[str]:
 
 def describe_provider_chain(tier: ModelTier = ModelTier.STANDARD) -> list[dict[str, object]]:
     """Return provider state for CLI/docs without constructing models."""
+    return describe_custom_provider_chain(
+        provider_chain(tier),
+    )
+
+
+def describe_custom_provider_chain(chain: list[str]) -> list[dict[str, object]]:
+    """Return provider state for an explicit chain without constructing models."""
     rows: list[dict[str, object]] = []
-    for provider in provider_chain(tier):
+    for provider in chain:
         config = resolve_provider_config(provider)
         rows.append({
             "provider": provider,
@@ -374,6 +406,7 @@ def describe_provider_chain(tier: ModelTier = ModelTier.STANDARD) -> list[dict[s
             "api_key_env": config.api_key_env if config else "",
             "api_key_required": config.api_key_required if config else True,
             "adapter": config.adapter if config else "",
+            "command": config.command if config else "",
         })
     return rows
 
@@ -392,6 +425,14 @@ def resolve_provider_config(provider: str) -> ProviderConfig | None:
     max_tokens = _int_env(prefix + "MAX_TOKENS", int(preset.get("max_tokens", 4096)))
     temperature = _float_env(prefix + "TEMPERATURE", float(preset.get("temperature", 0.5)))
     api_key_required = _bool_env(prefix + "API_KEY_REQUIRED", bool(preset.get("api_key_required", True)))
+    command = str(_env(prefix + "COMMAND", preset.get("command", "")))
+    timeout_seconds = _int_env(prefix + "TIMEOUT_SECONDS", int(preset.get("timeout_seconds", 180)))
+
+    if provider_id == "codex_cli":
+        if not model:
+            model = settings.kaos_codex_model
+        command = command or settings.kaos_codex_command
+        timeout_seconds = _int_env(prefix + "TIMEOUT_SECONDS", settings.kaos_codex_timeout_seconds)
 
     if not api_key and api_key_env:
         api_key = _api_key_from_env(api_key_env)
@@ -409,6 +450,8 @@ def resolve_provider_config(provider: str) -> ProviderConfig | None:
         max_tokens=max_tokens,
         temperature=temperature,
         api_key_required=api_key_required,
+        command=command,
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -457,6 +500,16 @@ def _create_model(config: ProviderConfig) -> BaseChatModel | None:
             if callbacks:
                 kwargs["callbacks"] = callbacks
             return ChatDeepSeek(**kwargs)
+
+        if config.adapter in {"codex-cli", "codex_cli"}:
+            from kronos.llm_codex import ChatCodexCLI
+
+            return ChatCodexCLI(
+                model_name=config.model,
+                command=config.command,
+                timeout_seconds=config.timeout_seconds,
+                cwd=os.getcwd(),
+            )
 
         log.error("Unsupported LLM adapter '%s' for provider '%s'", config.adapter, config.provider_id)
     except Exception as e:
