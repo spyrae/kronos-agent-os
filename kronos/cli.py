@@ -419,6 +419,21 @@ def run_doctor() -> int:
     else:
         warn("Telegram access", "DMs blocked until ALLOWED_USERS is set")
 
+    if not settings.telegram_group_responses_enabled:
+        warn("Telegram group responses", "observe-only; group messages are recorded but not answered")
+    elif settings.telegram_swarm_chat_id:
+        topic_bits = [
+            f"general={settings.telegram_general_topic_id or 'unset'}",
+            f"kronos={settings.telegram_kronos_topic_id or 'unset'}->{settings.telegram_kronos_agent}",
+            f"finance={settings.telegram_finance_topic_id or 'unset'}->{settings.telegram_finance_agent}",
+            f"digest={settings.telegram_digest_topic_id or 'unset'}->{settings.telegram_digest_agent}",
+        ]
+        ok("Telegram topic policy", f"chat={settings.telegram_swarm_chat_id}; " + ", ".join(topic_bits))
+        if not settings.telegram_general_topic_id:
+            warn("Telegram general topic", "unset; configured swarm chat without a general routing topic")
+    else:
+        ok("Telegram topic policy", "not configured; legacy group routing")
+
     print("KAOS doctor\n")
     failed = 0
     for status, name, detail in checks:

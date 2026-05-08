@@ -10,6 +10,7 @@ import os
 import random
 import tempfile
 import time
+from dataclasses import dataclass
 
 import aiohttp
 from aiohttp import web
@@ -39,7 +40,13 @@ GROQ_WHISPER_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_WHISPER_MODEL = "whisper-large-v3-turbo"
 
 # Default chat for cron notifications
-DEFAULT_NOTIFY_CHAT = int(os.environ.get("DEFAULT_NOTIFY_CHAT", "0"))
+DEFAULT_NOTIFY_CHAT = int(os.environ.get("DEFAULT_NOTIFY_CHAT") or "0")
+if not DEFAULT_NOTIFY_CHAT and settings.telegram_swarm_chat_id:
+    DEFAULT_NOTIFY_CHAT = (
+        int(f"-100{settings.telegram_swarm_chat_id}")
+        if settings.telegram_swarm_chat_id > 0
+        else settings.telegram_swarm_chat_id
+    )
 
 # Agent lock — one request at a time
 _agent_lock = asyncio.Lock()
@@ -52,6 +59,127 @@ _my_username: str | None = None
 
 # Group routing (initialized in run_bridge after login)
 _group_router = None  # GroupRouter | None
+
+
+@dataclass(frozen=True)
+class TopicRoute:
+    """Routing mode for a configured Telegram forum topic."""
+
+    mode: str  # default | swarm | owner | silent
+    label: str = ""
+    owner_agent: str = ""
+
+
+@dataclass(frozen=True)
+class TopicDecision:
+    """Small decision object compatible with group_router.RoutingDecision."""
+
+    should_respond: bool
+    delay: float
+    tier: int
+    reason: str
+    addressing: object | None = None
+
+
+def _normalize_telegram_chat_id(chat_id: int | None) -> int | None:
+    """Normalize Telegram supergroup ids for matching.
+
+    Telegram topic links use the internal id (3642435967), while Bot API and
+    Telethon commonly expose the same supergroup as -1003642435967.
+    """
+    if chat_id is None:
+        return None
+    normalized = abs(int(chat_id))
+    if normalized > 1_000_000_000_000 and str(normalized).startswith("100"):
+        normalized -= 1_000_000_000_000
+    return normalized
+
+
+def _same_telegram_chat(left: int | None, right: int | None) -> bool:
+    if not left or not right:
+        return False
+    return _normalize_telegram_chat_id(left) == _normalize_telegram_chat_id(right)
+
+
+def _resolve_topic_route(chat_id: int, topic_id: int | None) -> TopicRoute:
+    """Return how this process should treat a group/topic message."""
+    if not settings.telegram_swarm_chat_id:
+        return TopicRoute("default")
+    if not _same_telegram_chat(chat_id, settings.telegram_swarm_chat_id):
+        return TopicRoute("default")
+
+    topic = topic_id or 0
+    general_topic = settings.telegram_general_topic_id
+
+    if general_topic and topic == general_topic:
+        return TopicRoute("swarm", label="general")
+    if not general_topic and topic == 0:
+        return TopicRoute("swarm", label="general")
+
+    owner_topics = (
+        (settings.telegram_kronos_topic_id, settings.telegram_kronos_agent, "kronos"),
+        (settings.telegram_finance_topic_id, settings.telegram_finance_agent, "finance"),
+        (settings.telegram_digest_topic_id, settings.telegram_digest_agent, "digest"),
+    )
+    for configured_topic, owner_agent, label in owner_topics:
+        if configured_topic and topic == configured_topic:
+            return TopicRoute("owner", label=label, owner_agent=(owner_agent or "").lower())
+
+    return TopicRoute("silent", label=f"unconfigured:{topic}")
+
+
+def _agent_owns_topic(route: TopicRoute) -> bool:
+    return route.owner_agent == settings.agent_name.lower()
+
+
+def _clip_context_text(text: str, limit: int = 500) -> str:
+    compact = " ".join((text or "").split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _format_shared_group_context(
+    swarm,
+    *,
+    chat_id: int,
+    topic_id: int | None,
+    current_msg_id: int | None,
+) -> str:
+    """Build transient context from the shared swarm ledger."""
+    limit = max(0, min(settings.telegram_shared_context_messages, 30))
+    if limit <= 0:
+        return ""
+
+    try:
+        rows = swarm.get_recent_messages(chat_id=chat_id, topic_id=topic_id, limit=limit + 1)
+    except Exception as e:
+        log.warning("[Swarm] Failed to load shared topic context: %s", e)
+        return ""
+
+    rows = [row for row in rows if row.get("msg_id") != current_msg_id]
+    if not rows:
+        return ""
+
+    lines: list[str] = []
+    for row in reversed(rows[:limit]):
+        sender_type = row.get("sender_type")
+        if sender_type == "agent":
+            who = f"Агент {row.get('agent_name') or 'unknown'}"
+        elif sender_type == "system":
+            who = "Система"
+        else:
+            who = "Пользователь"
+        lines.append(f"- {who}: {_clip_context_text(str(row.get('text') or ''))}")
+
+    if not lines:
+        return ""
+    return (
+        "[Общая история этого Telegram-топика]\n"
+        "Ниже недавние сообщения из общего журнала. Используй их как контекст, "
+        "но не считай новым запросом и не пересказывай без необходимости.\n"
+        + "\n".join(lines)
+    )
 
 
 async def _rate_limit_wait(chat_id: int) -> None:
@@ -331,49 +459,70 @@ async def _typing_loop(chat_id: int, stop_event: asyncio.Event) -> None:
         pass  # typing indicator is best-effort
 
 
-async def _send_bot_api_message(chat_id: int, text: str, topic_id: int) -> None:
-    """Send message via Bot API with message_thread_id (for DM Topics)."""
+async def _send_bot_api_message(chat_id: int, text: str, topic_id: int) -> int | None:
+    """Send message via Bot API with message_thread_id and return first msg id."""
     url = f"https://api.telegram.org/bot{settings.tg_bot_token}/sendMessage"
 
     chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)] if len(text) > 4000 else [text]
+    first_msg_id: int | None = None
 
-    for chunk in chunks:
-        body = {
-            "chat_id": chat_id,
-            "text": chunk,
-            "message_thread_id": topic_id,
-            "parse_mode": "Markdown",
-        }
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=body, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    if resp.status != 200:
-                        # Markdown parse error → retry without parse_mode
-                        body.pop("parse_mode", None)
-                        async with session.post(url, json=body, timeout=aiohttp.ClientTimeout(total=15)) as retry:
-                            if retry.status != 200:
-                                err = await retry.text()
-                                if retry.status == 400 and "message_thread" in err:
-                                    no_topic_body = dict(body)
-                                    no_topic_body.pop("message_thread_id", None)
-                                    async with session.post(
-                                        url,
-                                        json=no_topic_body,
-                                        timeout=aiohttp.ClientTimeout(total=15),
-                                    ) as no_topic_retry:
-                                        if no_topic_retry.status != 200:
-                                            fallback_err = await no_topic_retry.text()
-                                            log.error(
-                                                "Bot API send failed after topic fallback: %s %s",
-                                                no_topic_retry.status,
-                                                fallback_err[:200],
-                                            )
-                                else:
-                                    log.error("Bot API send failed: %s %s", retry.status, err[:200])
-        except Exception as e:
-            log.error("Bot API send error: %s", e)
-        if len(chunks) > 1:
-            await asyncio.sleep(0.5)
+    async with aiohttp.ClientSession() as session:
+        for chunk in chunks:
+            body = {
+                "chat_id": chat_id,
+                "text": chunk,
+                "message_thread_id": topic_id,
+                "parse_mode": "Markdown",
+            }
+            try:
+                msg_id = await _post_bot_api_message(session, url, body)
+                if first_msg_id is None:
+                    first_msg_id = msg_id
+            except Exception as e:
+                log.error("Bot API send error: %s", e)
+            if len(chunks) > 1:
+                await asyncio.sleep(0.5)
+
+    return first_msg_id
+
+
+async def _post_bot_api_message(
+    session: aiohttp.ClientSession,
+    url: str,
+    body: dict,
+) -> int | None:
+    """POST one Bot API message with Markdown and topic fallbacks."""
+    timeout = aiohttp.ClientTimeout(total=15)
+
+    async with session.post(url, json=body, timeout=timeout) as resp:
+        if resp.status == 200:
+            data = await resp.json()
+            return int(data.get("result", {}).get("message_id") or 0) or None
+        err = await resp.text()
+
+    # Markdown parse error -> retry as plain text.
+    plain_body = dict(body)
+    plain_body.pop("parse_mode", None)
+    async with session.post(url, json=plain_body, timeout=timeout) as retry:
+        if retry.status == 200:
+            data = await retry.json()
+            return int(data.get("result", {}).get("message_id") or 0) or None
+        retry_err = await retry.text()
+        if retry.status != 400 or "message_thread" not in retry_err:
+            log.error("Bot API send failed: %s %s", retry.status, retry_err[:200])
+            return None
+
+    # Last resort: send to chat without topic so alerts are not lost.
+    no_topic_body = dict(plain_body)
+    no_topic_body.pop("message_thread_id", None)
+    async with session.post(url, json=no_topic_body, timeout=timeout) as fallback:
+        if fallback.status == 200:
+            data = await fallback.json()
+            log.warning("Bot API sent without topic after message_thread_id failure")
+            return int(data.get("result", {}).get("message_id") or 0) or None
+        fallback_err = await fallback.text()
+        log.error("Bot API send failed after topic fallback: %s %s", fallback.status, fallback_err[:200])
+        return None
 
 
 async def _clear_context(chat_id: int, topic_id: int | None = None) -> str:
@@ -690,10 +839,54 @@ async def run_bridge(agent: KronosAgent) -> None:
                 text=text,
             )
 
+        topic_route = TopicRoute("default")
+        if not is_dm:
+            topic_route = _resolve_topic_route(event.chat_id, topic_id_inbound)
+
         # Group filtering
         decision = None
         if not is_dm:
-            if _group_router:
+            if not settings.telegram_group_responses_enabled:
+                log.info("[TopicPolicy] %s observing group message only", settings.agent_name)
+                return
+
+            if topic_route.mode == "silent":
+                log.info(
+                    "[TopicPolicy] %s skipping chat=%s topic=%s (%s)",
+                    settings.agent_name,
+                    event.chat_id,
+                    topic_id_inbound,
+                    topic_route.label,
+                )
+                return
+
+            if topic_route.mode == "owner":
+                if not _agent_owns_topic(topic_route):
+                    log.info(
+                        "[TopicPolicy] %s skipping owner topic=%s; owner=%s",
+                        settings.agent_name,
+                        topic_id_inbound,
+                        topic_route.owner_agent,
+                    )
+                    return
+                decision = TopicDecision(
+                    True,
+                    0.0,
+                    1,
+                    f"topic-owner:{topic_route.label}",
+                )
+                if swarm is not None:
+                    swarm.claim_reply(
+                        chat_id=event.chat_id,
+                        topic_id=topic_id_inbound,
+                        root_msg_id=event.message.id,
+                        trigger_msg_id=event.message.id,
+                        agent_name=settings.agent_name,
+                        tier=decision.tier,
+                        eta_ts=time.time(),
+                        reason=decision.reason,
+                    )
+            elif _group_router:
                 # Multi-agent group routing (all group types)
                 decision = await _group_router.decide(event, _client)
                 if not decision.should_respond:
@@ -822,7 +1015,24 @@ async def run_bridge(agent: KronosAgent) -> None:
         invoke_source_kind = "user"
         invoke_persist = True
 
-        if not is_dm and _group_router and decision is not None:
+        shared_group_context = ""
+        if not is_dm and swarm is not None:
+            shared_group_context = _format_shared_group_context(
+                swarm,
+                chat_id=event.chat_id,
+                topic_id=topic_id_inbound,
+                current_msg_id=event.message.id,
+            )
+
+        if not is_dm and topic_route.mode == "owner" and decision is not None:
+            sender_name = sender.first_name or "Unknown"
+            group_extra_context = (
+                f"[Закрепленный Telegram-топик: {topic_route.label}] "
+                f"Сообщение от {sender_name}. Этот топик закреплен за агентом "
+                f"{settings.agent_name}; остальные агенты должны молчать. "
+                f"Отвечай напрямую, без требования тегать тебя, и учитывай историю топика."
+            )
+        elif not is_dm and _group_router and decision is not None:
             sender_name = sender.first_name or "Unknown"
             is_peer_sender = _group_router._is_peer(user_id)
 
@@ -854,6 +1064,11 @@ async def run_bridge(agent: KronosAgent) -> None:
                     f"Не комментируй ответы других агентов, если они есть. "
                     f"Не описывай свой процесс мышления или фреймворки."
                 )
+
+        if not is_dm and shared_group_context:
+            group_extra_context = "\n\n".join(
+                part for part in (group_extra_context, shared_group_context) if part
+            )
 
         # Extract forum topic_id (for topic-based context isolation)
         topic_id = _extract_topic_id(event)
@@ -967,10 +1182,11 @@ async def run_bridge(agent: KronosAgent) -> None:
                         os.unlink(voice_path)
 
         sent_msg = None
+        sent_msg_id: int | None = None
         if not voice_sent:
             if topic_id and settings.tg_bot_token:
                 # Use Bot API with message_thread_id when a bot token is configured.
-                await _send_bot_api_message(event.chat_id, reply, topic_id)
+                sent_msg_id = await _send_bot_api_message(event.chat_id, reply, topic_id)
             elif topic_id:
                 sent_msg = await _client.send_message(event.chat_id, reply, reply_to=topic_id)
             elif len(reply) > 4000:
@@ -990,7 +1206,7 @@ async def run_bridge(agent: KronosAgent) -> None:
         # Swarm ledger: mark claim as sent, record outbound message. DMs
         # and fallback-router paths (no decision) skip this.
         if not is_dm and swarm is not None and decision is not None:
-            reply_msg_id = getattr(sent_msg, "id", None) if sent_msg is not None else None
+            reply_msg_id = sent_msg_id or (getattr(sent_msg, "id", None) if sent_msg is not None else None)
             swarm.mark_sent(
                 chat_id=event.chat_id,
                 topic_id=topic_id_inbound,

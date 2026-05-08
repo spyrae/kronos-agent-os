@@ -47,3 +47,57 @@ def test_runtime_info_query_reports_configured_codex_model(monkeypatch):
     assert "`codex-cli`" in reply
     assert "`gpt-5.5`" in reply
     assert "standard=kimi,deepseek" in reply
+
+
+def test_topic_route_matches_supergroup_link_id(monkeypatch):
+    monkeypatch.setattr(bridge.settings, "telegram_swarm_chat_id", 3642435967)
+    monkeypatch.setattr(bridge.settings, "telegram_general_topic_id", 23)
+    monkeypatch.setattr(bridge.settings, "telegram_kronos_topic_id", 18)
+    monkeypatch.setattr(bridge.settings, "telegram_finance_topic_id", 22)
+    monkeypatch.setattr(bridge.settings, "telegram_digest_topic_id", 24)
+    monkeypatch.setattr(bridge.settings, "telegram_kronos_agent", "kronos")
+    monkeypatch.setattr(bridge.settings, "telegram_finance_agent", "kronos")
+    monkeypatch.setattr(bridge.settings, "telegram_digest_agent", "kronos")
+
+    assert bridge._normalize_telegram_chat_id(-1003642435967) == 3642435967
+
+    general = bridge._resolve_topic_route(-1003642435967, 23)
+    kronos = bridge._resolve_topic_route(-1003642435967, 18)
+    unknown = bridge._resolve_topic_route(-1003642435967, 99)
+
+    assert general.mode == "swarm"
+    assert kronos.mode == "owner"
+    assert kronos.owner_agent == "kronos"
+    assert unknown.mode == "silent"
+
+
+def test_topic_route_falls_back_outside_configured_chat(monkeypatch):
+    monkeypatch.setattr(bridge.settings, "telegram_swarm_chat_id", 3642435967)
+    monkeypatch.setattr(bridge.settings, "telegram_general_topic_id", 23)
+
+    route = bridge._resolve_topic_route(-1009999999999, 23)
+
+    assert route.mode == "default"
+
+
+def test_shared_group_context_excludes_current_message(monkeypatch):
+    monkeypatch.setattr(bridge.settings, "telegram_shared_context_messages", 3)
+
+    class FakeSwarm:
+        def get_recent_messages(self, *, chat_id, topic_id, limit):
+            return [
+                {"msg_id": 12, "sender_type": "user", "agent_name": None, "text": "current"},
+                {"msg_id": 11, "sender_type": "agent", "agent_name": "nexus", "text": "agent answer"},
+                {"msg_id": 10, "sender_type": "user", "agent_name": None, "text": "root question"},
+            ]
+
+    context = bridge._format_shared_group_context(
+        FakeSwarm(),
+        chat_id=-1003642435967,
+        topic_id=23,
+        current_msg_id=12,
+    )
+
+    assert "current" not in context
+    assert "Пользователь: root question" in context
+    assert "Агент nexus: agent answer" in context

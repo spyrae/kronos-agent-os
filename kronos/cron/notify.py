@@ -17,11 +17,23 @@ from kronos.config import settings
 log = logging.getLogger("kronos.cron.notify")
 
 WEBHOOK_URL = "http://127.0.0.1:{port}/webhook"
-DEFAULT_CHAT = int(os.environ.get("DEFAULT_NOTIFY_CHAT", "0"))
+
+
+def _bot_api_group_chat_id(chat_id: int) -> int:
+    """Convert t.me/c internal supergroup id to Bot API chat id."""
+    if chat_id > 0 and chat_id >= 1_000_000_000:
+        return int(f"-100{chat_id}")
+    return chat_id
+
+
+DEFAULT_CHAT = int(os.environ.get("DEFAULT_NOTIFY_CHAT") or "0")
+if not DEFAULT_CHAT and settings.telegram_swarm_chat_id:
+    DEFAULT_CHAT = _bot_api_group_chat_id(settings.telegram_swarm_chat_id)
 
 # Bot chat topic IDs (topics inside the KAOS bot DM)
-TOPIC_GENERAL = int(os.environ.get("TOPIC_GENERAL", "0"))
-TOPIC_DIGEST = int(os.environ.get("TOPIC_DIGEST", "0"))
+TOPIC_GENERAL = int(os.environ.get("TOPIC_GENERAL") or settings.telegram_general_topic_id or "0")
+TOPIC_DIGEST = int(os.environ.get("TOPIC_DIGEST") or settings.telegram_digest_topic_id or "0")
+TOPIC_FINANCE = int(os.environ.get("TOPIC_FINANCE") or settings.telegram_finance_topic_id or "0")
 
 
 def send_webhook(

@@ -33,6 +33,16 @@ class Settings(BaseSettings):
     allowed_users: str = ""  # comma-separated user IDs
     allow_all_users: bool = False  # if false, empty ALLOWED_USERS blocks DMs
     webhook_secret: str = ""
+    telegram_group_responses_enabled: bool = True
+    telegram_swarm_chat_id: int = 0
+    telegram_general_topic_id: int = 0
+    telegram_kronos_topic_id: int = 0
+    telegram_finance_topic_id: int = 0
+    telegram_digest_topic_id: int = 0
+    telegram_kronos_agent: str = "kronos"
+    telegram_finance_agent: str = "kronos"
+    telegram_digest_agent: str = "kronos"
+    telegram_shared_context_messages: int = 12
 
     # Voice STT
     groq_api_key: str = ""
@@ -114,6 +124,7 @@ class Settings(BaseSettings):
     # Agent
     agent_name: str = "kronos"  # kronos | nexus — selects workspaces/<name>/
     workspace_path: str = ""  # override; if empty, resolved from agent_name
+    shared_workspace_path: str = ""  # optional common skills/notes workspace mounted read-mostly by all agents
     db_path: str = ""  # override; if empty, resolved to ./data/<agent_name>/session.db
     context_strategy: str = "summarize"  # summarize | sliding_window | hybrid
 

@@ -13,7 +13,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/../.env"
 if [ -f "$ENV_FILE" ]; then
-    set -a; source "$ENV_FILE"; set +a
+    while IFS='=' read -r key value || [ -n "$key" ]; do
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        case "$key" in
+          ''|\#*) continue ;;
+        esac
+        if [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && [ -z "${!key+x}" ]; then
+            export "$key=$value"
+        fi
+    done < "$ENV_FILE"
 fi
 
 DEPLOY_MODE="${KAOS_DEPLOY_MODE:-remote}"

@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from kronos.config import settings
+
 log = logging.getLogger("kronos.skills.store")
 
 
@@ -98,7 +100,13 @@ def _format_frontmatter_value(value: object) -> str:
 
 
 class SkillStore:
-    """Central store for all skills. Loads from workspace/self/skills/."""
+    """Central store for all skills.
+
+    Loads local agent skills from workspace/self/skills/. When
+    SHARED_WORKSPACE_PATH is configured, loads shared skills first and then
+    overlays the local workspace so an agent can override a shared skill by
+    name.
+    """
 
     def __init__(self, workspace_path: str | Path | None = None):
         if workspace_path:
@@ -110,13 +118,27 @@ class SkillStore:
 
             self._workspace = ws
         self._skills_dir = self._workspace.skills_dir
+        self._shared_skills_dir: Path | None = None
+        if settings.shared_workspace_path:
+            from kronos.workspace import Workspace
+
+            shared_workspace = Workspace(settings.shared_workspace_path)
+            if shared_workspace.skills_dir != self._skills_dir:
+                self._shared_skills_dir = shared_workspace.skills_dir
         self._skills: dict[str, Skill] = {}
         self._load_all()
 
     def _load_all(self) -> None:
-        skills_dir = self._skills_dir
+        if self._shared_skills_dir is not None:
+            self._load_from_dir(self._shared_skills_dir, source_label="shared")
+        self._load_from_dir(self._skills_dir, source_label="local")
+
+        log.info("Loaded %d skills: %s", len(self._skills), list(self._skills.keys()))
+        self._generate_manifest_file()
+
+    def _load_from_dir(self, skills_dir: Path, *, source_label: str) -> None:
         if not skills_dir.is_dir():
-            log.warning("Skills directory not found: %s", skills_dir)
+            log.warning("Skills directory not found (%s): %s", source_label, skills_dir)
             return
 
         for skill_dir in sorted(skills_dir.iterdir()):
@@ -172,9 +194,6 @@ class SkillStore:
                 imported_at=imported_at,
                 review_required=review_required,
             )
-
-        log.info("Loaded %d skills: %s", len(self._skills), list(self._skills.keys()))
-        self._generate_manifest_file()
 
     def list_skills(self) -> list[Skill]:
         return list(self._skills.values())

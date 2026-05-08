@@ -11,8 +11,13 @@ ExecStart=/opt/kaos/app/.venv/bin/python -m kronos
 Restart=on-failure
 RestartSec=10
 
+EnvironmentFile=/opt/kaos/app/.env
+Environment=DB_DIR=./data/%i
+Environment=DB_PATH=./data/%i/session.db
+Environment=SESSION_FILE=%i.session
+Environment=WORKSPACE_PATH=./workspaces/%i
+EnvironmentFile=-/opt/kaos/app/.env.%i
 Environment=AGENT_NAME=%i
-EnvironmentFile=/opt/kaos/app/.env.%i
 
 KillMode=control-group
 KillSignal=SIGTERM

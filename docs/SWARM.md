@@ -26,9 +26,10 @@ Each agent can run as a separate process with:
 - its own session file/account when using Telegram
 - its own memory and local data directory
 - shared swarm ledger when coordination is enabled
+- optional `SHARED_WORKSPACE_PATH` for a common skill pool
 
-The shared ledger prevents duplicate implicit replies and records coordination
-state.
+The shared ledger prevents duplicate implicit replies, records coordination
+state, and provides recent shared topic context to every agent invocation.
 
 ## Roles And Delegation
 
@@ -68,6 +69,24 @@ strategist:
   aliases: ["strategist"]
   role: "strategy, prioritization, and tradeoff analysis"
 ```
+
+Telegram forum topics can be made explicit so personal topics do not run
+through the smart group router:
+
+```bash
+TELEGRAM_SWARM_CHAT_ID=3642435967
+TELEGRAM_GENERAL_TOPIC_ID=23
+TELEGRAM_KRONOS_TOPIC_ID=18
+TELEGRAM_FINANCE_TOPIC_ID=22
+TELEGRAM_DIGEST_TOPIC_ID=24
+TELEGRAM_KRONOS_AGENT=kronos
+TELEGRAM_FINANCE_AGENT=kronos
+TELEGRAM_DIGEST_AGENT=kronos
+```
+
+Only the general topic uses relevance-based multi-agent routing. Owner topics
+are answered only by their configured agent; every other agent records the
+message to the shared ledger and stands down.
 
 ## Safety
 

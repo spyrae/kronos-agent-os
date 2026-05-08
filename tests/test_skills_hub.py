@@ -86,3 +86,27 @@ def test_export_skill_returns_full_skill_markdown(tmp_path, monkeypatch):
     assert exported is not None
     assert "name: external-research" in exported
     assert "# Portable Research" in exported
+
+
+def test_skill_store_loads_shared_workspace_before_local_overrides(tmp_path, monkeypatch):
+    from kronos.config import settings
+    from kronos.skills.store import SkillStore
+
+    shared_skill = tmp_path / "shared" / "self" / "skills" / "shared-tool"
+    local_skill = tmp_path / "local" / "self" / "skills" / "shared-tool"
+    local_only = tmp_path / "local" / "self" / "skills" / "local-tool"
+    shared_skill.mkdir(parents=True)
+    local_skill.mkdir(parents=True)
+    local_only.mkdir(parents=True)
+    (shared_skill / "SKILL.md").write_text(_portable_skill("shared-tool"), encoding="utf-8")
+    (local_skill / "SKILL.md").write_text(
+        _portable_skill("shared-tool").replace("Portable research workflow", "Local override"),
+        encoding="utf-8",
+    )
+    (local_only / "SKILL.md").write_text(_portable_skill("local-tool"), encoding="utf-8")
+    monkeypatch.setattr(settings, "shared_workspace_path", str(tmp_path / "shared"))
+
+    store = SkillStore(str(tmp_path / "local"))
+
+    assert {skill.name for skill in store.list_skills()} == {"shared-tool", "local-tool"}
+    assert store.get("shared-tool").description == "Local override"
