@@ -132,6 +132,13 @@ def _agent_owns_topic(route: TopicRoute) -> bool:
     return route.owner_agent == settings.agent_name.lower()
 
 
+def _owner_topic_accepts_sender(user_id: int) -> bool:
+    """Owner topics are direct user->owner channels, not peer debate rooms."""
+    if _group_router is not None:
+        return not _group_router._is_peer(user_id)
+    return settings.is_telegram_user_allowed(user_id)
+
+
 def _clip_context_text(text: str, limit: int = 500) -> str:
     compact = " ".join((text or "").split())
     if len(compact) <= limit:
@@ -868,6 +875,16 @@ async def run_bridge(agent: KronosAgent) -> None:
                         topic_id_inbound,
                         topic_route.owner_agent,
                     )
+                    return
+                if not _owner_topic_accepts_sender(user_id):
+                    log.info(
+                        "[TopicPolicy] %s ignoring peer/non-user in owner topic=%s sender=%s",
+                        settings.agent_name,
+                        topic_id_inbound,
+                        user_id,
+                    )
+                    if swarm is not None:
+                        swarm.incr_metric("topic_owner_peer_ignored")
                     return
                 decision = TopicDecision(
                     True,

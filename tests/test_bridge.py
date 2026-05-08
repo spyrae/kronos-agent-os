@@ -101,3 +101,14 @@ def test_shared_group_context_excludes_current_message(monkeypatch):
     assert "current" not in context
     assert "Пользователь: root question" in context
     assert "Агент nexus: agent answer" in context
+
+
+def test_owner_topic_rejects_peer_sender(monkeypatch):
+    class FakeRouter:
+        def _is_peer(self, sender_id):
+            return sender_id == 2001
+
+    monkeypatch.setattr(bridge, "_group_router", FakeRouter())
+
+    assert bridge._owner_topic_accepts_sender(42) is True
+    assert bridge._owner_topic_accepts_sender(2001) is False
