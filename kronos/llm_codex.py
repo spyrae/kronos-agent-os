@@ -71,7 +71,7 @@ class ChatCodexCLI(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         del stop, run_manager, kwargs
-        prompt = _build_prompt(messages, self.bound_tools)
+        prompt = _build_prompt(messages, self.bound_tools, self.model_name)
         output = self._run_sync(prompt)
         return ChatResult(generations=[ChatGeneration(message=_parse_output(output, self.bound_tools))])
 
@@ -83,7 +83,7 @@ class ChatCodexCLI(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         del stop, run_manager, kwargs
-        prompt = _build_prompt(messages, self.bound_tools)
+        prompt = _build_prompt(messages, self.bound_tools, self.model_name)
         output = await self._run_async(prompt)
         return ChatResult(generations=[ChatGeneration(message=_parse_output(output, self.bound_tools))])
 
@@ -163,11 +163,17 @@ def _read_codex_result(returncode: int | None, stdout: str, stderr: str, output_
     return text
 
 
-def _build_prompt(messages: list[BaseMessage], tools: list[Any]) -> str:
+def _build_prompt(messages: list[BaseMessage], tools: list[Any], model_name: str = "") -> str:
     transcript = _format_messages(messages)
+    model_context = (
+        f"Runtime identity: KAOS is using Codex CLI as its LLM backend with model `{model_name}`. "
+        "If asked what model/backend is running, answer with that instead of saying the model is hidden.\n"
+        if model_name else ""
+    )
     if not tools:
         return (
             "You are the LLM backend for Kronos Agent OS. Answer the latest user message.\n"
+            f"{model_context}"
             "Do not run shell commands, modify files, or claim external actions unless the conversation contains tool results.\n\n"
             f"Conversation:\n{transcript}\n\nAnswer:"
         )
@@ -175,6 +181,7 @@ def _build_prompt(messages: list[BaseMessage], tools: list[Any]) -> str:
     schemas = [_safe_tool_schema(tool) for tool in tools]
     return (
         "You are the LLM backend for Kronos Agent OS. KAOS, not Codex, executes tools.\n"
+        f"{model_context}"
         "Choose whether KAOS should call a tool or whether you can answer now.\n\n"
         "Return ONLY valid JSON in exactly one of these forms:\n"
         '{"final":"final answer for the user"}\n'

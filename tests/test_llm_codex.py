@@ -37,7 +37,9 @@ def test_codex_cli_plain_response_uses_output_file(monkeypatch, tmp_path):
     response = model.invoke([HumanMessage(content="Скажи привет")])
 
     assert response.content == "Привет"
-    assert "Conversation:" in (tmp_path / "seen.txt").read_text(encoding="utf-8")
+    prompt = (tmp_path / "seen.txt").read_text(encoding="utf-8")
+    assert "Conversation:" in prompt
+    assert "model `gpt-test`" in prompt
 
 
 def test_codex_cli_bound_tools_parse_tool_call(monkeypatch):

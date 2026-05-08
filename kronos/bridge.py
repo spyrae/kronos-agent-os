@@ -200,15 +200,29 @@ def _is_mentioned(event) -> bool:
     return False
 
 
+def _is_service_message(event) -> bool:
+    """Return True for Telegram service events such as topic creation."""
+    message = getattr(event, "message", None)
+    return bool(getattr(message, "action", None))
+
+
 def _extract_topic_id(event) -> int | None:
     """Extract forum topic ID from a Telethon message event.
 
     In forum supergroups, messages belong to topics. The topic ID
     is used to isolate conversation contexts per topic.
 
+    Private chats can expose ``forum_topic`` reply headers when Telegram
+    creates per-chat UI topics. KAOS should treat those as ordinary DMs:
+    replying to the topic root produces noisy "topic was created" quotes and
+    fragments the private conversation context.
+
     Telethon bot mode: reply_to.reply_to_msg_id = topic root message ID.
     General topic: reply_to_msg_id = 1 (or absent).
     """
+    if getattr(event, "is_private", False):
+        return None
+
     reply_to = getattr(event.message, "reply_to", None)
     if not reply_to:
         # General topic in forum groups may have no reply_to
@@ -238,6 +252,43 @@ def _strip_mention(text: str) -> str:
     import re
     cleaned = re.sub(r"@" + re.escape(_my_username), "", text, flags=re.IGNORECASE).strip()
     return cleaned if cleaned else text
+
+
+def _handle_runtime_info_query(text: str) -> str | None:
+    """Answer simple runtime/model identity questions deterministically."""
+    normalized = " ".join(text.strip().lower().replace("ё", "е").split())
+    if not normalized:
+        return None
+
+    is_model_question = normalized.startswith("/model") or (
+        len(normalized) <= 180
+        and any(
+            phrase in normalized
+            for phrase in (
+                "что у тебя за модель",
+                "какая у тебя модель",
+                "что за модель",
+                "на какой модели",
+                "какой llm",
+                "какой backend",
+                "какой бэкенд",
+                "какой провайдер",
+            )
+        )
+    )
+    if not is_model_question:
+        return None
+
+    orchestrator_chain = settings.kaos_orchestrator_provider_chain.strip() or settings.kaos_standard_provider_chain
+    return (
+        "Сейчас верхний оркестратор KAOS подключён через "
+        f"`{orchestrator_chain}`. Для `codex-cli` используется Codex/ChatGPT OAuth "
+        f"и модель `{settings.kaos_codex_model}`.\n\n"
+        "Важно: это модель оркестратора. Специализированные подагенты пока могут "
+        "использовать свои standard/lite цепочки: "
+        f"`standard={settings.kaos_standard_provider_chain}`, "
+        f"`lite={settings.kaos_lite_provider_chain}`."
+    )
 
 
 async def _fetch_root_user_message(event) -> tuple[str, str]:
@@ -591,6 +642,10 @@ async def run_bridge(agent: KronosAgent) -> None:
             (event.raw_text or "")[:50],
         )
 
+        if _is_service_message(event):
+            log.info("Ignoring Telegram service message in chat=%s", event.chat_id)
+            return
+
         sender = await event.get_sender()
         user_id = sender.id
         text = event.raw_text
@@ -833,6 +888,8 @@ async def run_bridge(agent: KronosAgent) -> None:
                     reply = "Голосовой режим включён. Буду отвечать голосом на короткие сообщения."
                 else:
                     reply = "Голосовой режим выключен. Голосом отвечаю только на голосовые."
+        elif (runtime_reply := _handle_runtime_info_query(clean_text)) is not None:
+            reply = runtime_reply
         # Cost guardian check
         else:
             guardian = get_guardian()
