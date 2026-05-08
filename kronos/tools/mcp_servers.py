@@ -94,7 +94,13 @@ def build_mcp_config() -> dict:
     else:
         log.debug("Skipping notion: NOTION_API_KEY not set")
 
-    if settings.google_oauth_client_id and settings.google_oauth_client_secret:
+    google_workspace_agent = os.environ.get("GOOGLE_WORKSPACE_MCP_AGENT", "kronos").strip().lower()
+    if settings.agent_name.lower() != google_workspace_agent:
+        log.info(
+            "Skipping google-workspace: enabled only for AGENT_NAME=%s to avoid OAuth helper port collisions",
+            google_workspace_agent,
+        )
+    elif settings.google_oauth_client_id and settings.google_oauth_client_secret:
         servers["google-workspace"] = {
             "transport": "stdio",
             "command": uvx,

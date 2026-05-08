@@ -534,7 +534,10 @@ def _observability_callbacks() -> list[BaseCallbackHandler]:
         return _callback_cache
 
     try:
-        from langfuse.callback import CallbackHandler
+        try:
+            from langfuse.callback import CallbackHandler
+        except ModuleNotFoundError:
+            from langfuse.langchain import CallbackHandler
 
         kwargs = {
             "public_key": settings.langfuse_public_key,
@@ -543,6 +546,9 @@ def _observability_callbacks() -> list[BaseCallbackHandler]:
         if settings.langfuse_host:
             kwargs["host"] = settings.langfuse_host
         _callback_cache = [_PIIMaskingCallbackHandler(CallbackHandler(**kwargs))]
+    except ModuleNotFoundError as e:
+        log.info("Langfuse callback disabled: %s", e)
+        _callback_cache = []
     except Exception as e:
         log.warning("Langfuse callback disabled: %s", e)
         _callback_cache = []

@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 from kronos.config import settings
@@ -201,6 +202,8 @@ def test_provider_config_can_come_from_dotenv_without_settings_fields(tmp_path):
         }:
             env.pop(name, None)
     env["KAOS_ENV_FILE"] = str(env_file)
+    repo_root = str(Path(__file__).resolve().parents[1])
+    env["PYTHONPATH"] = repo_root + os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else repo_root
 
     result = subprocess.run(
         [
