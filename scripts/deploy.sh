@@ -202,7 +202,17 @@ else
     if [ -n "${KAOS_HEALTH_URL:-}" ]; then
       echo ""
       echo "Health check: $KAOS_HEALTH_URL"
-      if ! curl -fsS --max-time 10 "$KAOS_HEALTH_URL"; then
+      HEALTH_OK=false
+      for attempt in {1..12}; do
+        if curl -fsS --max-time 10 "$KAOS_HEALTH_URL"; then
+          HEALTH_OK=true
+          break
+        fi
+        if [ "$attempt" -lt 12 ]; then
+          sleep 3
+        fi
+      done
+      if [ "$HEALTH_OK" != "true" ]; then
         echo ""
         echo "Health check failed: $KAOS_HEALTH_URL"
         if [ "${KAOS_HEALTH_REQUIRED:-true}" = "true" ]; then
