@@ -12,6 +12,7 @@ from kronos.analytics.sources import (
     posthog,
     revenuecat,
     sentry,
+    seo_geo,
     supabase_stats,
     web_analytics,
     zabbix,
@@ -55,6 +56,9 @@ Here is the current data across all systems:
 ## LLM Quality (Langfuse)
 {langfuse_data}
 
+## SEO / GEO (positions + AI citations + Search Console)
+{seo_geo_data}
+
 Generate a concise daily pulse:
 1. Overall status: 🟢 All OK / 🟡 Issues detected / 🔴 Critical
 2. 👥 Users & Product (DAU, signups, key features — 2-3 lines)
@@ -63,8 +67,9 @@ Generate a concise daily pulse:
 5. 🖥 Infrastructure (servers, errors — 2-3 lines)
 6. 🤖 AI (spend, requests — 1 line, if available)
 7. 🌐 Web (traffic — 1 line)
-8. ⚠️ Issues requiring attention (if any)
-9. 💡 One actionable insight based on the data
+8. 📈 SEO/GEO (top10 keywords, GEO citation rate, GSC clicks — 1-2 lines)
+9. ⚠️ Issues requiring attention (if any)
+10. 💡 One actionable insight based on the data
 
 If a data source returned an error, note it as "⚠️ Source unavailable" — don't skip the section.
 
@@ -85,6 +90,7 @@ def _collect_all() -> dict[str, dict]:
         "revenuecat": revenuecat.collect(),
         "litellm": litellm.collect(),
         "langfuse": langfuse_stats.collect(),
+        "seo_geo": seo_geo.collect(),
     }
 
 
@@ -126,6 +132,7 @@ async def generate_daily_pulse() -> tuple[str, dict]:
         revenuecat_data=_format_source("RevenueCat", metrics["revenuecat"]),
         litellm_data=_format_source("LiteLLM", metrics["litellm"]),
         langfuse_data=_format_source("Langfuse", metrics["langfuse"]),
+        seo_geo_data=_format_source("SEO/GEO", metrics["seo_geo"]),
     )
 
     model = get_model(ModelTier.LITE)

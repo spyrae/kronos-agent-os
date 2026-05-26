@@ -95,6 +95,12 @@ analytics = [
     # Web Analytics (GA4) — used by kronos.analytics.sources.web_analytics
     "google-analytics-data>=0.18",
 ]
+seo_geo = [
+    # Google Search Console + GA4 access for SEO/GEO tracker.
+    # Uses the same service-account creds as `analytics` extra.
+    "google-api-python-client>=2.140",
+    "google-auth>=2.34",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
