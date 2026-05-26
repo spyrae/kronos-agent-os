@@ -41,10 +41,13 @@ class Engine:
 
 # All routed through LiteLLM proxy. Adjust the model ids to match what
 # is registered on the LiteLLM server.
+#
+# Note: avoid direct ``openai/*`` ids — the production OpenAI key hit its
+# monthly quota and 429s. Use the cheap openrouter fallbacks instead.
 ENGINES: tuple[Engine, ...] = (
-    Engine("chatgpt", "openai/gpt-4o-mini", web_grounded=False),
+    Engine("chatgpt", "openrouter/openai/gpt-4o-mini", web_grounded=False),
     Engine("perplexity", "openrouter/perplexity/sonar", web_grounded=True),
-    Engine("claude", "anthropic/claude-haiku-4-5-20251001", web_grounded=False),
+    Engine("claude", "claude-haiku-4-5-20251001", web_grounded=False),
     Engine("gemini", "gemini/gemini-2.0-flash", web_grounded=True),
     Engine("kimi", "openrouter/moonshotai/kimi-k2", web_grounded=False),
 )

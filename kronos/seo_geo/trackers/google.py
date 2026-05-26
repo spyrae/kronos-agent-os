@@ -55,11 +55,36 @@ def _brave_search(query: str, country: str = "us", count: int = 20) -> list[dict
     return web.get("results") or []
 
 
-def find_position(target_url: str, query: str, locale: str = "en") -> tuple[int | None, str | None]:
-    """Return (position_1_indexed, ranked_url) or (None, None) if not in top 20.
+def _exa_search(query: str, count: int = 20) -> list[dict]:
+    """EXA neural search fallback when Brave 402/429."""
+    api_key = os.environ.get("EXA_API_KEY") or ""
+    if not api_key:
+        return []
+    body = json.dumps({
+        "query": query, "numResults": count, "type": "auto",
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.exa.ai/search",
+        data=body, method="POST",
+        headers={
+            "x-api-key": api_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        log.warning("EXA search failed for %r: %s", query[:60], e)
+        return []
+    return data.get("results") or []
 
-    Brave returns at most 20 results per call; we treat positions beyond
-    20 as "not ranking" — good enough for daily pulse signal.
+
+def find_position(target_url: str, query: str, locale: str = "en") -> tuple[int | None, str | None]:
+    """Return (position_1_indexed, ranked_url) or (None, None) if not in top results.
+
+    Tries Brave first; on 402/quota errors falls back to EXA neural search.
     """
     country = "ru" if locale == "ru" else "us"
     target_host = urllib.parse.urlparse(target_url).netloc.lower().replace("www.", "")
@@ -67,6 +92,10 @@ def find_position(target_url: str, query: str, locale: str = "en") -> tuple[int 
         return None, None
 
     results = _brave_search(query, country=country, count=20)
+    if not results:
+        # Fallback to EXA — neural search, locale-agnostic.
+        results = _exa_search(query, count=20)
+
     for idx, r in enumerate(results, start=1):
         result_url = (r.get("url") or "").lower()
         if target_host in result_url:
