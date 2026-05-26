@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import urllib.request
 
 log = logging.getLogger("kronos.analytics.sources.app_store")
