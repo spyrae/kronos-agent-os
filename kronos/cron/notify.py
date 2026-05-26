@@ -70,12 +70,43 @@ def send_webhook(
         return False
 
 
+def _markdown_to_html(text: str) -> str:
+    """Convert common Markdown to Telegram-supported HTML.
+
+    LLMs almost always emit Markdown (**bold**, *italic*, `code`, ### headings)
+    even when prompted to write HTML. Telegram's HTML parser shows raw ** etc.
+    Translate before sanitize so users see proper formatting.
+    """
+    # Strip markdown headings (### / ## / #) — Telegram has no equivalent;
+    # keep the text and bold it instead.
+    text = re.sub(r"^\s{0,3}#{1,6}\s+(.+?)\s*$", r"<b>\1</b>", text, flags=re.MULTILINE)
+    # Bold-italic ***text*** -> <b><i>text</i></b>
+    text = re.sub(r"\*\*\*([^*\n][^*\n]*?)\*\*\*", r"<b><i>\1</i></b>", text)
+    # Bold **text** -> <b>text</b>
+    text = re.sub(r"\*\*([^*\n][^*\n]*?)\*\*", r"<b>\1</b>", text)
+    # Italic *text* -> <i>text</i> — only if the * is not part of a list bullet
+    # (i.e. not at line start followed by space). Allow underscores too.
+    text = re.sub(r"(?<![*\w])\*([^*\n][^*\n]*?)\*(?!\w)", r"<i>\1</i>", text)
+    text = re.sub(r"(?<![_\w])_([^_\n][^_\n]*?)_(?!\w)", r"<i>\1</i>", text)
+    # Inline code `text` -> <code>text</code>
+    text = re.sub(r"`([^`\n]+?)`", r"<code>\1</code>", text)
+    # Markdown links [label](url) -> <a href="url">label</a>
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r'<a href="\2">\1</a>', text)
+    return text
+
+
 def _sanitize_html(text: str) -> str:
-    """Strip full HTML documents down to body content for Telegram."""
+    """Strip full HTML documents down to body content for Telegram.
+
+    Also normalises Markdown LLMs commonly emit into Telegram-supported HTML
+    (see _markdown_to_html).
+    """
     # LLMs sometimes wrap output in <!DOCTYPE html>...<body>...</body>
     body_match = re.search(r"<body[^>]*>(.*)</body>", text, re.DOTALL | re.IGNORECASE)
     if body_match:
         text = body_match.group(1).strip()
+    # Convert Markdown to allowed HTML tags *before* stripping unknown tags
+    text = _markdown_to_html(text)
     # Remove unsupported tags (keep only b, i, a, code, pre, u, s, em, strong)
     text = re.sub(r"<!DOCTYPE[^>]*>", "", text, flags=re.IGNORECASE)
     text = re.sub(r"</?(?:html|head|body|meta|title|div|span|p|br\s*/?|h[1-6]|ul|ol|li|table|tr|td|th|thead|tbody|img|hr)[^>]*>", "", text, flags=re.IGNORECASE)
