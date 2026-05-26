@@ -14,9 +14,7 @@ log = logging.getLogger("kronos.cron")
 # Jobs that should only run on a specific agent to avoid duplicate work.
 # Key: job name, value: agent_name that owns it.
 _AGENT_EXCLUSIVE_JOBS: dict[str, str] = {
-    "competitor-digest": "nexus",
     "competitor-weekly": "nexus",
-    "competitor-alerts": "nexus",
     "analytics-pulse": "nexus",
     "analytics-weekly": "nexus",
     "analytics-alerts": "nexus",
@@ -29,8 +27,6 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.analytics_alerts import run_analytics_alerts
     from kronos.cron.analytics_pulse import run_analytics_pulse
     from kronos.cron.analytics_weekly import run_analytics_weekly
-    from kronos.cron.competitor_alerts import run_competitor_alerts
-    from kronos.cron.competitor_digest import run_competitor_digest
     from kronos.cron.competitor_weekly import run_competitor_weekly
     from kronos.cron.email_expenses import run_email_expenses
     from kronos.cron.expense_digest import run_expense_digest
@@ -87,15 +83,15 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # ── Agent-exclusive jobs (only registered on the owning agent) ──────
     nexus_jobs_registered = 0
 
-    if _AGENT_EXCLUSIVE_JOBS.get("competitor-digest") == me:
-        # Daily digests at 01:00 UTC = 04:00 MSK — both arrive before user wakes up.
-        scheduler.add_daily("competitor-digest", run_competitor_digest, hour_utc=1)
-        scheduler.add_weekly("competitor-weekly", run_competitor_weekly, weekday=6, hour_utc=10)
-        scheduler.add_periodic("competitor-alerts", run_competitor_alerts, interval_seconds=14400)
+    if _AGENT_EXCLUSIVE_JOBS.get("competitor-weekly") == me:
+        # Daily analytics pulse at 01:00 UTC = 04:00 MSK — before user wakes up.
         scheduler.add_daily("analytics-pulse", run_analytics_pulse, hour_utc=1)
         scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
         scheduler.add_periodic("analytics-alerts", run_analytics_alerts, interval_seconds=7200)
-        nexus_jobs_registered = 6
+        # Competitor coverage is weekly-only: one deep report Sunday 10:00 UTC
+        # (13:00 MSK). Replaced the noisy daily digest + 4-hourly alerts setup.
+        scheduler.add_weekly("competitor-weekly", run_competitor_weekly, weekday=6, hour_utc=10)
+        nexus_jobs_registered = 4
 
     total = 12 + nexus_jobs_registered
     log.info("%d cron jobs registered for agent '%s'", total, me)
