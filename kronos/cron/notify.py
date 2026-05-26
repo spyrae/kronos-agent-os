@@ -184,12 +184,15 @@ def send_bot_api(
     topic_id: int | None = None,
 ) -> bool:
     """Send message via Telegram Bot API directly (for topic support)."""
+    # Sanitize Markdown -> HTML BEFORE the webhook fallback so the local
+    # Telethon bridge also receives Telegram-ready content. Otherwise pulse
+    # text reaches Telegram with raw "**bold**" markers.
+    if parse_mode == "HTML":
+        text = _sanitize_html(text)
+
     token = settings.tg_bot_token
     if not token:
         return send_webhook(text, chat_id, parse_mode, topic_id)
-
-    if parse_mode == "HTML":
-        text = _sanitize_html(text)
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     body: dict = {
