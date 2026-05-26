@@ -422,14 +422,87 @@ def check_producthunt(
 # Job postings (signal: what they're building)
 # ---------------------------------------------------------------------------
 
+# Hosts that *publish actual job openings*. Anything else is treated as
+# a press/blog mention, not hiring activity.
+_JOB_BOARD_HOSTS = (
+    "linkedin.com/jobs/",
+    "linkedin.com/company/",       # only when path also contains /jobs/ — checked below
+    "jobs.lever.co/",
+    "boards.greenhouse.io/",
+    "ashbyhq.com/",
+    "wellfound.com/jobs/",
+    "wellfound.com/company/",      # path /jobs/ checked below
+    "angel.co/jobs/",
+    "ycombinator.com/jobs/",
+    "ycombinator.com/companies/",  # path /jobs checked below
+    "workatastartup.com/",
+    "remote.com/jobs/",
+    "remoteok.com/remote-jobs/",
+    "weworkremotely.com/remote-jobs/",
+    "indeed.com/jobs",
+    "indeed.com/viewjob",
+    "glassdoor.com/job-listing/",
+    "glassdoor.com/Job/",
+    "builtin.com/job/",
+    "hnhiring.com/",
+    "/careers/",
+    "/jobs/",
+)
+
+# Required hiring signal in title/description — filters out generic "best apps"
+# articles that mention the competitor as one of many examples.
+_HIRING_KEYWORDS = (
+    "hiring", "we're hiring", "join our team", "open position", "open role",
+    "now hiring", "apply now", "career", "careers",
+    # Common role names so a posting like "Senior iOS Engineer" counts even
+    # when the title omits the word 'hiring'.
+    "engineer", "developer", "designer", "manager", "lead", "head of",
+    "founding", "director", "marketing", "sales",
+)
+
+# Anti-keywords that signal "article about hiring trends" rather than an
+# actual posting.
+_NEGATIVE_KEYWORDS = (
+    "best ", "top ", " vs ", "vs.", "alternative", "comparison",
+    "review", "guide to", "how to", "trends", "what is", "compared",
+    "list of", "ranking",
+)
+
+
+def _is_real_job_posting(url: str, title: str, description: str) -> bool:
+    """Heuristic — is this a real open position vs an article that mentions it?
+
+    Three checks (all must pass):
+      1. URL is on a known job board OR contains /careers/ or /jobs/ path
+      2. Title or description contains a hiring keyword
+      3. Title doesn't match obvious "listicle" / "comparison" patterns
+    """
+    url_l = url.lower()
+    title_l = title.lower()
+    desc_l = (description or "").lower()
+    blob = f"{title_l} {desc_l}"
+
+    on_job_board = any(host in url_l for host in _JOB_BOARD_HOSTS)
+    has_hiring_signal = any(kw in blob for kw in _HIRING_KEYWORDS)
+    looks_like_article = any(neg in title_l for neg in _NEGATIVE_KEYWORDS)
+
+    return on_job_board and has_hiring_signal and not looks_like_article
+
+
 def check_jobs(
     comp: CompetitorConfig,
     store: CompetitorStore,
 ) -> list[Change]:
-    """Check for job postings (hiring = strategic signal)."""
+    """Check for job postings (hiring = strategic signal).
+
+    Filters aggressively because the underlying search engine (Brave or
+    Exa fallback) routinely returns SEO articles / "best travel apps"
+    listicles that mention the competitor in passing. We only count
+    results that look like *real* postings on real job boards.
+    """
     results = brave_search(
         f'"{comp.name}" (hiring OR "open positions" OR careers OR jobs)',
-        count=5,
+        count=8,
         freshness="pw",
     )
     if not results:
@@ -441,12 +514,19 @@ def check_jobs(
         known_urls = set(prev.get("known_urls", []))
 
     changes: list[Change] = []
+    seen_urls: set[str] = set()
 
     for r in results:
-        if r.url in known_urls:
+        if r.url in known_urls or r.url in seen_urls:
             continue
-        # Filter out generic job board noise
-        if any(skip in r.url for skip in ["indeed.com/cmp", "glassdoor.com/Reviews"]):
+        seen_urls.add(r.url)
+
+        # Generic noise (company review pages, Indeed company directory)
+        if any(skip in r.url for skip in ("indeed.com/cmp", "glassdoor.com/Reviews", "glassdoor.com/Overview")):
+            continue
+
+        if not _is_real_job_posting(r.url, r.title, r.description):
+            log.debug("Skipping non-posting for %s: %s", comp.name, r.url)
             continue
 
         changes.append(Change(
@@ -459,7 +539,9 @@ def check_jobs(
             details={"url": r.url, "description": r.description[:200]},
         ))
 
-    all_urls = list(known_urls | {r.url for r in results})[-30:]
+    # Track ALL returned URLs (not just accepted ones) so we don't re-evaluate
+    # the same article-style hits next week.
+    all_urls = list(known_urls | seen_urls)[-30:]
     store.save_snapshot(comp.id, "jobs", {"known_urls": all_urls})
 
     return changes

@@ -7,6 +7,12 @@ from kronos.db import get_db
 
 log = logging.getLogger("kronos.competitors.store")
 
+# Keep snapshots/changes from growing linearly: drop rows older than this.
+# Weekly cron is plenty of look-back for any analysis we actually do; the
+# Mem0 long-term store keeps the synthesised summaries forever.
+SNAPSHOT_RETENTION_DAYS = 90
+CHANGE_RETENTION_DAYS = 180  # Keep changes a bit longer (they're tiny)
+
 
 def _schema(conn) -> None:
     conn.executescript("""
@@ -118,3 +124,35 @@ class CompetitorStore:
             (competitor_id,),
         )
         return row["cnt"] if row else 0
+
+    def prune_old(
+        self,
+        snapshot_days: int = SNAPSHOT_RETENTION_DAYS,
+        change_days: int = CHANGE_RETENTION_DAYS,
+    ) -> tuple[int, int]:
+        """Delete rows older than the retention windows.
+
+        Snapshots: every weekly fetch adds one row per (competitor, channel)
+        pair, so ~80 rows/week. Without pruning the table grows ~4k rows/year.
+        Changes are smaller in volume but kept twice as long for trend analysis.
+
+        Returns:
+            (snapshots_deleted, changes_deleted)
+        """
+        snap_cur = self._db.write(
+            "DELETE FROM competitor_snapshots "
+            "WHERE captured_at < datetime('now', ?)",
+            (f"-{snapshot_days} days",),
+        )
+        change_cur = self._db.write(
+            "DELETE FROM competitor_changes "
+            "WHERE detected_at < datetime('now', ?)",
+            (f"-{change_days} days",),
+        )
+        snap_deleted = snap_cur.rowcount if snap_cur is not None else 0
+        change_deleted = change_cur.rowcount if change_cur is not None else 0
+        log.info(
+            "Pruned competitor data: %d snapshots > %dd, %d changes > %dd",
+            snap_deleted, snapshot_days, change_deleted, change_days,
+        )
+        return snap_deleted, change_deleted
