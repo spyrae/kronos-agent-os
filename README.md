@@ -17,6 +17,8 @@ KAOS is an agent operating layer:
 - **Skills**: workspace-local procedures and references the agent can load on demand.
 - **Tool gateway**: MCP tools, custom tools, browser tools, and audit-friendly execution.
 - **Automations**: scheduled jobs for digests, monitoring, analytics, and self-improvement.
+- **Analytics**: pluggable data sources (Zabbix, Grafana, Sentry, PostHog HogQL, App Store Connect, Supabase, GA4, RevenueCat, LiteLLM, Langfuse, Linear) feeding daily pulse and weekly business reports.
+- **Competitor monitoring**: weekly intelligence cycle across App Store, Play Store, blogs, Twitter, press, ProductHunt and job boards with Brave→Exa search fallback.
 - **Control room**: dashboard/API surfaces for memory, jobs, tool calls, and system status.
 - **Coordination**: optional sub-agent and swarm mode with SQLite arbitration.
 
