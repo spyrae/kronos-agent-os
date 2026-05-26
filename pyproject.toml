@@ -86,6 +86,15 @@ aso = [
     "langgraph>=0.4",
     "langgraph-checkpoint-sqlite>=2.0",
 ]
+appstore = [
+    # App Store Connect API JWT (ES256). Used by
+    # kronos.analytics.sources.app_store._fetch_ios_reviews.
+    "PyJWT[crypto]>=2.8",
+]
+analytics = [
+    # Web Analytics (GA4) — used by kronos.analytics.sources.web_analytics
+    "google-analytics-data>=0.18",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
