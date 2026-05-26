@@ -39,17 +39,14 @@ class Engine:
     web_grounded: bool
 
 
-# All routed through LiteLLM proxy. Adjust the model ids to match what
-# is registered on the LiteLLM server.
-#
-# Note: avoid direct ``openai/*`` ids — the production OpenAI key hit its
-# monthly quota and 429s. Use the cheap openrouter fallbacks instead.
+# All routed through LiteLLM proxy. Model ids must match the ones
+# registered on the LiteLLM server — see ``GET /model/info``.
 ENGINES: tuple[Engine, ...] = (
-    Engine("chatgpt", "openrouter/openai/gpt-4o-mini", web_grounded=False),
-    Engine("perplexity", "openrouter/perplexity/sonar", web_grounded=True),
-    Engine("claude", "claude-haiku-4-5-20251001", web_grounded=False),
-    Engine("gemini", "gemini/gemini-2.0-flash", web_grounded=True),
-    Engine("kimi", "openrouter/moonshotai/kimi-k2", web_grounded=False),
+    Engine("chatgpt", "openai/gpt-4o-mini", web_grounded=False),
+    Engine("claude", "anthropic/claude-3-haiku", web_grounded=False),
+    Engine("gemini", "google/gemini-2.0-flash", web_grounded=False),
+    Engine("deepseek", "deepseek/deepseek-chat", web_grounded=False),
+    Engine("qwen", "together/qwen3-235b", web_grounded=False),
 )
 
 
