@@ -1,4 +1,14 @@
-"""LiteLLM data source — AI model spend, tokens, latency via Admin API."""
+"""LiteLLM data source — AI model spend via Admin API.
+
+Uses two complementary endpoints:
+- ``/global/spend/logs`` — daily spend totals over the time window
+- ``/global/spend/models`` — per-model breakdown (all-time totals)
+
+Earlier code mistakenly tried to derive ``model``, ``total_tokens`` and
+``completion_time`` from ``/global/spend/logs``, but that endpoint only
+returns ``[{date, spend}]`` — hence ``top_models: unknown``, ``tokens=0``
+and ``latency=None`` in the daily pulse.
+"""
 
 import json
 import logging
@@ -41,39 +51,41 @@ def collect() -> dict:
     yesterday = now - timedelta(days=1)
 
     try:
-        # Daily spend logs for last 24h (LiteLLM v1.40+ moved /spend/logs to /global/spend/logs).
+        # 1) Daily spend totals over the last 24h.
+        # Endpoint returns [{"date": "YYYY-MM-DD", "spend": float}, ...].
         spend_data = _api_get("/global/spend/logs", {
             "start_date": yesterday.strftime("%Y-%m-%d"),
             "end_date": now.strftime("%Y-%m-%d"),
         })
-
         if not isinstance(spend_data, list):
             spend_data = spend_data.get("data", []) if isinstance(spend_data, dict) else []
 
-        total_spend = sum(s.get("spend", 0) for s in spend_data)
-        total_tokens = sum(s.get("total_tokens", 0) for s in spend_data)
-        total_requests = len(spend_data)
+        spend_24h = sum(float(s.get("spend", 0) or 0) for s in spend_data)
 
-        # Breakdown by model
-        by_model: dict[str, float] = {}
-        for s in spend_data:
-            model = s.get("model", "unknown")
-            by_model[model] = by_model.get(model, 0) + s.get("spend", 0)
+        # 2) Top models by all-time spend. The endpoint returns
+        # [{"model": str, "total_spend": float}, ...] sorted desc.
+        try:
+            models = _api_get("/global/spend/models")
+            if isinstance(models, dict):
+                models = models.get("data", [])
+        except Exception as e:
+            log.debug("LiteLLM /global/spend/models failed: %s", e)
+            models = []
 
-        # Top 3 models by spend
-        top_models = sorted(by_model.items(), key=lambda x: x[1], reverse=True)[:3]
-        top_models_str = ", ".join(f"{m}: ${v:.3f}" for m, v in top_models) if top_models else "N/A"
-
-        # Average latency
-        latencies = [s.get("completion_time", 0) for s in spend_data if s.get("completion_time")]
-        avg_latency = round(sum(latencies) / len(latencies), 2) if latencies else None
+        # Keep only models with non-zero spend, top 3 by total_spend.
+        active_models = [m for m in (models or []) if (m.get("total_spend") or 0) > 0]
+        active_models.sort(key=lambda m: m.get("total_spend") or 0, reverse=True)
+        top = active_models[:3]
+        top_models_str = (
+            ", ".join(f"{m['model']}: ${float(m['total_spend']):.2f}" for m in top)
+            if top else "N/A"
+        )
+        models_tracked = len(active_models)
 
         return {
-            "spend_24h_usd": round(total_spend, 4),
-            "total_tokens_24h": total_tokens,
-            "total_requests_24h": total_requests,
+            "spend_24h_usd": round(spend_24h, 4),
             "top_models": top_models_str,
-            "avg_latency_s": avg_latency,
+            "models_tracked": models_tracked,
         }
 
     except Exception as e:
