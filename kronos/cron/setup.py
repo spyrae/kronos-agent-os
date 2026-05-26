@@ -88,10 +88,11 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     nexus_jobs_registered = 0
 
     if _AGENT_EXCLUSIVE_JOBS.get("competitor-digest") == me:
-        scheduler.add_daily("competitor-digest", run_competitor_digest, hour_utc=8)
+        # Daily digests at 01:00 UTC = 04:00 MSK — both arrive before user wakes up.
+        scheduler.add_daily("competitor-digest", run_competitor_digest, hour_utc=1)
         scheduler.add_weekly("competitor-weekly", run_competitor_weekly, weekday=6, hour_utc=10)
         scheduler.add_periodic("competitor-alerts", run_competitor_alerts, interval_seconds=14400)
-        scheduler.add_daily("analytics-pulse", run_analytics_pulse, hour_utc=8)
+        scheduler.add_daily("analytics-pulse", run_analytics_pulse, hour_utc=1)
         scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
         scheduler.add_periodic("analytics-alerts", run_analytics_alerts, interval_seconds=7200)
         nexus_jobs_registered = 6

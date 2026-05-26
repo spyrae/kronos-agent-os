@@ -31,7 +31,7 @@ def _api_get(path: str, params: dict | None = None) -> dict | list:
         headers={
             "Authorization": f"Basic {credentials}",
             "Accept": "application/json",
-            "User-Agent": "Kronos-II/1.0",
+            "User-Agent": "Mozilla/5.0 (compatible; KronosNexus/1.0)",
         },
     )
     resp = urllib.request.urlopen(req, timeout=_TIMEOUT)

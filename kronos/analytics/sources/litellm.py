@@ -25,6 +25,7 @@ def _api_get(path: str, params: dict | None = None) -> dict | list:
         headers={
             "Authorization": f"Bearer {settings.litellm_admin_key}",
             "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (compatible; KronosNexus/1.0)",
         },
     )
     resp = urllib.request.urlopen(req, timeout=_TIMEOUT)
@@ -40,8 +41,8 @@ def collect() -> dict:
     yesterday = now - timedelta(days=1)
 
     try:
-        # Spend logs for last 24h
-        spend_data = _api_get("/spend/logs", {
+        # Daily spend logs for last 24h (LiteLLM v1.40+ moved /spend/logs to /global/spend/logs).
+        spend_data = _api_get("/global/spend/logs", {
             "start_date": yesterday.strftime("%Y-%m-%d"),
             "end_date": now.strftime("%Y-%m-%d"),
         })
