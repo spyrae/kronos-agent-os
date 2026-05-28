@@ -233,16 +233,55 @@ def _build_dynamic_tool(name: str, code: str, spec: ToolFunctionSpec) -> BaseToo
     async def _sandboxed_wrapper(*args, **kwargs):
         """Execute the dynamic tool in a Docker sandbox."""
         from kronos.tools.sandbox import execute_sandboxed, sandbox_ready
+        from kronos.tools.sandbox_platform import (
+            PolicyDecision,
+            SandboxPolicy,
+            SandboxResourceLimits,
+            SandboxRunRequest,
+            create_session_workspace,
+            evaluate_policy,
+            record_sandbox_decision,
+        )
+
+        request_inputs = tuple([f"arg_{index}" for index, _ in enumerate(args)] + list(kwargs.keys()))
+        request = SandboxRunRequest(
+            tool_name=spec.name,
+            session_id=f"dynamic:{spec.name}",
+            input_mounts=request_inputs,
+            resources=SandboxResourceLimits(timeout_seconds=30),
+        )
+        policy = SandboxPolicy(
+            allowed_inputs=request_inputs,
+            max_resources=SandboxResourceLimits(timeout_seconds=30),
+        )
+        decision = evaluate_policy(request, policy)
+        if not decision.allowed:
+            record_sandbox_decision(request, decision, policy)
+            return f"Blocked by sandbox policy: {', '.join(decision.violations)}"
 
         if sandbox_ready():
             runner_code = _build_runner_code(code, spec.name, args, kwargs)
+            create_session_workspace(request)
             stdout, stderr = await execute_sandboxed(runner_code, timeout=30)
+            record_sandbox_decision(
+                request,
+                decision,
+                policy,
+                stdout=stdout,
+                stderr=stderr,
+                resources_used={"timeout_seconds": 30},
+            )
             if stderr:
                 log.warning("Sandbox stderr for %s: %s", spec.name, stderr[:200])
             return stdout or stderr or "No output"
         if settings.require_dynamic_tool_sandbox:
             from kronos.tools.sandbox import sandbox_unavailable_message
 
+            record_sandbox_decision(
+                request,
+                PolicyDecision(False, "sandbox unavailable", ("execution:docker_not_ready",)),
+                policy,
+            )
             return f"Blocked: Docker sandbox is required for dynamic tools. {sandbox_unavailable_message()}"
 
         return await _run_locally_for_dev(code, spec.name, args, kwargs)

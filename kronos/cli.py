@@ -390,6 +390,16 @@ def run_doctor() -> int:
     else:
         ok("Dynamic tools", "disabled by default")
 
+    from kronos.tools.sandbox_platform import sandbox_platform_status
+
+    platform_status = sandbox_platform_status()
+    platform = platform_status["platform"]
+    execution = "ready" if platform["execution_ready"] else "docker/image not ready"
+    ok(
+        "Sandbox platform",
+        f"policy/audit ready; network={platform['network_default']}; execution={execution}",
+    )
+
     if settings.enable_mcp_gateway_management:
         warn("MCP gateway management", "Enabled; agent can add/remove/reload MCP servers")
     else:

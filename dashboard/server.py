@@ -27,6 +27,7 @@ from dashboard.api.monitoring import set_scheduler
 from dashboard.api.overview import router as overview_router
 from dashboard.api.performance import router as performance_router
 from dashboard.api.persona import router as persona_router
+from dashboard.api.sandbox import router as sandbox_router
 from dashboard.api.skills import router as skills_router
 from dashboard.api.swarm import router as swarm_router
 from dashboard.config import (
@@ -85,6 +86,7 @@ def create_app(scheduler=None, agent=None) -> FastAPI:
     app.include_router(config_router)
     app.include_router(memory_router)
     app.include_router(swarm_router)
+    app.include_router(sandbox_router)
 
     # WebSocket
     app.websocket("/ws/logs")(ws_logs)

@@ -15,6 +15,7 @@ import PerformancePage from './pages/PerformancePage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import AuditTrailPage from './pages/AuditTrailPage';
 import AnomaliesPage from './pages/AnomaliesPage';
+import SandboxPage from './pages/SandboxPage';
 
 /* ── Login ── */
 
@@ -109,6 +110,7 @@ const NAV_SECTIONS: NavSection[] = [
       { path: '/performance', label: 'Performance', icon: 'P' },
       { path: '/analytics', label: 'Analytics', icon: 'N' },
       { path: '/audit', label: 'Audit Trail', icon: 'T' },
+      { path: '/sandbox', label: 'Sandbox', icon: 'X' },
     ],
   },
   {
@@ -128,6 +130,7 @@ const NAV_SECTIONS: NavSection[] = [
 const ICON_COLORS: Record<string, string> = {
   '~': '#f97316', A: '#3b82f6', M: '#8b5cf6', L: '#4ade80',
   P: '#f59e0b', N: '#06b6d4', T: '#ec4899',
+  X: '#f97316',
   '!': '#ef4444', S: '#6366f1', K: '#14b8a6', G: '#a78bfa', Q: '#22c55e', W: '#f472b6', C: '#64748b',
 };
 
@@ -310,6 +313,7 @@ export default function App() {
           <Route path="/performance" element={<PerformancePage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/audit" element={<AuditTrailPage />} />
+          <Route path="/sandbox" element={<SandboxPage />} />
           <Route path="/anomalies" element={<AnomaliesPage />} />
           <Route path="/mcp" element={<McpPage />} />
           <Route path="/skills" element={<SkillsPage />} />
