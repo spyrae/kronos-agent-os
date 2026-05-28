@@ -33,6 +33,14 @@ DEFAULT_REGISTRY = {
         "tier": "standard",
         "description": "Quick web search + content extraction + synthesis.",
     },
+    "knowledge_pipeline_agent": {
+        "enabled": True,
+        "module": "kronos.agents.knowledge_pipeline.graph",
+        "factory": "create_knowledge_pipeline_agent",
+        "tool_prefixes": ["memory", "knowledge", "notes", "queue"],
+        "tier": "lite",
+        "description": "File-handoff knowledge pipeline: notes/inbox task files, claims, wiki links, verification, Mem0 sync.",
+    },
     "task_agent": {
         "enabled": True,
         "module": "kronos.agents.task",
