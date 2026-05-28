@@ -1,10 +1,16 @@
 """Google SERP tracker — finds position of a target URL for a keyword.
 
-Uses the Brave Web Search API (already in env: BRAVE_API_KEY) which
-returns Google-like organic results with high overlap. Falls back to
-Exa if Brave rate-limits.
+Provider chain (try each until one returns non-empty results):
 
-Returns ``None`` if the target URL is not in the top 100 results.
+1. **Brave Web Search** (``BRAVE_API_KEY``) — primary, cheap (free tier
+   2k req/mo, paid $9/mo for 20k). Google-like organic overlap.
+2. **Serper.dev** (``SERPER_API_KEY``) — fallback, true Google SERP,
+   $50/mo for 2.5k/day. Used when Brave returns 402/429 or empty.
+3. **EXA** (``EXA_API_KEY``) — last-resort neural search, useful when
+   both keyword-search APIs are down.
+
+Returns ``None`` if the target URL is not in top results across all
+providers.
 """
 
 from __future__ import annotations
@@ -25,7 +31,6 @@ def _brave_search(query: str, country: str = "us", count: int = 20) -> list[dict
     """Brave Search API → list of organic results.
 
     country: 'us' for google.com, 'ru' for google.ru.
-    Returns up to ``count`` results (max 20 per Brave call).
     """
     api_key = os.environ.get("BRAVE_API_KEY") or ""
     if not api_key:
@@ -52,7 +57,41 @@ def _brave_search(query: str, country: str = "us", count: int = 20) -> list[dict
         return []
 
     web = data.get("web") or {}
-    return web.get("results") or []
+    return [{"url": r.get("url"), "title": r.get("title")} for r in (web.get("results") or [])]
+
+
+def _serper_search(query: str, country: str = "us", count: int = 20) -> list[dict]:
+    """Serper.dev → real Google SERP organic results."""
+    api_key = os.environ.get("SERPER_API_KEY") or ""
+    if not api_key:
+        return []
+
+    body = json.dumps({
+        "q": query,
+        "num": count,
+        "gl": country,  # geolocation: 'us' / 'ru'
+    }).encode()
+    req = urllib.request.Request(
+        "https://google.serper.dev/search",
+        data=body,
+        method="POST",
+        headers={
+            "X-API-KEY": api_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+            data = json.loads(resp.read())
+    except HTTPError as e:
+        log.warning("Serper HTTP %d for %r", e.code, query[:60])
+        return []
+    except Exception as e:
+        log.warning("Serper failed for %r: %s", query[:60], e)
+        return []
+
+    return [{"url": r.get("link"), "title": r.get("title")} for r in (data.get("organic") or [])]
 
 
 def _exa_search(query: str, count: int = 20) -> list[dict]:
@@ -84,16 +123,21 @@ def _exa_search(query: str, count: int = 20) -> list[dict]:
 def find_position(target_url: str, query: str, locale: str = "en") -> tuple[int | None, str | None]:
     """Return (position_1_indexed, ranked_url) or (None, None) if not in top results.
 
-    Tries Brave first; on 402/quota errors falls back to EXA neural search.
+    Provider chain: Brave → Serper → EXA. Stops at the first provider
+    that returns non-empty results.
     """
     country = "ru" if locale == "ru" else "us"
     target_host = urllib.parse.urlparse(target_url).netloc.lower().replace("www.", "")
     if not target_host:
         return None, None
 
+    # 1) Brave (primary, cheap)
     results = _brave_search(query, country=country, count=20)
+    # 2) Serper (fallback, true Google SERP)
     if not results:
-        # Fallback to EXA — neural search, locale-agnostic.
+        results = _serper_search(query, country=country, count=20)
+    # 3) EXA (last-resort neural search)
+    if not results:
         results = _exa_search(query, count=20)
 
     for idx, r in enumerate(results, start=1):

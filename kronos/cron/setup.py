@@ -84,10 +84,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     nexus_jobs_registered = 0
 
     if _AGENT_EXCLUSIVE_JOBS.get("competitor-weekly") == me:
-        from kronos.cron.seo_geo_check import (
-            run_seo_geo_gsc_daily,
-            run_seo_geo_weekly,
-        )
+        from kronos.cron.seo_geo_check import run_seo_geo_weekly
 
         # Daily analytics pulse at 01:00 UTC = 04:00 MSK — before user wakes up.
         scheduler.add_daily("analytics-pulse", run_analytics_pulse, hour_utc=1)
@@ -96,10 +93,11 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         # Competitor coverage is weekly-only: one deep report Sunday 10:00 UTC
         # (13:00 MSK). Replaced the noisy daily digest + 4-hourly alerts setup.
         scheduler.add_weekly("competitor-weekly", run_competitor_weekly, weekday=6, hour_utc=10)
-        # SEO/GEO: daily GSC refresh + weekly full check (positions + AI citations).
-        scheduler.add_daily("seo-geo-gsc-daily", run_seo_geo_gsc_daily, hour_utc=2)
+        # SEO/GEO: weekly full check (positions + AI citations + GSC pull)
+        # Sunday 03:00 UTC (06:00 MSK). Daily GSC pull was dropped — keyword
+        # positions don't move enough to warrant a daily run.
         scheduler.add_weekly("seo-geo-weekly", run_seo_geo_weekly, weekday=6, hour_utc=3)
-        nexus_jobs_registered = 6
+        nexus_jobs_registered = 5
 
     total = 12 + nexus_jobs_registered
     log.info("%d cron jobs registered for agent '%s'", total, me)
