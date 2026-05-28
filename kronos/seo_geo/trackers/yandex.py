@@ -53,6 +53,8 @@ def _submit_search(query: str, locale: str = "ru") -> str | None:
             "page": 0,
         },
         "folder_id": folder_id,
+        # FORMAT_XML returns structured data (<yandexsearch>/<doc>/<url>);
+        # FORMAT_HTML returns a full HTML SERP page that is brittle to scrape.
         "response_format": "FORMAT_XML",
     }).encode()
 
