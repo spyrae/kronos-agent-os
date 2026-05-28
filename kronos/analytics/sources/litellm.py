@@ -48,19 +48,35 @@ def collect() -> dict:
         return {"error": "LiteLLM not configured"}
 
     now = datetime.now(UTC)
-    yesterday = now - timedelta(days=1)
+    yesterday_date = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    today_date = now.strftime("%Y-%m-%d")
+    seven_days_ago = (now - timedelta(days=7)).strftime("%Y-%m-%d")
 
     try:
-        # 1) Daily spend totals over the last 24h.
-        # Endpoint returns [{"date": "YYYY-MM-DD", "spend": float}, ...].
+        # /global/spend/logs returns [{"date": "YYYY-MM-DD", "spend": float}, ...]
+        # IMPORTANT: LiteLLM v1.83 ignores start_date/end_date params and
+        # always returns the last 30 days. So we filter locally.
         spend_data = _api_get("/global/spend/logs", {
-            "start_date": yesterday.strftime("%Y-%m-%d"),
-            "end_date": now.strftime("%Y-%m-%d"),
+            "start_date": yesterday_date,
+            "end_date": today_date,
         })
         if not isinstance(spend_data, list):
             spend_data = spend_data.get("data", []) if isinstance(spend_data, dict) else []
 
-        spend_24h = sum(float(s.get("spend", 0) or 0) for s in spend_data)
+        # 24h spend = today + yesterday entries.
+        spend_24h = sum(
+            float(s.get("spend", 0) or 0)
+            for s in spend_data
+            if str(s.get("date", "")) in (today_date, yesterday_date)
+        )
+        # 7d spend = entries with date >= 7-day cutoff.
+        spend_7d = sum(
+            float(s.get("spend", 0) or 0)
+            for s in spend_data
+            if str(s.get("date", "")) >= seven_days_ago
+        )
+        # 30d total (whatever LiteLLM returned).
+        spend_30d = sum(float(s.get("spend", 0) or 0) for s in spend_data)
 
         # 2) Top models by all-time spend. The endpoint returns
         # [{"model": str, "total_spend": float}, ...] sorted desc.
@@ -84,6 +100,8 @@ def collect() -> dict:
 
         return {
             "spend_24h_usd": round(spend_24h, 4),
+            "spend_7d_usd": round(spend_7d, 4),
+            "spend_30d_usd": round(spend_30d, 4),
             "top_models": top_models_str,
             "models_tracked": models_tracked,
         }
