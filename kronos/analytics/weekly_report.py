@@ -118,20 +118,14 @@ def _collect_all() -> dict[str, dict]:
 async def _get_history_context() -> str:
     """Retrieve previous weekly metrics from Mem0 for WoW comparison."""
     try:
-        from kronos.memory.mem0_client import get_mem0
-        mem0 = get_mem0()
-        results = mem0.search(
+        from kronos.memory.store import search_memories
+        memories = search_memories(
             "weekly business report metrics MRR DAU revenue",
             user_id="analytics",
             limit=4,
         )
-        if results and results.get("results"):
-            entries = []
-            for r in results["results"][:4]:
-                text = r.get("memory", r.get("text", ""))
-                if text:
-                    entries.append(text[:300])
-            return "\n".join(entries) if entries else "Нет исторических данных (первый отчёт)."
+        if memories:
+            return "\n".join(f"- {m[:300]}" for m in memories[:4])
         return "Нет исторических данных (первый отчёт)."
     except Exception as e:
         log.debug("Mem0 history retrieval failed: %s", e)
@@ -141,8 +135,7 @@ async def _get_history_context() -> str:
 async def _save_to_mem0(summary: str, metrics: dict) -> None:
     """Save key metrics to Mem0 for future WoW comparison."""
     try:
-        from kronos.memory.mem0_client import get_mem0
-        mem0 = get_mem0()
+        from kronos.memory.store import add_memories
 
         today = datetime.now(UTC).strftime("%Y-%m-%d")
 
@@ -165,12 +158,13 @@ async def _save_to_mem0(summary: str, metrics: dict) -> None:
         if "error" not in li:
             parts.append(f"completed={li.get('completed_this_week')}, bugs={li.get('bugs_open')}")
 
-        mem0.add(
-            " | ".join(parts),
-            user_id="analytics",
-            metadata={"type": "weekly_metrics", "date": today},
-        )
-        log.info("Weekly metrics saved to Mem0")
+        compact = " | ".join(parts)
+        messages = [
+            {"role": "user", "content": f"Save weekly business metrics for {today}"},
+            {"role": "assistant", "content": compact},
+        ]
+        add_memories(messages, user_id="analytics")
+        log.info("Weekly metrics saved to Mem0: %s", compact[:120])
     except Exception as e:
         log.warning("Failed to save weekly metrics to Mem0: %s", e)
 
