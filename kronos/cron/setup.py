@@ -88,15 +88,18 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
 
         # Daily analytics pulse at 01:00 UTC = 04:00 MSK — before user wakes up.
         scheduler.add_daily("analytics-pulse", run_analytics_pulse, hour_utc=1)
-        scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
+        # Periodic anomaly detector — every 2h.
         scheduler.add_periodic("analytics-alerts", run_analytics_alerts, interval_seconds=7200)
-        # Competitor coverage is weekly-only: one deep report Sunday 10:00 UTC
-        # (13:00 MSK). Replaced the noisy daily digest + 4-hourly alerts setup.
-        scheduler.add_weekly("competitor-weekly", run_competitor_weekly, weekday=6, hour_utc=10)
-        # SEO/GEO: weekly full check (positions + AI citations + GSC pull)
-        # Sunday 03:00 UTC (06:00 MSK). Daily GSC pull was dropped — keyword
-        # positions don't move enough to warrant a daily run.
-        scheduler.add_weekly("seo-geo-weekly", run_seo_geo_weekly, weekday=6, hour_utc=3)
+
+        # ── All three weekly reports land Monday morning MSK ──
+        # Spaced 3h apart so the LLM (one Codex/Kimi process) is never
+        # contended and Telegram doesn't get a burst of giant messages.
+        #   03:00 UTC (06:00 MSK) — SEO/GEO (longest: 25-35 min run)
+        #   06:00 UTC (09:00 MSK) — Competitor intelligence
+        #   09:00 UTC (12:00 MSK) — Analytics business report
+        scheduler.add_weekly("seo-geo-weekly", run_seo_geo_weekly, weekday=0, hour_utc=3)
+        scheduler.add_weekly("competitor-weekly", run_competitor_weekly, weekday=0, hour_utc=6)
+        scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
         nexus_jobs_registered = 5
 
     total = 12 + nexus_jobs_registered
