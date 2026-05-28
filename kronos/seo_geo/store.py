@@ -175,6 +175,38 @@ class SeoGeoStore:
         ).fetchall()
         return {r["engine"]: round(r["rate"], 1) for r in rows}
 
+    def competitor_mentions(self, site_id: str, days: int = 7) -> dict[str, int]:
+        """Returns {competitor_name: count} — who LLMs mention most for this site."""
+        import json as _json
+        rows = self._conn.execute(
+            "SELECT competitors_cited FROM geo_citations"
+            f" WHERE site_id=? AND checked_at >= datetime('now', '-{days} days')"
+            " AND error IS NULL AND competitors_cited IS NOT NULL",
+            (site_id,),
+        ).fetchall()
+        counter: dict[str, int] = {}
+        for r in rows:
+            try:
+                comps = _json.loads(r["competitors_cited"] or "[]")
+            except Exception:
+                continue
+            for c in comps:
+                key = str(c).lower()
+                counter[key] = counter.get(key, 0) + 1
+        return dict(sorted(counter.items(), key=lambda x: -x[1]))
+
+    def sample_answers(self, site_id: str, days: int = 7, n: int = 3) -> list[dict]:
+        """Return n representative LLM answers (mix cited + not cited)."""
+        rows = self._conn.execute(
+            "SELECT engine, question, locale, answer, cited, competitors_cited"
+            " FROM geo_citations"
+            f" WHERE site_id=? AND checked_at >= datetime('now', '-{days} days')"
+            " AND error IS NULL AND length(answer) > 50"
+            " ORDER BY cited DESC, length(answer) DESC LIMIT ?",
+            (site_id, n),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     # ── gsc_metrics ───────────────────────────────────────────────────
     def record_gsc(
         self, *,
@@ -210,6 +242,28 @@ class SeoGeoStore:
             "impressions": row["impressions"] or 0,
             "avg_position": round(row["avg_position"] or 0.0, 1),
         }
+
+    def gsc_top_queries(self, site_id: str, days: int = 28, limit: int = 15) -> list[dict]:
+        """Return top GSC queries by impressions — concrete data the LLM can reason about."""
+        rows = self._conn.execute(
+            "SELECT query, clicks, impressions, ctr, position FROM gsc_metrics"
+            " WHERE site_id=? AND window_days=?"
+            " ORDER BY impressions DESC LIMIT ?",
+            (site_id, days, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def all_positions_with_meta(self, site_id: str, engine: str) -> list[dict]:
+        """Latest per-keyword positions with tier+category for richer reporting."""
+        rows = self._conn.execute(
+            "SELECT keyword, position, url, tier, category, locale"
+            " FROM positions WHERE site_id=? AND engine=?"
+            " AND checked_at = (SELECT MAX(checked_at) FROM positions p2"
+            " WHERE p2.site_id=positions.site_id"
+            " AND p2.keyword=positions.keyword AND p2.engine=positions.engine)",
+            (site_id, engine),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def close(self) -> None:
         self._conn.close()
