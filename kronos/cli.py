@@ -815,6 +815,30 @@ def run_demo_seed(data_dir: str, workspace: str, swarm_db: str, reset: bool) -> 
     return 0
 
 
+async def _run_signals_dry_run(
+    category: str,
+    *,
+    source_limit: int | None,
+    fetch_limit: int,
+    output: str,
+    output_format: str,
+) -> int:
+    """Run Signal Intelligence without Telegram sends and print debug summary."""
+    from kronos.signals.verification import artifact_payload, run_signal_dry_run
+
+    artifact = await run_signal_dry_run(
+        category,
+        source_limit=source_limit,
+        fetch_limit=fetch_limit,
+        output_path=output or None,
+        output_format=output_format,
+    )
+    print(_format_tool_payload(artifact_payload(artifact)))
+    if output:
+        print(f"Saved dry-run artifact: {output}")
+    return 0
+
+
 async def _run_sessions_backfill_search(agent: str = "") -> int:
     """Backfill existing persisted sessions into the shared FTS search index."""
     from kronos.session import SessionStore
@@ -894,6 +918,19 @@ def build_parser() -> argparse.ArgumentParser:
     sessions_backfill = sessions_sub.add_parser("backfill-search", help="backfill existing sessions into session_search")
     sessions_backfill.add_argument("--agent", default="", help="agent name to index under; defaults to AGENT_NAME")
 
+    signals = sub.add_parser("signals", help="Signal Intelligence verification tools")
+    signals_sub = signals.add_subparsers(dest="signals_command")
+    signals_dry = signals_sub.add_parser("dry-run", help="run one signal digest without Telegram sends")
+    signals_dry.add_argument(
+        "category",
+        choices=("news", "jobs", "ideas", "travel_insights", "jb_competitors", "jb_system"),
+        help="signal category to dry-run",
+    )
+    signals_dry.add_argument("--source-limit", type=int, default=None, help="limit active sources for quick QA")
+    signals_dry.add_argument("--fetch-limit", type=int, default=8, help="max items fetched per source")
+    signals_dry.add_argument("--output", "-o", default="", help="optional artifact output path")
+    signals_dry.add_argument("--format", choices=("json", "md"), default="json", help="artifact format")
+
     connect = sub.add_parser("connect", help="guided connector setup")
     connect_sub = connect.add_subparsers(dest="connector")
     connect_sub.add_parser("telegram", help="check Telegram connector setup")
@@ -963,6 +1000,19 @@ def main(argv: list[str] | None = None) -> int:
         if args.sessions_command == "backfill-search":
             return asyncio.run(_run_sessions_backfill_search(agent=args.agent))
         parser.parse_args(["sessions", "--help"])
+        return 0
+    if args.command == "signals":
+        if args.signals_command == "dry-run":
+            return asyncio.run(
+                _run_signals_dry_run(
+                    args.category,
+                    source_limit=args.source_limit,
+                    fetch_limit=args.fetch_limit,
+                    output=args.output,
+                    output_format=args.format,
+                )
+            )
+        parser.parse_args(["signals", "--help"])
         return 0
     if args.command == "connect":
         if args.connector == "telegram":

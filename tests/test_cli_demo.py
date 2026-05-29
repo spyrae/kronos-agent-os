@@ -198,6 +198,40 @@ def test_sessions_backfill_command_routes_to_runner(monkeypatch, capsys):
     assert called is True
 
 
+def test_signals_dry_run_command_routes_to_runner(monkeypatch, capsys):
+    import kronos.cli as cli
+
+    called = False
+
+    async def fake_dry_run(category: str, **kwargs):
+        nonlocal called
+        called = True
+        assert category == "news"
+        assert kwargs["source_limit"] == 2
+        assert kwargs["fetch_limit"] == 3
+        assert kwargs["output"] == "/tmp/news.json"
+        assert kwargs["output_format"] == "json"
+        return 0
+
+    monkeypatch.setattr(cli, "_run_signals_dry_run", fake_dry_run)
+
+    result = cli.main([
+        "signals",
+        "dry-run",
+        "news",
+        "--source-limit",
+        "2",
+        "--fetch-limit",
+        "3",
+        "--output",
+        "/tmp/news.json",
+    ])
+
+    capsys.readouterr()
+    assert result == 0
+    assert called is True
+
+
 def test_cli_version(capsys):
     import pytest
 

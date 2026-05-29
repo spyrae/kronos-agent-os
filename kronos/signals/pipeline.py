@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ class SignalDigestRun:
     cluster_count: int
     digest_id: int
     sent: bool
+    evidence_counts: dict[str, int]
 
 
 async def run_signal_digest(
@@ -81,6 +83,7 @@ async def run_signal_digest(
         cluster_count=len(clusters),
         digest_id=digest_id,
         sent=sent,
+        evidence_counts=dict(Counter(str(cluster.get("evidence_level") or "") for cluster in clusters)),
     )
 
 

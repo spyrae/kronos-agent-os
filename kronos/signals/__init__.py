@@ -11,6 +11,7 @@ from kronos.signals.scoring import EvidenceAssessment, EvidenceLevel, assess_evi
 from kronos.signals.sources import SignalSource, SignalSourceConfigError, SourceRegistry, load_sources
 from kronos.signals.store import SignalStore
 from kronos.signals.travel import is_travel_insight, travel_insight_score
+from kronos.signals.verification import SignalDryRunArtifact, run_signal_dry_run
 
 __all__ = [
     "DeduplicationResult",
@@ -21,6 +22,7 @@ __all__ = [
     "SignalCluster",
     "SignalDigest",
     "SignalDigestRun",
+    "SignalDryRunArtifact",
     "SignalItem",
     "SignalSource",
     "SignalSourceConfigError",
@@ -39,6 +41,7 @@ __all__ = [
     "render_digest",
     "route_for_category",
     "run_signal_digest",
+    "run_signal_dry_run",
     "sanitize_trend_language",
     "save_rendered_digest",
     "travel_insight_score",
