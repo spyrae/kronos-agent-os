@@ -199,7 +199,16 @@ def test_polish_rendered_digest_localizes_ai_acronym_without_touching_openai(mon
     rendered = render_digest(
         "travel_insights",
         [{"id": 1, "category": "travel_insights", "title": "AI trip planner by OpenAI", "summary": "", "item_ids": [1]}],
-        {1: [_item("search_travel_planning_ai", "search", "AI trip planner by OpenAI")]},
+        {
+            1: [
+                _item(
+                    "search_travel_planning_ai",
+                    "search",
+                    "AI trip planner by OpenAI: https://t.me/AI_Handler/146",
+                    url="https://t.me/AI_Handler/146",
+                )
+            ]
+        },
         max_chars=10000,
     )
 
@@ -207,6 +216,8 @@ def test_polish_rendered_digest_localizes_ai_acronym_without_touching_openai(mon
 
     assert "ИИ trip planner by OpenAI" in polished.body
     assert "OpenAI" in polished.body
+    assert "https://t.me/AI_Handler/146" in polished.body
+    assert "https://t.me/ИИ_Handler/146" not in polished.body
 
 
 def test_render_ideas_digest_uses_product_format_and_limits_to_ten():

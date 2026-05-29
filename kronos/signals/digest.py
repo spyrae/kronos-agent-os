@@ -464,7 +464,25 @@ def _needs_russian_polish(text: str) -> bool:
 
 def _localize_common_terms(text: str) -> str:
     """Apply deterministic Russian replacements that LLMs often leave as-is."""
-    return re.sub(r"(?<![A-Za-z])AI(?![A-Za-z])", "ИИ", text)
+    parts = re.split(r"(<[^>]+>)", text)
+    localized: list[str] = []
+    for part in parts:
+        if part.startswith("<") and part.endswith(">"):
+            localized.append(part)
+            continue
+        localized.append(_localize_common_terms_outside_urls(part))
+    return "".join(localized)
+
+
+def _localize_common_terms_outside_urls(text: str) -> str:
+    parts = re.split(r"(https?://\S+)", text)
+    localized: list[str] = []
+    for part in parts:
+        if part.startswith(("http://", "https://")):
+            localized.append(part)
+            continue
+        localized.append(re.sub(r"(?<![A-Za-z])AI(?![A-Za-z])", "ИИ", part))
+    return "".join(localized)
 
 
 def _needs_strict_russian_rewrite(text: str) -> bool:
