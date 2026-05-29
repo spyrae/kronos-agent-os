@@ -1,0 +1,131 @@
+import pytest
+
+from kronos.config import settings
+from kronos.signals.digest import render_digest, save_rendered_digest
+from kronos.signals.models import SignalItem
+from kronos.signals.routing import route_for_category
+from kronos.signals.sources import SignalSource
+from kronos.signals.store import SignalStore
+
+
+def _item(source_id: str, platform: str, text: str, url: str = "") -> SignalItem:
+    return SignalItem(
+        source_id=source_id,
+        source_platform=platform,
+        title=text,
+        text=text,
+        url=url,
+        categories=("news",),
+    )
+
+
+def test_routes_categories_to_destinations():
+    assert route_for_category("news").destination == "Digest: News"
+    assert route_for_category("jobs").destination == "Digest: Jobs"
+    assert route_for_category("ideas").destination == "Digest: Product/Business Ideas"
+    assert route_for_category("travel_insights").destination == "JB: Travel Insights"
+
+    with pytest.raises(ValueError, match="unsupported signal category"):
+        route_for_category("unknown")
+
+
+def test_render_digest_groups_by_evidence_and_sanitizes_anecdote_language():
+    clusters = [
+        {
+            "id": 1,
+            "category": "news",
+            "title": "рынок сдвигается к Codex",
+            "summary": "все переходят массово после одного обсуждения",
+            "item_ids": [101],
+        },
+        {
+            "id": 2,
+            "category": "news",
+            "title": "Agent tooling releases",
+            "summary": "Multiple independent sources mention agent tooling.",
+            "item_ids": [201, 202],
+        },
+        {
+            "id": 3,
+            "category": "news",
+            "title": "Official API update",
+            "summary": "Official changelog shipped.",
+            "item_ids": [301],
+        },
+    ]
+    items_by_cluster = {
+        1: [_item("telegram_nobilix_chat", "telegram", "One chat message")],
+        2: [
+            _item("reddit_local_llama", "reddit", "Agent tooling releases"),
+            _item("x_omarsar0", "x", "Agent tooling commentary"),
+        ],
+        3: [_item("x_openai_devs", "x", "Official API update", "https://x.com/OpenAIDevs/status/1")],
+    }
+    sources = {
+        "x_openai_devs": SignalSource(
+            id="x_openai_devs",
+            platform="x",
+            handle="@OpenAIDevs",
+            categories=("news",),
+            tier="core",
+            trust="official",
+        )
+    }
+
+    rendered = render_digest("news", clusters, items_by_cluster, sources_by_id=sources)
+
+    assert rendered.route.destination == "Digest: News"
+    assert "<b>Confirmed / Official</b>" in rendered.body
+    assert "<b>Emerging Signals</b>" in rendered.body
+    assert "<b>Anecdotes / Watchlist</b>" in rendered.body
+    assert "есть единичный сигнал к Codex" in rendered.body
+    assert "отдельные источники упоминают в отдельных обсуждениях" in rendered.body
+    assert "рынок сдвигается" not in rendered.body
+    assert "Guardrail: weak evidence" in rendered.body
+    assert 'href="https://x.com/OpenAIDevs/status/1"' in rendered.body
+
+
+def test_render_digest_is_telegram_chunk_safe():
+    clusters = [
+        {
+            "id": 1,
+            "category": "ideas",
+            "title": "Long idea",
+            "summary": "x" * 500,
+            "item_ids": [1],
+        }
+    ]
+    rendered = render_digest(
+        "ideas",
+        clusters,
+        {1: [_item("x_ideabrowser", "x", "Long idea")]},
+        max_chars=220,
+    )
+
+    assert len(rendered.body) <= 220
+    assert "truncated for Telegram length" in rendered.body
+
+
+def test_save_rendered_digest_persists_dry_run(tmp_path, monkeypatch):
+    db_dir = tmp_path / "agent"
+    db_dir.mkdir()
+    monkeypatch.setattr(settings, "db_dir", str(db_dir))
+    monkeypatch.setattr(settings, "db_path", str(db_dir / "session.db"))
+
+    from kronos import db as _db
+
+    _db._instances.clear()
+    store = SignalStore()
+    rendered = render_digest(
+        "jobs",
+        [{"id": 9, "category": "jobs", "title": "AI job", "summary": "Hiring", "item_ids": [90]}],
+        {9: [_item("telegram_ai_chat_cutcode", "telegram", "Hiring AI engineer")]},
+    )
+
+    digest_id = save_rendered_digest(store, rendered, dry_run=True)
+
+    digest = store.list_digests(destination="Digest: Jobs")[0]
+    assert digest["id"] == digest_id
+    assert digest["title"].startswith("[dry-run]")
+    assert digest["cluster_ids"] == [9]
+    assert digest["item_ids"] == [90]
