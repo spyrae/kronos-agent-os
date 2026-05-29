@@ -15,6 +15,7 @@ from kronos.signals.fetchers.base import (
 )
 from kronos.signals.fetchers.brave_search import fetch_search_source
 from kronos.signals.fetchers.competitor import fetch_competitor_source
+from kronos.signals.fetchers.jb_system import fetch_analytics_source, fetch_seo_source
 from kronos.signals.fetchers.reddit_search import fetch_reddit_source
 from kronos.signals.fetchers.telegram_public import fetch_telegram_public_source
 from kronos.signals.fetchers.telegram_telethon import fetch_telegram_telethon_source
@@ -117,7 +118,14 @@ def _default_fetchers() -> dict[str, Fetcher]:
     async def _play_store(source: SignalSource, options: FetchOptions) -> FetchResult:
         return await fetch_play_store_source(source, options=options)
 
+    async def _analytics(source: SignalSource, options: FetchOptions) -> FetchResult:
+        return await fetch_analytics_source(source, options=options)
+
+    async def _seo(source: SignalSource, options: FetchOptions) -> FetchResult:
+        return await fetch_seo_source(source, options=options)
+
     return {
+        "analytics": _analytics,
         "search": _search,
         "reddit": _reddit,
         "x": _x,
@@ -125,6 +133,7 @@ def _default_fetchers() -> dict[str, Fetcher]:
         "competitor": _competitor,
         "app_store": _app_store,
         "play_store": _play_store,
+        "seo": _seo,
     }
 
 

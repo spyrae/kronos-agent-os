@@ -6,6 +6,7 @@ from kronos.signals.fetchers.app_stores import fetch_app_store_source, fetch_pla
 from kronos.signals.fetchers.base import FetcherError, FetchErrorKind, FetchOptions, FetchResult
 from kronos.signals.fetchers.brave_search import fetch_search_source
 from kronos.signals.fetchers.competitor import fetch_competitor_source
+from kronos.signals.fetchers.jb_system import fetch_analytics_source, fetch_seo_source
 from kronos.signals.fetchers.reddit_search import fetch_reddit_source
 from kronos.signals.fetchers.runner import fetch_sources, format_dry_run
 from kronos.signals.fetchers.telegram_public import fetch_telegram_public_source
@@ -291,6 +292,53 @@ async def test_play_store_fetcher_normalizes_metrics():
     assert len(result.items) == 1
     assert result.items[0].source_platform == "play_store"
     assert "рейтинг Android" in result.items[0].text
+
+
+@pytest.mark.asyncio
+async def test_analytics_fetcher_normalizes_product_metrics():
+    result = await fetch_analytics_source(
+        _source("analytics", id="jb_product_analytics", categories=("jb_system",), trust="official"),
+        collector=lambda: {
+            "dau": 12,
+            "new_signups_24h": 3,
+            "trips_created_24h": 5,
+            "client_errors_24h": 0,
+        },
+    )
+
+    assert result.ok is True
+    assert len(result.items) == 1
+    assert result.items[0].source_platform == "analytics"
+    assert "создано поездок за 24ч: 5" in result.items[0].text
+
+
+@pytest.mark.asyncio
+async def test_analytics_fetcher_treats_missing_optional_config_as_empty():
+    result = await fetch_analytics_source(
+        _source("analytics", id="jb_product_analytics", categories=("jb_system",), trust="official"),
+        collector=lambda: {"error": "PostHog not configured"},
+    )
+
+    assert result.ok is True
+    assert result.items == ()
+
+
+@pytest.mark.asyncio
+async def test_seo_fetcher_normalizes_geo_snapshot():
+    result = await fetch_seo_source(
+        _source("seo", id="jb_seo_geo", categories=("jb_system",), trust="official"),
+        collector=lambda: {
+            "journeybay_top10": 4,
+            "journeybay_geo_citation_rate": 12.5,
+            "journeybay_gsc_clicks_28d": 123,
+        },
+    )
+
+    assert result.ok is True
+    assert len(result.items) == 1
+    assert result.items[0].source_platform == "seo"
+    assert "JourneyBay: SEO/GEO снимок" in result.items[0].title
+    assert "journeybay топ-10: 4" in result.items[0].text
 
 
 @pytest.mark.asyncio
