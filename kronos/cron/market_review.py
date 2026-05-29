@@ -8,7 +8,7 @@ import logging
 from datetime import UTC, datetime
 
 from kronos.config import settings
-from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
+from kronos.cron.notify import TOPIC_FINANCE, send_bot_api
 from kronos.llm import ModelTier, get_model
 from kronos.tools.brave import search as brave_search
 
@@ -83,4 +83,8 @@ async def run_market_review() -> None:
         return
 
     log.info("Market review: %d chars, %d tickers", len(review), len(tickers))
-    send_bot_api(f"<b>📈 Weekly Market Review — {today}</b>\n\n{review}", parse_mode="HTML", topic_id=TOPIC_DIGEST)
+    send_bot_api(
+        f"<b>📈 Weekly Market Review — {today}</b>\n\n{review}",
+        parse_mode="HTML",
+        topic_id=TOPIC_FINANCE,
+    )

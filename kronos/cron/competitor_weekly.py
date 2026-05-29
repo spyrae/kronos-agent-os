@@ -7,7 +7,7 @@ Generates deep analysis report → Telegram + Mem0.
 import logging
 
 from kronos.config import settings
-from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
+from kronos.cron.notify import TOPIC_JB_COMPETITORS, send_bot_api
 
 log = logging.getLogger("kronos.cron.competitor_weekly")
 
@@ -31,7 +31,7 @@ async def run_competitor_weekly() -> None:
         send_bot_api(
             header + report,
             parse_mode="HTML",
-            topic_id=TOPIC_DIGEST,
+            topic_id=TOPIC_JB_COMPETITORS,
         )
 
         log.info("Weekly competitive report sent (%d chars)", len(report))
@@ -40,5 +40,5 @@ async def run_competitor_weekly() -> None:
         log.error("Weekly competitor report failed: %s", e)
         send_bot_api(
             f"\u26a0\ufe0f Weekly competitor report failed: {str(e)[:200]}",
-            topic_id=TOPIC_DIGEST,
+            topic_id=TOPIC_JB_COMPETITORS,
         )

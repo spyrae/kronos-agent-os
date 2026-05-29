@@ -9,7 +9,7 @@ import logging
 from datetime import UTC, datetime
 
 from kronos.config import settings
-from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
+from kronos.cron.notify import TOPIC_JB_SYSTEM, send_bot_api
 
 log = logging.getLogger("kronos.cron.analytics_pulse")
 
@@ -50,14 +50,22 @@ async def run_analytics_pulse() -> None:
         # Split if too long
         full_text = header + pulse
         if len(full_text) <= 4096:
-            send_bot_api(full_text, parse_mode="HTML", topic_id=TOPIC_DIGEST)
+            send_bot_api(full_text, parse_mode="HTML", topic_id=TOPIC_JB_SYSTEM)
         else:
             mid = len(pulse) // 2
             split_at = pulse.rfind("\n", 0, mid + 200)
             if split_at < mid - 200:
                 split_at = mid
-            send_bot_api(header + pulse[:split_at], parse_mode="HTML", topic_id=TOPIC_DIGEST)
-            send_bot_api(pulse[split_at:], parse_mode="HTML", topic_id=TOPIC_DIGEST)
+            send_bot_api(
+                header + pulse[:split_at],
+                parse_mode="HTML",
+                topic_id=TOPIC_JB_SYSTEM,
+            )
+            send_bot_api(
+                pulse[split_at:],
+                parse_mode="HTML",
+                topic_id=TOPIC_JB_SYSTEM,
+            )
 
         log.info("Daily pulse sent: %d sources OK, %d failed", ok, failed)
 
@@ -65,5 +73,5 @@ async def run_analytics_pulse() -> None:
         log.error("Daily pulse failed: %s", e)
         send_bot_api(
             f"\u26a0\ufe0f Daily pulse failed: {str(e)[:200]}",
-            topic_id=TOPIC_DIGEST,
+            topic_id=TOPIC_JB_SYSTEM,
         )

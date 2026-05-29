@@ -11,7 +11,7 @@ import urllib.request
 from datetime import UTC, datetime, timedelta
 
 from kronos.config import settings
-from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
+from kronos.cron.notify import TOPIC_FINANCE, send_bot_api
 from kronos.llm import ModelTier, get_model
 
 log = logging.getLogger("kronos.cron.expense_digest")
@@ -110,4 +110,8 @@ async def run_expense_digest() -> None:
         return
 
     log.info("Expense digest: %d chars, %d expenses", len(digest), len(expenses))
-    send_bot_api(f"<b>💰 Expense Digest — {today}</b>\n\n{digest}", parse_mode="HTML", topic_id=TOPIC_DIGEST)
+    send_bot_api(
+        f"<b>💰 Expense Digest — {today}</b>\n\n{digest}",
+        parse_mode="HTML",
+        topic_id=TOPIC_FINANCE,
+    )

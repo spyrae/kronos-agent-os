@@ -7,7 +7,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from kronos.config import settings
-from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
+from kronos.cron.notify import TOPIC_DIGEST_NEWS, send_bot_api
 from kronos.llm import ModelTier, get_model
 from kronos.tools.brave import search as brave_search
 
@@ -115,4 +115,4 @@ async def run_news_monitor() -> None:
         return
 
     log.info("News digest generated: %d chars", len(digest))
-    send_bot_api(digest, parse_mode="HTML", topic_id=TOPIC_DIGEST)
+    send_bot_api(digest, parse_mode="HTML", topic_id=TOPIC_DIGEST_NEWS)

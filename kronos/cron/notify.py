@@ -30,10 +30,74 @@ DEFAULT_CHAT = int(os.environ.get("DEFAULT_NOTIFY_CHAT") or "0")
 if not DEFAULT_CHAT and settings.telegram_swarm_chat_id:
     DEFAULT_CHAT = _bot_api_group_chat_id(settings.telegram_swarm_chat_id)
 
+
+def _resolve_topic_id(
+    env_name: str,
+    setting_value: int = 0,
+    fallback: int = 0,
+) -> int:
+    """Resolve Telegram topic id from env/settings with optional fallback.
+
+    Treat 0/empty as "not configured" so a new topic can inherit the legacy
+    digest topic while env examples still use explicit ``0`` placeholders.
+    """
+    candidates = (os.environ.get(env_name), setting_value, fallback)
+    for candidate in candidates:
+        try:
+            value = int(candidate or 0)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return 0
+
+
 # Bot chat topic IDs (topics inside the KAOS bot DM)
-TOPIC_GENERAL = int(os.environ.get("TOPIC_GENERAL") or settings.telegram_general_topic_id or "0")
-TOPIC_DIGEST = int(os.environ.get("TOPIC_DIGEST") or settings.telegram_digest_topic_id or "0")
-TOPIC_FINANCE = int(os.environ.get("TOPIC_FINANCE") or settings.telegram_finance_topic_id or "0")
+TOPIC_GENERAL = _resolve_topic_id(
+    "TOPIC_GENERAL",
+    settings.telegram_general_topic_id,
+)
+TOPIC_DIGEST = _resolve_topic_id(
+    "TOPIC_DIGEST",
+    settings.telegram_digest_topic_id,
+)
+TOPIC_FINANCE = _resolve_topic_id(
+    "TOPIC_FINANCE",
+    settings.telegram_finance_topic_id,
+)
+
+# Signal Intelligence destinations. All default to the legacy digest topic
+# until the corresponding Telegram topics are created and configured.
+TOPIC_DIGEST_NEWS = _resolve_topic_id(
+    "TOPIC_DIGEST_NEWS",
+    settings.telegram_digest_news_topic_id,
+    TOPIC_DIGEST,
+)
+TOPIC_JB_COMPETITORS = _resolve_topic_id(
+    "TOPIC_JB_COMPETITORS",
+    settings.telegram_jb_competitors_topic_id,
+    TOPIC_DIGEST,
+)
+TOPIC_JB_SYSTEM = _resolve_topic_id(
+    "TOPIC_JB_SYSTEM",
+    settings.telegram_jb_system_topic_id,
+    TOPIC_DIGEST,
+)
+TOPIC_DIGEST_JOBS = _resolve_topic_id(
+    "TOPIC_DIGEST_JOBS",
+    settings.telegram_digest_jobs_topic_id,
+    TOPIC_DIGEST,
+)
+TOPIC_DIGEST_IDEAS = _resolve_topic_id(
+    "TOPIC_DIGEST_IDEAS",
+    settings.telegram_digest_ideas_topic_id,
+    TOPIC_DIGEST,
+)
+TOPIC_JB_TRAVEL_INSIGHTS = _resolve_topic_id(
+    "TOPIC_JB_TRAVEL_INSIGHTS",
+    settings.telegram_jb_travel_insights_topic_id,
+    TOPIC_DIGEST,
+)
 
 
 def send_webhook(

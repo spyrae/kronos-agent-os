@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 
 from kronos.config import settings
-from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
+from kronos.cron.notify import TOPIC_JB_SYSTEM, send_bot_api
 
 log = logging.getLogger("kronos.cron.seo_geo")
 
@@ -28,12 +28,12 @@ async def run_seo_geo_weekly() -> None:
         log.info("seo_geo weekly counts: %s", counts)
         report = format_weekly_report()
         if report:
-            send_bot_api(report, parse_mode="HTML", topic_id=TOPIC_DIGEST)
+            send_bot_api(report, parse_mode="HTML", topic_id=TOPIC_JB_SYSTEM)
     except Exception as e:
         log.error("seo_geo weekly failed: %s", e)
         send_bot_api(
             f"⚠️ SEO/GEO weekly failed: {str(e)[:200]}",
-            topic_id=TOPIC_DIGEST,
+            topic_id=TOPIC_JB_SYSTEM,
         )
 
 

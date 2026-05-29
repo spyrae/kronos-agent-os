@@ -38,10 +38,10 @@ Daily news digest pipeline:
 2. Parse Reddit subreddits and Twitter accounts into search queries
 3. Brave Search for each topic (freshness=past day, up to 10 topics)
 4. LLM synthesis (DeepSeek lite) → structured HTML digest
-5. Send to Telegram via Bot API (NEWS_TOPIC_ID)
+5. Send to Telegram via Bot API (`TOPIC_DIGEST_NEWS`, fallback `TOPIC_DIGEST`)
 
 **Dependencies:** BRAVE_API_KEY, WATCHLIST.md
-**Notification:** Bot API → Telegram News topic
+**Notification:** Bot API → Telegram `Digest: News` topic
 
 ### 3. group-digest
 **Schedule:** Daily 01:00 UTC
@@ -53,10 +53,10 @@ Daily Telegram group digest:
 3. Filter significant messages by engagement (reactions >= 3 or views >= 200)
 4. Score and rank: `reactions * 10 + views / 100`
 5. LLM synthesis (DeepSeek lite) → HTML digest with insights
-6. Send to Telegram via Bot API (DIGEST_TOPIC_ID)
+6. Send to Telegram via Bot API (`TOPIC_DIGEST_NEWS`, fallback `TOPIC_DIGEST`)
 
 **Dependencies:** Telethon client (shared), GROUPS.md
-**Notification:** Bot API → Telegram Digest topic
+**Notification:** Bot API → Telegram `Digest: News` topic
 
 ### 4. email-expenses
 **Schedule:** Daily 00:00 UTC
@@ -189,3 +189,19 @@ Two delivery methods in `kronos/cron/notify.py`:
 | `send_bot_api()` | Topic messages | Direct Telegram Bot API (supports `message_thread_id`) |
 
 Both support message chunking (4000 char limit) and parse_mode (HTML).
+
+## Topic Destinations
+
+`TOPIC_DIGEST` remains the backward-compatible fallback. New signal/JourneyBay
+topics can be configured independently:
+
+| Env var | Destination | Current producers |
+|---------|-------------|-------------------|
+| `TOPIC_DIGEST_NEWS` | `Digest: News` | `news-monitor`, `group-digest` |
+| `TOPIC_JB_COMPETITORS` | `JB: Competitors Status` | `competitor-weekly` |
+| `TOPIC_JB_SYSTEM` | `JB: System Status` | analytics pulse/weekly/alerts, SEO/GEO |
+| `TOPIC_DIGEST_JOBS` | `Digest: Jobs` | reserved for signal pipeline |
+| `TOPIC_DIGEST_IDEAS` | `Digest: Product/Business Ideas` | reserved for signal pipeline |
+| `TOPIC_JB_TRAVEL_INSIGHTS` | `JB: Travel Insights` | reserved for signal pipeline |
+
+Finance reports continue to use `TOPIC_FINANCE`.

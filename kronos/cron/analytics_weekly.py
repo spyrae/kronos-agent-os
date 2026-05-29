@@ -8,7 +8,7 @@ import logging
 from datetime import UTC, datetime
 
 from kronos.config import settings
-from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
+from kronos.cron.notify import TOPIC_JB_SYSTEM, send_bot_api
 
 log = logging.getLogger("kronos.cron.analytics_weekly")
 
@@ -39,7 +39,7 @@ async def run_analytics_weekly() -> None:
         # Split if too long for Telegram (4096 char limit)
         full_text = header + report
         if len(full_text) <= 4096:
-            send_bot_api(full_text, parse_mode="HTML", topic_id=TOPIC_DIGEST)
+            send_bot_api(full_text, parse_mode="HTML", topic_id=TOPIC_JB_SYSTEM)
         else:
             # Send in 2 parts
             mid = len(report) // 2
@@ -48,8 +48,16 @@ async def run_analytics_weekly() -> None:
             if split_at < mid - 200:
                 split_at = mid
 
-            send_bot_api(header + report[:split_at], parse_mode="HTML", topic_id=TOPIC_DIGEST)
-            send_bot_api(report[split_at:], parse_mode="HTML", topic_id=TOPIC_DIGEST)
+            send_bot_api(
+                header + report[:split_at],
+                parse_mode="HTML",
+                topic_id=TOPIC_JB_SYSTEM,
+            )
+            send_bot_api(
+                report[split_at:],
+                parse_mode="HTML",
+                topic_id=TOPIC_JB_SYSTEM,
+            )
 
         log.info("Weekly business report sent: %d sources OK, %d failed", ok, failed)
 
@@ -57,5 +65,5 @@ async def run_analytics_weekly() -> None:
         log.error("Weekly business report failed: %s", e)
         send_bot_api(
             f"\u26a0\ufe0f Weekly report failed: {str(e)[:200]}",
-            topic_id=TOPIC_DIGEST,
+            topic_id=TOPIC_JB_SYSTEM,
         )

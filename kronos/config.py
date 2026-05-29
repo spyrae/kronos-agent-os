@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     telegram_kronos_topic_id: int = 0
     telegram_finance_topic_id: int = 0
     telegram_digest_topic_id: int = 0
+    telegram_digest_news_topic_id: int = 0
+    telegram_jb_competitors_topic_id: int = 0
+    telegram_jb_system_topic_id: int = 0
+    telegram_digest_jobs_topic_id: int = 0
+    telegram_digest_ideas_topic_id: int = 0
+    telegram_jb_travel_insights_topic_id: int = 0
     telegram_kronos_agent: str = "kronos"
     telegram_finance_agent: str = "kronos"
     telegram_digest_agent: str = "kronos"

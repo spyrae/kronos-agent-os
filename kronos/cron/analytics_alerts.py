@@ -9,7 +9,7 @@ import logging
 from datetime import UTC, datetime
 
 from kronos.config import settings
-from kronos.cron.notify import TOPIC_DIGEST, send_bot_api, send_ntfy
+from kronos.cron.notify import TOPIC_JB_SYSTEM, send_bot_api, send_ntfy
 
 log = logging.getLogger("kronos.cron.analytics_alerts")
 
@@ -73,7 +73,7 @@ async def run_analytics_alerts() -> None:
 
     for anomaly in alerts_to_send:
         msg = anomaly.format_alert()
-        send_bot_api(msg, parse_mode="HTML", topic_id=TOPIC_DIGEST)
+        send_bot_api(msg, parse_mode="HTML", topic_id=TOPIC_JB_SYSTEM)
         _alert_state["count"] += 1
 
         # NTFY push for critical anomalies
@@ -90,6 +90,6 @@ async def run_analytics_alerts() -> None:
         )
 
     if bundle and summary:
-        send_bot_api(summary, parse_mode="HTML", topic_id=TOPIC_DIGEST)
+        send_bot_api(summary, parse_mode="HTML", topic_id=TOPIC_JB_SYSTEM)
 
     log.info("Anomaly check: %d detected, %d alerted", len(anomalies), len(alerts_to_send))
