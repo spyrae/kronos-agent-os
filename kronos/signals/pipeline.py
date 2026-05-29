@@ -60,6 +60,7 @@ async def run_signal_digest(
         options=FetchOptions(limit=fetch_limit),
         fetchers=fetchers,
     )
+    _record_fetch_stats(signal_store, fetch_results)
     sources_by_id = {source.id: source for source in sources}
     saved_records = _save_scored_items(signal_store, fetch_results, sources_by_id, category=category)
     clusters, items_by_cluster = _create_clusters(signal_store, category, saved_records, sources_by_id)
@@ -83,6 +84,16 @@ async def run_signal_digest(
     )
 
 
+def _record_fetch_stats(store: SignalStore, results: list[FetchResult]) -> None:
+    for result in results:
+        store.record_fetch_stats(
+            source_id=result.source.id,
+            platform=result.source.platform,
+            item_count=len(result.items),
+            error_count=len(result.errors),
+        )
+
+
 def _save_scored_items(
     store: SignalStore,
     results: list[FetchResult],
@@ -93,6 +104,8 @@ def _save_scored_items(
     records: list[tuple[int, SignalItem]] = []
     for result in results:
         source = sources_by_id.get(result.source.id)
+        selected_count = 0
+        low_confidence_count = 0
         for item in result.items:
             if category == "jobs" and not is_job_signal(item):
                 continue
@@ -107,13 +120,24 @@ def _save_scored_items(
                 item_score = max(item_score, idea_signal_score(item))
             if category == "travel_insights":
                 item_score = max(item_score, travel_insight_score(item))
+            confidence = item.confidence_score or min(100.0, item_score)
+            if confidence < 40 or item_score < 40:
+                low_confidence_count += 1
             scored = replace(
                 item,
                 importance_score=item_score,
-                confidence_score=item.confidence_score or min(100.0, item_score),
+                confidence_score=confidence,
             )
-            write_result = store.save_item(scored)
+            selected_count += 1
+            write_result = store.save_item(scored, count_seen=False)
             records.append((write_result.id, scored))
+        if selected_count:
+            store.record_selection_stats(
+                source_id=result.source.id,
+                platform=result.source.platform,
+                selected_count=selected_count,
+                low_confidence_count=low_confidence_count,
+            )
     return records
 
 

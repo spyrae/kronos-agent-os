@@ -5,6 +5,7 @@ from kronos.signals.digest import RenderedDigest, render_digest, save_rendered_d
 from kronos.signals.ideas import idea_signal_score, is_idea_signal
 from kronos.signals.models import SignalCluster, SignalDigest, SignalItem, StoreWriteResult
 from kronos.signals.pipeline import SignalDigestRun, run_signal_digest
+from kronos.signals.quality import SourceQualityAudit, SourceRecommendation, build_source_quality_audit
 from kronos.signals.routing import DigestRoute, route_for_category
 from kronos.signals.scoring import EvidenceAssessment, EvidenceLevel, assess_evidence, sanitize_trend_language
 from kronos.signals.sources import SignalSource, SignalSourceConfigError, SourceRegistry, load_sources
@@ -25,8 +26,11 @@ __all__ = [
     "SignalSourceConfigError",
     "SignalStore",
     "SourceRegistry",
+    "SourceQualityAudit",
+    "SourceRecommendation",
     "StoreWriteResult",
     "assess_evidence",
+    "build_source_quality_audit",
     "deduplicate_items",
     "idea_signal_score",
     "is_idea_signal",

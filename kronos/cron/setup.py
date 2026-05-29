@@ -41,6 +41,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.signal_travel import run_travel_insights_digest
     from kronos.cron.skill_improve import run_skill_improve
     from kronos.cron.sleep_compute import run_sleep_compute
+    from kronos.cron.source_quality_audit import run_source_quality_audit
     from kronos.cron.swarm_retention import run_swarm_retention
     from kronos.cron.user_model import run_user_model
 
@@ -88,6 +89,9 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # Market Review — weekly Friday 10:00 UTC (18:00 UTC+8)
     scheduler.add_weekly("market-review", run_market_review, weekday=4, hour_utc=10)
 
+    # Source Quality Audit — weekly check with a 13-day guard = biweekly cadence.
+    scheduler.add_weekly("source-quality-audit", run_source_quality_audit, weekday=6, hour_utc=4)
+
     # Swarm Retention — weekly Sunday 03:00 UTC. Prunes swarm_messages
     # older than MESSAGE_RETENTION_DAYS (90d). Safe on all 6 agents.
     scheduler.add_weekly("swarm-retention", run_swarm_retention, weekday=6, hour_utc=3)
@@ -114,5 +118,5 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
         nexus_jobs_registered = 5
 
-    total = 15 + nexus_jobs_registered
+    total = 16 + nexus_jobs_registered
     log.info("%d cron jobs registered for agent '%s'", total, me)

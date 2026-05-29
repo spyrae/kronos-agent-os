@@ -86,7 +86,8 @@ def save_rendered_digest(store: SignalStore, digest: RenderedDigest, *, dry_run:
             categories=digest.categories,
             item_ids=digest.item_ids,
             cluster_ids=digest.cluster_ids,
-        )
+        ),
+        count_in_quality=not dry_run,
     )
 
 

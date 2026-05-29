@@ -191,6 +191,10 @@ async def test_run_signal_digest_filters_non_idea_items_for_ideas(tmp_path, sign
 
     assert ideas_run.saved_item_count == 2
     assert "Product angle:" in ideas_run.rendered.body
+    stats = signal_store.get_source_quality_stats("x_ideas")[0]
+    assert stats["items_seen"] == 2
+    assert stats["selected_count"] == 1
+    assert stats["clusters_contributed"] == 1
 
 
 @pytest.mark.asyncio

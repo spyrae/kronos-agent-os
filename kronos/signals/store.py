@@ -114,12 +114,27 @@ def _schema(conn: Connection) -> None:
             items_inserted INTEGER NOT NULL DEFAULT 0,
             duplicate_count INTEGER NOT NULL DEFAULT 0,
             selected_count INTEGER NOT NULL DEFAULT 0,
+            low_confidence_count INTEGER NOT NULL DEFAULT 0,
+            clusters_contributed INTEGER NOT NULL DEFAULT 0,
+            digests_included INTEGER NOT NULL DEFAULT 0,
+            fetch_error_count INTEGER NOT NULL DEFAULT 0,
             avg_importance REAL NOT NULL DEFAULT 0,
             avg_confidence REAL NOT NULL DEFAULT 0,
             last_seen_at TEXT NOT NULL DEFAULT '',
             updated_at TEXT NOT NULL
         );
         """
+    )
+    _ensure_columns(
+        conn,
+        "source_quality_stats",
+        {
+            "selected_count": "INTEGER NOT NULL DEFAULT 0",
+            "low_confidence_count": "INTEGER NOT NULL DEFAULT 0",
+            "clusters_contributed": "INTEGER NOT NULL DEFAULT 0",
+            "digests_included": "INTEGER NOT NULL DEFAULT 0",
+            "fetch_error_count": "INTEGER NOT NULL DEFAULT 0",
+        },
     )
 
 
@@ -156,7 +171,49 @@ class SignalStore:
             ),
         )
 
-    def save_item(self, item: SignalItem) -> StoreWriteResult:
+    def record_fetch_stats(
+        self,
+        *,
+        source_id: str,
+        platform: str,
+        item_count: int,
+        error_count: int = 0,
+    ) -> None:
+        """Record raw fetch counts before digest-specific filtering."""
+        now = utc_now_iso()
+        self._db.write_tx(
+            lambda conn: _increment_quality_stats(
+                conn,
+                source_id=source_id,
+                platform=platform,
+                items_seen_delta=max(0, int(item_count)),
+                fetch_error_delta=max(0, int(error_count)),
+                now=now,
+            )
+        )
+
+    def record_selection_stats(
+        self,
+        *,
+        source_id: str,
+        platform: str,
+        selected_count: int,
+        low_confidence_count: int = 0,
+    ) -> None:
+        """Record items accepted into category-specific scoring."""
+        now = utc_now_iso()
+        self._db.write_tx(
+            lambda conn: _increment_quality_stats(
+                conn,
+                source_id=source_id,
+                platform=platform,
+                selected_delta=max(0, int(selected_count)),
+                low_confidence_delta=max(0, int(low_confidence_count)),
+                now=now,
+            )
+        )
+
+    def save_item(self, item: SignalItem, *, count_seen: bool = True) -> StoreWriteResult:
         """Idempotently insert a normalized signal item."""
         now = utc_now_iso()
         fetched_at = item.fetched_at or now
@@ -179,6 +236,7 @@ class SignalStore:
                     inserted=False,
                     importance=item.importance_score,
                     confidence=item.confidence_score,
+                    count_seen=count_seen,
                     now=now,
                 )
                 return StoreWriteResult(id=int(existing["id"]), inserted=False, duplicate_of=int(existing["id"]))
@@ -226,6 +284,7 @@ class SignalStore:
                 inserted=True,
                 importance=item.importance_score,
                 confidence=item.confidence_score,
+                count_seen=count_seen,
                 now=now,
             )
             return StoreWriteResult(id=item_id, inserted=True)
@@ -301,6 +360,14 @@ class SignalStore:
                     f"UPDATE signal_items SET cluster_id = ?, updated_at = ? WHERE id IN ({placeholders})",
                     (cluster_id, now, *cluster.item_ids),
                 )
+            for source_id in set(source_ids):
+                _increment_quality_stats(
+                    conn,
+                    source_id=str(source_id),
+                    platform=_platform_for_source(item_rows, str(source_id)),
+                    clusters_delta=1,
+                    now=now,
+                )
             return cluster_id
 
         return int(self._db.write_tx(tx))
@@ -329,28 +396,42 @@ class SignalStore:
         )
         return [_decode_item(row) for row in rows]
 
-    def save_digest(self, digest: SignalDigest) -> int:
+    def save_digest(self, digest: SignalDigest, *, count_in_quality: bool = True) -> int:
         now = utc_now_iso()
-        cursor = self._db.write(
-            """
-            INSERT INTO signal_digests
-                (destination, title, body, categories_json, item_ids_json,
-                 cluster_ids_json, generated_at, sent_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                digest.destination,
-                digest.title,
-                digest.body,
-                _json(digest.categories),
-                _json(digest.item_ids),
-                _json(digest.cluster_ids),
-                digest.generated_at or now,
-                digest.sent_at,
-                now,
-            ),
-        )
-        return int(cursor.lastrowid)
+
+        def tx(conn: Connection) -> int:
+            cursor = conn.execute(
+                """
+                INSERT INTO signal_digests
+                    (destination, title, body, categories_json, item_ids_json,
+                     cluster_ids_json, generated_at, sent_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    digest.destination,
+                    digest.title,
+                    digest.body,
+                    _json(digest.categories),
+                    _json(digest.item_ids),
+                    _json(digest.cluster_ids),
+                    digest.generated_at or now,
+                    digest.sent_at,
+                    now,
+                ),
+            )
+            if count_in_quality and digest.item_ids:
+                item_rows = _rows_for_item_ids(conn, digest.item_ids)
+                for source_id in {str(row["source_id"]) for row in item_rows}:
+                    _increment_quality_stats(
+                        conn,
+                        source_id=source_id,
+                        platform=_platform_for_source(item_rows, source_id),
+                        digests_delta=1,
+                        now=now,
+                    )
+            return int(cursor.lastrowid)
+
+        return int(self._db.write_tx(tx))
 
     def list_digests(self, *, destination: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         if destination:
@@ -417,6 +498,7 @@ def _update_quality_stats(
     inserted: bool,
     importance: float,
     confidence: float,
+    count_seen: bool,
     now: str,
 ) -> None:
     row = conn.execute(
@@ -425,16 +507,18 @@ def _update_quality_stats(
     ).fetchone()
 
     if row is None:
+        seen_delta = 1 if count_seen else 0
         conn.execute(
             """
             INSERT INTO source_quality_stats
                 (source_id, platform, items_seen, items_inserted, duplicate_count,
                  avg_importance, avg_confidence, last_seen_at, updated_at)
-            VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 source_id,
                 platform,
+                seen_delta,
                 1 if inserted else 0,
                 0 if inserted else 1,
                 float(importance) if inserted else 0.0,
@@ -445,7 +529,7 @@ def _update_quality_stats(
         )
         return
 
-    items_seen = int(row["items_seen"]) + 1
+    items_seen = int(row["items_seen"]) + (1 if count_seen else 0)
     items_inserted = int(row["items_inserted"]) + (1 if inserted else 0)
     duplicate_count = int(row["duplicate_count"]) + (0 if inserted else 1)
 
@@ -482,6 +566,98 @@ def _update_quality_stats(
             source_id,
         ),
     )
+
+
+def _increment_quality_stats(
+    conn: Connection,
+    *,
+    source_id: str,
+    platform: str,
+    now: str,
+    items_seen_delta: int = 0,
+    selected_delta: int = 0,
+    low_confidence_delta: int = 0,
+    clusters_delta: int = 0,
+    digests_delta: int = 0,
+    fetch_error_delta: int = 0,
+) -> None:
+    row = conn.execute(
+        "SELECT * FROM source_quality_stats WHERE source_id = ?",
+        (source_id,),
+    ).fetchone()
+
+    if row is None:
+        conn.execute(
+            """
+            INSERT INTO source_quality_stats
+                (source_id, platform, items_seen, selected_count,
+                 low_confidence_count, clusters_contributed, digests_included,
+                 fetch_error_count, last_seen_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                source_id,
+                platform,
+                max(0, items_seen_delta),
+                max(0, selected_delta),
+                max(0, low_confidence_delta),
+                max(0, clusters_delta),
+                max(0, digests_delta),
+                max(0, fetch_error_delta),
+                now if items_seen_delta else "",
+                now,
+            ),
+        )
+        return
+
+    conn.execute(
+        """
+        UPDATE source_quality_stats
+        SET platform = ?,
+            items_seen = items_seen + ?,
+            selected_count = selected_count + ?,
+            low_confidence_count = low_confidence_count + ?,
+            clusters_contributed = clusters_contributed + ?,
+            digests_included = digests_included + ?,
+            fetch_error_count = fetch_error_count + ?,
+            last_seen_at = ?,
+            updated_at = ?
+        WHERE source_id = ?
+        """,
+        (
+            platform,
+            max(0, items_seen_delta),
+            max(0, selected_delta),
+            max(0, low_confidence_delta),
+            max(0, clusters_delta),
+            max(0, digests_delta),
+            max(0, fetch_error_delta),
+            now if items_seen_delta else str(row["last_seen_at"] or ""),
+            now,
+            source_id,
+        ),
+    )
+
+
+def _rows_for_item_ids(conn: Connection, item_ids: tuple[int, ...]) -> list[Row]:
+    if not item_ids:
+        return []
+    placeholders = ",".join("?" for _ in item_ids)
+    return list(conn.execute(f"SELECT * FROM signal_items WHERE id IN ({placeholders})", tuple(item_ids)).fetchall())
+
+
+def _platform_for_source(rows: list[Row] | list[dict[str, Any]], source_id: str) -> str:
+    for row in rows:
+        if str(row["source_id"]) == source_id:
+            return str(row["source_platform"])
+    return ""
+
+
+def _ensure_columns(conn: Connection, table: str, columns: dict[str, str]) -> None:
+    existing = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
 def _content_hash(item: SignalItem) -> str:

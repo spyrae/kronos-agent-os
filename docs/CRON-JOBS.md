@@ -20,7 +20,8 @@ All core cron jobs are registered in `kronos/cron/setup.py` and run by the built
 | 12 | skill-improve | Weekly Sun 20:00 UTC (04:00 UTC+8) | Weekly | `skill_improve.py` |
 | 13 | user-model | Weekly Wed 20:00 UTC (04:00 UTC+8) | Weekly | `user_model.py` |
 | 14 | market-review | Weekly Fri 10:00 UTC (18:00 UTC+8) | Weekly | `market_review.py` |
-| 15 | swarm-retention | Weekly Sun 03:00 UTC (11:00 UTC+8) | Weekly | `swarm_retention.py` |
+| 15 | source-quality-audit | Weekly Sun 04:00 UTC with 13-day guard | Weekly | `source_quality_audit.py` |
+| 16 | swarm-retention | Weekly Sun 03:00 UTC (11:00 UTC+8) | Weekly | `swarm_retention.py` |
 
 ## Job Details
 
@@ -211,7 +212,20 @@ Weekly investment market review:
 **Dependencies:** BRAVE_API_KEY, WATCHLIST.md
 **Notification:** Bot API → Telegram Finance topic
 
-### 15. swarm-retention
+### 15. source-quality-audit
+**Schedule:** Weekly Sunday 04:00 UTC with a 13-day guard
+**Module:** `kronos/cron/source_quality_audit.py`
+
+Biweekly Signal Intelligence source quality audit:
+1. Read `source_quality_stats` from the signals store.
+2. Calculate fetched/accepted/duplicate/low-confidence/cluster/digest contribution metrics.
+3. Render keep/promote/demote/quarantine recommendations with concrete evidence.
+4. Save the audit artifact without mutating `SOURCES.yaml`.
+5. Send to Telegram via Bot API (`TOPIC_DIGEST_NEWS`, fallback `TOPIC_DIGEST`).
+
+**Notification:** Bot API → Telegram `Digest: News` topic
+
+### 16. swarm-retention
 **Schedule:** Weekly Sunday 03:00 UTC
 **Module:** `kronos/cron/swarm_retention.py`
 

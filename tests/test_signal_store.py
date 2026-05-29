@@ -180,3 +180,28 @@ def test_digest_history_query(signal_store):
     assert digests[0]["categories"] == ["news"]
     assert digests[0]["item_ids"] == [item.id]
     assert digests[0]["cluster_ids"] == [cluster_id]
+
+    stats = signal_store.get_source_quality_stats("search_ai_news")[0]
+    assert stats["clusters_contributed"] == 1
+    assert stats["digests_included"] == 1
+
+
+def test_records_fetch_and_selection_quality_stats(signal_store):
+    signal_store.record_fetch_stats(
+        source_id="reddit_ai_agents",
+        platform="reddit",
+        item_count=5,
+        error_count=1,
+    )
+    signal_store.record_selection_stats(
+        source_id="reddit_ai_agents",
+        platform="reddit",
+        selected_count=2,
+        low_confidence_count=1,
+    )
+
+    stats = signal_store.get_source_quality_stats("reddit_ai_agents")[0]
+    assert stats["items_seen"] == 5
+    assert stats["selected_count"] == 2
+    assert stats["low_confidence_count"] == 1
+    assert stats["fetch_error_count"] == 1
