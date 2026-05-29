@@ -1,7 +1,7 @@
 import pytest
 
 from kronos.config import settings
-from kronos.signals.digest import render_digest, save_rendered_digest
+from kronos.signals.digest import _truncate_html, render_digest, save_rendered_digest
 from kronos.signals.models import SignalItem
 from kronos.signals.routing import route_for_category
 from kronos.signals.sources import SignalSource
@@ -104,6 +104,26 @@ def test_render_digest_is_telegram_chunk_safe():
 
     assert len(rendered.body) <= 220
     assert "truncated for Telegram length" in rendered.body
+
+
+def test_truncate_html_preserves_complete_tags():
+    text = "\n".join(
+        [
+            "<b>Digest: News — Signal Intelligence</b>",
+            "",
+            "<b>Anecdotes / Watchlist</b>",
+            '• <b>Item</b> (<a href="https://example.com/source">source</a>)',
+            "  " + ("long summary " * 80),
+        ]
+    )
+
+    truncated = _truncate_html(text, max_chars=175)
+
+    assert len(truncated) <= 175
+    assert "truncated for Telegram length" in truncated
+    assert truncated.count("<b>") == truncated.count("</b>")
+    assert truncated.count("<i>") == truncated.count("</i>")
+    assert truncated.count("<a ") == truncated.count("</a>")
 
 
 def test_render_ideas_digest_uses_product_format_and_limits_to_ten():

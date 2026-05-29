@@ -285,4 +285,20 @@ def _truncate_html(text: str, *, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     suffix = "\n\n<i>…truncated for Telegram length; see stored digest artifact.</i>"
-    return text[: max(0, max_chars - len(suffix))].rstrip() + suffix
+    budget = max_chars - len(suffix) - 2
+    if budget <= 0:
+        return suffix[-max_chars:]
+
+    lines: list[str] = []
+    length = 0
+    for line in text.splitlines():
+        next_length = length + len(line) + (1 if lines else 0)
+        if next_length > budget:
+            break
+        lines.append(line)
+        length = next_length
+
+    body = "\n".join(lines).rstrip()
+    if not body:
+        return suffix.strip()[:max_chars]
+    return f"{body}{suffix}"
