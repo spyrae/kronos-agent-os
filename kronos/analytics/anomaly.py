@@ -31,7 +31,7 @@ class Anomaly:
         pct = abs(self.current - self.expected) / self.expected * 100 if self.expected else 0
 
         return (
-            f"{icon} <b>Anomaly: {self.metric}</b>\n"
+            f"{icon} <b>Аномалия: {self.metric}</b>\n"
             f"{arrow} Текущее: {self.current:.2f}\n"
             f"Среднее (14д): {self.expected:.2f}\n"
             f"Отклонение: {pct:.0f}% (z={self.z_score:.1f})\n"

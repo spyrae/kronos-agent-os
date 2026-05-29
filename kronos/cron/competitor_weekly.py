@@ -27,7 +27,7 @@ async def run_competitor_weekly() -> None:
             return
 
         # Send to Telegram (may be split into multiple messages by send_bot_api)
-        header = "<b>\U0001f4ca Weekly Competitive Analysis</b>\n\n"
+        header = "<b>\U0001f4ca Еженедельный анализ конкурентов</b>\n\n"
         send_bot_api(
             header + report,
             parse_mode="HTML",
@@ -39,6 +39,6 @@ async def run_competitor_weekly() -> None:
     except Exception as e:
         log.error("Weekly competitor report failed: %s", e)
         send_bot_api(
-            f"\u26a0\ufe0f Weekly competitor report failed: {str(e)[:200]}",
+            f"\u26a0\ufe0f Еженедельный анализ конкурентов не собрался: {str(e)[:200]}",
             topic_id=TOPIC_JB_COMPETITORS,
         )

@@ -23,7 +23,7 @@ async def run_analytics_pulse() -> None:
     from kronos.analytics.anomaly import flatten_metrics
     from kronos.analytics.pulse import generate_daily_pulse
 
-    today = datetime.now(UTC).strftime("%d %B")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
 
     try:
         pulse, metrics = await generate_daily_pulse()
@@ -45,7 +45,7 @@ async def run_analytics_pulse() -> None:
         ok = sum(1 for m in metrics.values() if "error" not in m)
         failed = sum(1 for m in metrics.values() if "error" in m)
 
-        header = f"<b>\U0001f4ca Daily Pulse \u2014 {today}</b>\n\n"
+        header = f"<b>\U0001f4ca Ежедневный пульс \u2014 {today}</b>\n\n"
 
         # Split if too long
         full_text = header + pulse
@@ -72,6 +72,6 @@ async def run_analytics_pulse() -> None:
     except Exception as e:
         log.error("Daily pulse failed: %s", e)
         send_bot_api(
-            f"\u26a0\ufe0f Daily pulse failed: {str(e)[:200]}",
+            f"\u26a0\ufe0f Ежедневный пульс не собрался: {str(e)[:200]}",
             topic_id=TOPIC_JB_SYSTEM,
         )

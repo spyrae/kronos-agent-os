@@ -32,7 +32,7 @@ async def run_seo_geo_weekly() -> None:
     except Exception as e:
         log.error("seo_geo weekly failed: %s", e)
         send_bot_api(
-            f"⚠️ SEO/GEO weekly failed: {str(e)[:200]}",
+            f"⚠️ Еженедельная SEO/GEO-проверка не собралась: {str(e)[:200]}",
             topic_id=TOPIC_JB_SYSTEM,
         )
 

@@ -34,7 +34,7 @@ async def run_analytics_weekly() -> None:
         ok = sum(1 for m in metrics.values() if "error" not in m)
         failed = sum(1 for m in metrics.values() if "error" in m)
 
-        header = f"<b>\U0001f4c8 Weekly Business Report \u2014 {week_label}</b>\n\n"
+        header = f"<b>\U0001f4c8 Еженедельный бизнес-отчёт \u2014 {week_label}</b>\n\n"
 
         # Split if too long for Telegram (4096 char limit)
         full_text = header + report
@@ -64,6 +64,6 @@ async def run_analytics_weekly() -> None:
     except Exception as e:
         log.error("Weekly business report failed: %s", e)
         send_bot_api(
-            f"\u26a0\ufe0f Weekly report failed: {str(e)[:200]}",
+            f"\u26a0\ufe0f Еженедельный бизнес-отчёт не собрался: {str(e)[:200]}",
             topic_id=TOPIC_JB_SYSTEM,
         )
