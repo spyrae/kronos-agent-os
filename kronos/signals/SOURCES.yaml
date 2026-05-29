@@ -1,0 +1,496 @@
+# Signal Intelligence source registry.
+#
+# Categories:
+#   news, jobs, ideas, travel_insights, jb_competitors, jb_system
+# Tiers:
+#   core, candidate, quarantine
+# Trust:
+#   official, expert, community_high, community_low, noisy
+
+sources:
+  # -------------------------------------------------------------------------
+  # Reddit — curated core from the AI watchlist
+  # -------------------------------------------------------------------------
+  - id: reddit_local_llama
+    platform: reddit
+    handle: r/LocalLLaMA
+    categories: [news, ideas]
+    tier: core
+    trust: community_high
+    language: en
+    enabled: true
+    description: Local/open LLM releases, benchmarks, tooling, and deployment pains
+    filters:
+      min_score: 20
+      include_flairs: [News, Model, Resources, Discussion]
+
+  - id: reddit_machine_learning
+    platform: reddit
+    handle: r/machinelearning
+    categories: [news]
+    tier: core
+    trust: community_high
+    language: en
+    enabled: true
+    description: ML research and serious technical discussion
+    filters:
+      min_score: 50
+      include_flairs: [Discussion, Research, Project]
+
+  - id: reddit_ai_agents
+    platform: reddit
+    handle: r/AI_Agents
+    categories: [news, ideas]
+    tier: core
+    trust: community_high
+    language: en
+    enabled: true
+    description: AI agents, autonomous workflows, agent products and pain points
+    filters:
+      min_score: 10
+
+  - id: reddit_claude_code
+    platform: reddit
+    handle: r/ClaudeCode
+    categories: [news, ideas]
+    tier: core
+    trust: community_high
+    language: en
+    enabled: true
+    description: Claude Code releases, workflows, bugs, and developer sentiment
+    filters:
+      min_score: 10
+
+  - id: reddit_cursor
+    platform: reddit
+    handle: r/cursor
+    categories: [news, ideas]
+    tier: core
+    trust: community_high
+    language: en
+    enabled: true
+    description: Cursor IDE workflows, releases, pricing, bugs, and alternatives
+    filters:
+      min_score: 10
+
+  - id: reddit_cline
+    platform: reddit
+    handle: r/Cline
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_high
+    language: en
+    enabled: true
+    description: Open-source coding agent usage and integration patterns
+    filters:
+      min_score: 10
+
+  - id: reddit_chatgpt
+    platform: reddit
+    handle: r/ChatGPT
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Broad ChatGPT user sentiment and mass-market AI pain points
+    filters:
+      min_score: 100
+      exclude_keywords: [jailbreak, meme, girlfriend]
+
+  - id: reddit_claude
+    platform: reddit
+    handle: r/claude
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Claude user sentiment, issues, and feature requests
+    filters:
+      min_score: 30
+
+  - id: reddit_deepseek
+    platform: reddit
+    handle: r/DeepSeek
+    categories: [news]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: DeepSeek model updates and user sentiment
+    filters:
+      min_score: 20
+
+  - id: reddit_futurology
+    platform: reddit
+    handle: r/Futurology
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Broad technology trend discussion; useful only with corroboration
+    filters:
+      min_score: 500
+
+  - id: reddit_ai_dankmemes
+    platform: reddit
+    handle: r/AIDankmemes
+    categories: [news]
+    tier: quarantine
+    trust: noisy
+    language: en
+    enabled: true
+    description: AI memes/noise; kept only for periodic source-quality audits
+
+  # -------------------------------------------------------------------------
+  # X / Twitter — official, expert, and product-builder sources
+  # -------------------------------------------------------------------------
+  - id: x_openai_devs
+    platform: x
+    handle: "@OpenAIDevs"
+    categories: [news]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: OpenAI developer platform announcements
+
+  - id: x_google_ai
+    platform: x
+    handle: "@GoogleAI"
+    categories: [news]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Google AI announcements
+
+  - id: x_google_deepmind
+    platform: x
+    handle: "@GoogleDeepMind"
+    categories: [news]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: DeepMind research and product announcements
+
+  - id: x_claudeai
+    platform: x
+    handle: "@claudeai"
+    categories: [news]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Claude product announcements
+
+  - id: x_mistralai
+    platform: x
+    handle: "@MistralAI"
+    categories: [news]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Mistral AI model and product announcements
+
+  - id: x_alibaba_qwen
+    platform: x
+    handle: "@Alibaba_Qwen"
+    categories: [news]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Qwen model releases and tooling
+
+  - id: x_kimi_moonshot
+    platform: x
+    handle: "@Kimi_Moonshot"
+    categories: [news]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Kimi/Moonshot model and product announcements
+
+  - id: x_omarsar0
+    platform: x
+    handle: "@omarsar0"
+    categories: [news]
+    tier: core
+    trust: expert
+    language: en
+    enabled: true
+    description: AI research, prompting, and applied LLM commentary
+
+  - id: x_fchollet
+    platform: x
+    handle: "@fchollet"
+    categories: [news]
+    tier: core
+    trust: expert
+    language: en
+    enabled: true
+    description: AI reasoning, benchmarks, and research perspective
+
+  - id: x_rohanpaul_ai
+    platform: x
+    handle: "@rohanpaul_ai"
+    categories: [news]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: AI engineering and research explainers
+
+  - id: x_ycombinator
+    platform: x
+    handle: "@ycombinator"
+    categories: [news, jobs, ideas]
+    tier: core
+    trust: expert
+    language: en
+    enabled: true
+    description: Startup trends, launches, hiring and founder signals
+
+  - id: x_lennysan
+    platform: x
+    handle: "@lennysan"
+    categories: [ideas]
+    tier: core
+    trust: expert
+    language: en
+    enabled: true
+    description: Product strategy, growth, and SaaS insights
+
+  - id: x_ideabrowser
+    platform: x
+    handle: "@ideabrowser"
+    categories: [ideas]
+    tier: core
+    trust: expert
+    language: en
+    enabled: true
+    description: Startup ideas and business opportunities
+
+  - id: x_startupideaspod
+    platform: x
+    handle: "@startupideaspod"
+    categories: [ideas]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: Startup ideas and founder interviews
+
+  - id: x_levelsio
+    platform: x
+    handle: "@levelsio"
+    categories: [ideas, travel_insights]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: Indie products, travel/remote-work patterns, and SaaS experiments
+
+  # -------------------------------------------------------------------------
+  # Telegram — Telethon sources
+  # -------------------------------------------------------------------------
+  - id: telegram_nobilix_chat
+    platform: telegram
+    handle: "@nobilix_chat"
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: ru
+    enabled: true
+    description: Russian-language AI/product discussion
+    filters:
+      min_reactions: 3
+      min_views: 200
+
+  - id: telegram_ai_chat_cutcode
+    platform: telegram
+    handle: "@ai_chat_cutcode"
+    categories: [news, jobs, ideas]
+    tier: candidate
+    trust: community_low
+    language: ru
+    enabled: true
+    description: AI chat with possible jobs and product discussion
+    filters:
+      min_reactions: 3
+      min_views: 200
+
+  - id: telegram_hiaimediaen
+    platform: telegram
+    handle: "@hiaimediaen"
+    categories: [news]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: English AI media channel
+    filters:
+      min_reactions: 3
+      min_views: 200
+
+  # -------------------------------------------------------------------------
+  # Search queries — legacy news-monitor shape plus targeted weak-signal scans
+  # -------------------------------------------------------------------------
+  - id: search_ai_news_today
+    platform: search
+    query: AI news today LLM model release developer tools
+    categories: [news]
+    tier: core
+    trust: community_high
+    language: en
+    enabled: true
+    description: Broad daily AI/news/tool launch search
+
+  - id: search_ai_coding_tools
+    platform: search
+    query: AI coding agent IDE release Claude Code Cursor Codex
+    categories: [news, ideas]
+    tier: core
+    trust: community_high
+    language: en
+    enabled: true
+    description: AI coding tools and agentic development product updates
+
+  - id: search_ai_jobs
+    platform: search
+    query: AI agent engineer remote jobs startup hiring
+    categories: [jobs]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Hiring demand for AI agent/product engineering
+
+  - id: search_travel_planning_pain
+    platform: search
+    query: travel itinerary app pain points reddit group trip planning
+    categories: [travel_insights, ideas]
+    tier: candidate
+    trust: community_high
+    language: en
+    enabled: true
+    description: Travel planning pains and feature opportunities
+
+  - id: reddit_travel
+    platform: reddit
+    handle: r/travel
+    categories: [travel_insights]
+    tier: candidate
+    trust: community_high
+    language: en
+    enabled: true
+    description: Traveler pain points, planning questions, and destination trends
+    filters:
+      min_score: 100
+
+  # -------------------------------------------------------------------------
+  # JourneyBay competitors — represented from kronos/competitors/competitors.yaml
+  # -------------------------------------------------------------------------
+  - id: competitor_wanderlog
+    platform: competitor
+    handle: wanderlog
+    url: https://wanderlog.com
+    categories: [jb_competitors, travel_insights]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Wanderlog competitor app, website, App Store/Play Store, and social updates
+
+  - id: competitor_tripit
+    platform: competitor
+    handle: tripit
+    url: https://tripit.com
+    categories: [jb_competitors, travel_insights]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: TripIt competitor app, reviews, and product updates
+
+  - id: competitor_layla_ai
+    platform: competitor
+    handle: layla_ai
+    url: https://justasklayla.com
+    categories: [jb_competitors, travel_insights]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Layla AI travel assistant competitor
+
+  - id: competitor_tripsy
+    platform: competitor
+    handle: tripsy
+    url: https://tripsy.app
+    categories: [jb_competitors, travel_insights]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Tripsy travel planner competitor
+
+  - id: competitor_mindtrip
+    platform: competitor
+    handle: mindtrip
+    url: https://mindtrip.ai
+    categories: [jb_competitors, travel_insights]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Mindtrip AI travel planner competitor
+
+  # -------------------------------------------------------------------------
+  # JourneyBay system status — internal/owned data sources
+  # -------------------------------------------------------------------------
+  - id: jb_app_store_reviews
+    platform: app_store
+    handle: journeybay_ios
+    categories: [jb_system, travel_insights]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: iOS App Store reviews, ratings, and conversion signals
+
+  - id: jb_google_play_reviews
+    platform: play_store
+    handle: journeybay_android
+    categories: [jb_system, travel_insights]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Google Play reviews, ratings, and Android quality signals
+
+  - id: jb_product_analytics
+    platform: analytics
+    handle: posthog
+    categories: [jb_system]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Product analytics, activation, retention, and funnel metrics
+
+  - id: jb_seo_geo
+    platform: seo
+    handle: seo_geo_check
+    categories: [jb_system]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: SEO/GEO visibility and crawlability status

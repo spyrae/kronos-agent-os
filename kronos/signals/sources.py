@@ -168,6 +168,10 @@ def default_sources_path() -> Path:
     if workspace_path.exists():
         return workspace_path
 
+    packaged_path = Path(__file__).resolve().with_name("SOURCES.yaml")
+    if packaged_path.exists():
+        return packaged_path
+
     return (
         Path(__file__).resolve().parents[2]
         / "workspaces"

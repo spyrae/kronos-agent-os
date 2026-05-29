@@ -126,6 +126,7 @@ exclude = ["dashboard-ui", "dashboard-ui.*"]
 
 [tool.setuptools.package-data]
 "kronos.competitors" = ["competitors.yaml"]
+"kronos.signals" = ["SOURCES.yaml"]
 "aso.config" = ["*.json"]
 "aso.prompts" = ["*.md"]
 
