@@ -30,4 +30,11 @@ Quarantined examples: bot/fandom/culture-war/unrelated handles such as `bellcurv
 
 ## Operating note
 
+The legacy Telegram watchlist remains in the private workspace at
+`workspace/self/skills/group-digest/references/GROUPS.md`. At runtime the
+Signal Intelligence loader merges those Telegram sources into the registry so
+the new pipeline does not drop previously monitored Telethon channels/chats.
+Legacy `Job Market` Telegram categories are skipped by the old `group-digest`
+cron and routed through the dedicated `Digest: Jobs` signal pipeline instead.
+
 The biweekly source-quality audit should promote/demote/quarantine sources based on observed accepted-rate, duplicate-rate, contribution to clusters/digests, confidence, and fetch errors.

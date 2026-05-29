@@ -118,6 +118,23 @@ def _load_groups() -> dict[str, list[dict]]:
     return {cat: groups for cat, groups in categories.items() if groups}
 
 
+def _news_digest_categories(categories: dict[str, list[dict]]) -> dict[str, list[dict]]:
+    """Keep only non-jobs legacy Telegram categories for Digest: News.
+
+    Job channels now feed the dedicated Signal Intelligence jobs digest.
+    """
+    return {
+        category: sources
+        for category, sources in categories.items()
+        if not _is_job_category(category)
+    }
+
+
+def _is_job_category(category: str) -> bool:
+    normalized = category.lower()
+    return "job" in normalized or "ваканс" in normalized
+
+
 # ---------------------------------------------------------------------------
 # Fetch: Telethon message retrieval
 # ---------------------------------------------------------------------------
@@ -420,10 +437,15 @@ async def run_group_digest() -> None:
     if settings.agent_name != "kronos":
         return
 
-    categories = _load_groups()
+    loaded_categories = _load_groups()
+    categories = _news_digest_categories(loaded_categories)
     if not categories:
         log.info("No sources configured, skipping group-digest")
         return
+
+    skipped_jobs = len(loaded_categories) - len(categories)
+    if skipped_jobs:
+        log.info("Group digest: skipped %d job category for dedicated jobs digest", skipped_jobs)
 
     total_sources = sum(len(sources) for sources in categories.values())
     log.info(

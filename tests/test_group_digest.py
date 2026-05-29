@@ -1,7 +1,7 @@
 """Tests for group digest cron job."""
 
 
-from kronos.cron.group_digest import _filter_significant, _load_groups
+from kronos.cron.group_digest import _filter_significant, _load_groups, _news_digest_categories
 from kronos.workspace import Workspace
 
 
@@ -79,6 +79,17 @@ class TestLoadGroups:
         assert len(result["Test"]) == 2
         assert result["Test"][0]["identifier"] == "@good"
         assert result["Test"][1]["identifier"] == "id:12345"
+
+    def test_news_digest_categories_exclude_job_market(self):
+        categories = {
+            "AI & LLM": [{"identifier": "@ai"}],
+            "Job Market": [{"identifier": "@jobs"}],
+            "Вакансии": [{"identifier": "@rujobs"}],
+        }
+
+        result = _news_digest_categories(categories)
+
+        assert result == {"AI & LLM": [{"identifier": "@ai"}]}
 
 
 class TestFilterSignificant:

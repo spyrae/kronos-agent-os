@@ -197,7 +197,34 @@ def load_sources(path: str | Path | None = None) -> SourceRegistry:
     except yaml.YAMLError as exc:
         raise SignalSourceConfigError(f"invalid YAML in {yaml_path}: {exc}") from exc
 
-    return parse_sources(raw, source_name=str(yaml_path))
+    registry = parse_sources(raw, source_name=str(yaml_path))
+    if path is None:
+        registry = merge_legacy_group_digest_sources(registry)
+    return registry
+
+
+def merge_legacy_group_digest_sources(
+    registry: SourceRegistry,
+    *,
+    path: str | Path | None = None,
+) -> SourceRegistry:
+    """Merge legacy ``group-digest/GROUPS.md`` Telegram sources at runtime.
+
+    The historical Telegram watchlist lives in the private workspace, not in
+    the public package registry. Keeping this compatibility layer prevents the
+    new Signal Intelligence pipeline from silently dropping those sources.
+    """
+    groups_path = Path(path) if path is not None else _legacy_group_digest_path()
+    if not groups_path.exists():
+        return registry
+
+    legacy_sources = _parse_legacy_group_digest_sources(
+        groups_path.read_text(encoding="utf-8"),
+        existing_sources=registry.sources,
+    )
+    if not legacy_sources:
+        return registry
+    return SourceRegistry(tuple((*registry.sources, *legacy_sources)))
 
 
 def parse_sources(raw: object, *, source_name: str = "SOURCES.yaml") -> SourceRegistry:
@@ -271,6 +298,99 @@ def _parse_source(entry: object, *, index: int, source_name: str) -> SignalSourc
         filters=dict(filters),
         tags=tags,
     )
+
+
+def _legacy_group_digest_path() -> Path:
+    from kronos.workspace import ws
+
+    return ws.skill_ref("group-digest", "GROUPS")
+
+
+def _parse_legacy_group_digest_sources(
+    text: str,
+    *,
+    existing_sources: tuple[SignalSource, ...] = (),
+) -> tuple[SignalSource, ...]:
+    existing_locators = {
+        (source.platform, source.locator.lower())
+        for source in existing_sources
+        if source.locator
+    }
+    existing_ids = {source.id for source in existing_sources}
+    sources: list[SignalSource] = []
+    current_category = ""
+
+    for line in text.splitlines():
+        header = re.match(r"^##\s+(.+)$", line.strip())
+        if header:
+            current_category = header.group(1).strip()
+            continue
+        if not current_category:
+            continue
+
+        parts = [part.strip() for part in line.split("|") if part.strip()]
+        if len(parts) < 3:
+            continue
+        name, identifier, description = parts[:3]
+        if not (identifier.startswith("@") or identifier.startswith("id:")):
+            continue
+        if ("telegram", identifier.lower()) in existing_locators:
+            continue
+
+        source_id = _unique_source_id(_telegram_source_id(identifier), existing_ids)
+        existing_ids.add(source_id)
+        existing_locators.add(("telegram", identifier.lower()))
+        sources.append(
+            SignalSource(
+                id=source_id,
+                platform="telegram",
+                handle=identifier,
+                categories=_legacy_group_categories(current_category),
+                tier="candidate",
+                trust="community_low",
+                language="ru",
+                enabled=True,
+                description=f"{name}: {description}",
+                filters={
+                    "lookback_hours": 24,
+                    "min_reactions": 3,
+                    "min_views": 200,
+                },
+                tags=("legacy_group_digest", _slug_ascii(current_category)),
+            )
+        )
+
+    return tuple(sources)
+
+
+def _legacy_group_categories(category: str) -> tuple[str, ...]:
+    normalized = category.lower()
+    if "job" in normalized or "ваканс" in normalized:
+        return ("jobs",)
+    return ("news", "ideas")
+
+
+def _telegram_source_id(identifier: str) -> str:
+    normalized = identifier.strip().lower()
+    if normalized.startswith("@"):
+        return f"telegram_{_slug_ascii(normalized[1:])}"
+    if normalized.startswith("id:"):
+        return f"telegram_id_{_slug_ascii(normalized[3:])}"
+    return f"telegram_{_slug_ascii(normalized)}"
+
+
+def _unique_source_id(source_id: str, existing_ids: set[str]) -> str:
+    if source_id not in existing_ids:
+        return source_id
+    suffix = 2
+    while f"{source_id}_{suffix}" in existing_ids:
+        suffix += 1
+    return f"{source_id}_{suffix}"
+
+
+def _slug_ascii(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+    return slug or "source"
 
 
 def _normalize_platform(platform: str) -> str:

@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from kronos.signals.sources import SignalSourceConfigError, load_sources, parse_sources
+from kronos.signals.sources import (
+    SignalSourceConfigError,
+    load_sources,
+    merge_legacy_group_digest_sources,
+    parse_sources,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -184,6 +189,48 @@ def test_packaged_and_template_registries_are_valid_and_in_sync():
         "reddit_gpt_jailbreaks",
         "x_reddit_lies",
     }.issubset({source.id for source in registry.quarantined()})
+
+
+def test_legacy_group_digest_sources_merge_into_runtime_registry(tmp_path):
+    sources_path = _write_sources(
+        tmp_path / "SOURCES.yaml",
+        """
+sources:
+  - id: telegram_existing
+    platform: telegram
+    handle: "@already"
+    categories: [news]
+    tier: candidate
+    trust: community_low
+""",
+    )
+    groups_path = _write_sources(
+        tmp_path / "GROUPS.md",
+        """
+## AI & LLM
+
+| Name | ID | Description |
+|------|----|-------------|
+| Existing | @already | Already configured |
+| AI News | @ai_news | AI channel |
+| Private Chat | id:12345 | Private AI chat |
+
+## Job Market
+
+| Name | ID | Description |
+|------|----|-------------|
+| Jobs | @jobs | Hiring channel |
+""",
+    )
+
+    registry = merge_legacy_group_digest_sources(load_sources(sources_path), path=groups_path)
+
+    assert registry.get("telegram_existing").description == ""
+    assert registry.get("telegram_ai_news").categories == ("news", "ideas")
+    assert registry.get("telegram_id_12345").handle == "id:12345"
+    assert registry.get("telegram_jobs").categories == ("jobs",)
+    assert registry.get("telegram_jobs").filters["min_views"] == 200
+    assert [source.handle for source in registry.sources].count("@already") == 1
 
 
 def test_invalid_category_and_missing_locator_fail_fast():

@@ -171,6 +171,43 @@ async def test_telegram_telethon_fetcher_normalizes_messages():
 
 
 @pytest.mark.asyncio
+async def test_telegram_telethon_fetcher_applies_source_engagement_filters():
+    async def fake_message_fetcher(source_id, hours):
+        return [
+            {
+                "text": "Low-signal chat question that should not enter the signal digest",
+                "author": "Bob",
+                "reactions": 0,
+                "views": 10,
+                "date": "12:00",
+                "urls": [],
+                "post_link": "https://t.me/ai_chat_cutcode/1",
+            },
+            {
+                "text": "High-signal AI launch discussion with enough engagement",
+                "author": "Alice",
+                "reactions": 5,
+                "views": 100,
+                "date": "12:05",
+                "urls": [],
+                "post_link": "https://t.me/ai_chat_cutcode/2",
+            },
+        ]
+
+    result = await fetch_telegram_telethon_source(
+        _source(
+            "telegram",
+            id="telegram_ai_chat_cutcode",
+            handle="@ai_chat_cutcode",
+            filters={"min_reactions": 3, "min_views": 200},
+        ),
+        message_fetcher=fake_message_fetcher,
+    )
+
+    assert [item.url for item in result.items] == ["https://t.me/ai_chat_cutcode/2"]
+
+
+@pytest.mark.asyncio
 async def test_competitor_fetcher_normalizes_changes():
     def fake_change_loader(source):
         assert source.handle == "wanderlog"
