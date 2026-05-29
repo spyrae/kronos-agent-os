@@ -153,19 +153,37 @@ def test_disabled_and_quarantine_sources_are_excluded_by_default():
     assert [source.id for source in registry.quarantined()] == ["quarantined"]
 
 
-def test_template_registry_is_valid_and_contains_new_telegram_sources():
+def test_packaged_and_template_registries_are_valid_and_in_sync():
+    packaged = load_sources(ROOT / "kronos" / "signals" / "SOURCES.yaml")
     registry = load_sources(
         ROOT / "workspaces" / "_template" / "self" / "skills" / "signal-intel" / "references" / "SOURCES.yaml"
     )
+
+    assert [source.id for source in packaged.sources] == [source.id for source in registry.sources]
+    locators = [(source.platform, source.locator.lower()) for source in registry.sources]
+    assert len(locators) == len(set(locators))
 
     assert registry.get("telegram_nobilix_chat") is not None
     assert registry.get("telegram_ai_chat_cutcode") is not None
     assert registry.get("telegram_hiaimediaen") is not None
     assert registry.get("reddit_solotravel") is not None
     assert registry.get("search_itinerary_app_reddit") is not None
+    assert registry.get("reddit_anthropic").tier == "core"
+    assert registry.get("reddit_cline").tier == "core"
+    assert registry.get("reddit_gpt_jailbreaks").tier == "quarantine"
+    assert registry.get("reddit_local_llm") is None
+    assert registry.get("reddit_cursor_ai") is None
+    assert registry.get("x_google_ai_studio").trust == "official"
+    assert registry.get("x_demishassabis").tier == "core"
+    assert registry.get("x_bellcurvebot").tier == "quarantine"
     assert "jobs" in registry.get("telegram_ai_chat_cutcode").categories
     assert "travel_insights" in registry.get("reddit_solotravel").categories
-    assert [source.id for source in registry.quarantined()] == ["reddit_ai_dankmemes"]
+    assert "reddit_gpt_jailbreaks" not in [source.id for source in registry.active(categories=("news",))]
+    assert {
+        "reddit_ai_dankmemes",
+        "reddit_gpt_jailbreaks",
+        "x_reddit_lies",
+    }.issubset({source.id for source in registry.quarantined()})
 
 
 def test_invalid_category_and_missing_locator_fail_fast():

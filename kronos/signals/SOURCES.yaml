@@ -77,7 +77,7 @@ sources:
     platform: reddit
     handle: r/Cline
     categories: [news, ideas]
-    tier: candidate
+    tier: core
     trust: community_high
     language: en
     enabled: true
@@ -113,9 +113,9 @@ sources:
   - id: reddit_deepseek
     platform: reddit
     handle: r/DeepSeek
-    categories: [news]
-    tier: candidate
-    trust: community_low
+    categories: [news, ideas]
+    tier: core
+    trust: community_high
     language: en
     enabled: true
     description: DeepSeek model updates and user sentiment
@@ -134,6 +134,532 @@ sources:
     filters:
       min_score: 500
 
+
+  - id: reddit_chatgpt_pro
+    platform: reddit
+    handle: r/ChatGPTPro
+    categories: [news, ideas]
+    tier: core
+    trust: community_high
+    language: en
+    enabled: true
+    description: Paid ChatGPT power-user workflows, feature changes, limits, and regressions
+    filters:
+      min_score: 20
+
+  - id: reddit_claude_ai
+    platform: reddit
+    handle: r/ClaudeAI
+    categories: [news, ideas]
+    tier: core
+    trust: community_high
+    language: en
+    enabled: true
+    description: Claude product updates, power-user workflows, limits, and sentiment
+    filters:
+      min_score: 20
+
+  - id: reddit_anthropic
+    platform: reddit
+    handle: r/Anthropic
+    categories: [news, ideas]
+    tier: core
+    trust: community_high
+    language: en
+    enabled: true
+    description: Anthropic ecosystem discussion and Claude-adjacent release signals
+    filters:
+      min_score: 10
+
+  - id: reddit_gemini_ai
+    platform: reddit
+    handle: r/GeminiAI
+    categories: [news, ideas]
+    tier: core
+    trust: community_high
+    language: en
+    enabled: true
+    description: Gemini model and product updates, user workflows, and pain points
+    filters:
+      min_score: 20
+
+  - id: reddit_github_copilot
+    platform: reddit
+    handle: r/GithubCopilot
+    categories: [news, ideas]
+    tier: core
+    trust: community_high
+    language: en
+    enabled: true
+    description: GitHub Copilot releases, IDE workflows, bugs, and developer sentiment
+    filters:
+      min_score: 20
+
+  - id: reddit_langchain
+    platform: reddit
+    handle: r/LangChain
+    categories: [news, ideas]
+    tier: core
+    trust: community_high
+    language: en
+    enabled: true
+    description: LangChain agent/app framework releases, integrations, and dev pain points
+    filters:
+      min_score: 10
+
+  - id: reddit_llamaindex
+    platform: reddit
+    handle: r/llamaIndex
+    categories: [news, ideas]
+    tier: core
+    trust: community_high
+    language: en
+    enabled: true
+    description: LlamaIndex RAG/data-agent tooling, releases, and implementation issues
+    filters:
+      min_score: 10
+
+  - id: reddit_comfyui
+    platform: reddit
+    handle: r/comfyui
+    categories: [news, ideas]
+    tier: core
+    trust: community_high
+    language: en
+    enabled: true
+    description: ComfyUI workflows, model/tool releases, and content-generation pain points
+    filters:
+      min_score: 30
+
+  # Reddit — candidate watchlist from Obsidian; useful only with corroboration
+  - id: reddit_aiagents
+    platform: reddit
+    handle: r/aiagents
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Secondary AI-agent community; keep low-weight until source quality is proven
+    filters:
+      min_score: 10
+
+  - id: reddit_ai_automations
+    platform: reddit
+    handle: r/AIAutomations
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: AI automation workflows, templates, pain points, and small-product ideas
+    filters:
+      min_score: 10
+
+  - id: reddit_ai_projects
+    platform: reddit
+    handle: r/aiprojects
+    categories: [ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: AI side projects, launch signals, and micro-SaaS inspiration
+    filters:
+      min_score: 10
+
+  - id: reddit_datascience
+    platform: reddit
+    handle: r/datascience
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Data-science career/tooling discussion; broad, so require strong corroboration
+    filters:
+      min_score: 200
+
+  - id: reddit_ai_assisted
+    platform: reddit
+    handle: r/AIAssisted
+    categories: [ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Everyday AI-assisted work patterns and productivity pain points
+    filters:
+      min_score: 10
+
+  - id: reddit_ai_curiosity
+    platform: reddit
+    handle: r/aicuriosity
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Curated AI finds and early weak signals; treat as discovery, not evidence
+    filters:
+      min_score: 20
+
+  - id: reddit_ai_hubspace
+    platform: reddit
+    handle: r/AIHubSpace
+    categories: [news]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Broad AI hub/news reposts; secondary source only
+    filters:
+      min_score: 20
+
+  - id: reddit_ai_search_lab
+    platform: reddit
+    handle: r/AISearchLab
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: AI search tools, search UX, and retrieval-product signals
+    filters:
+      min_score: 10
+
+  - id: reddit_how_to_ai_agent
+    platform: reddit
+    handle: r/HowToAIAgent
+    categories: [ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: AI-agent tutorials and implementation friction
+    filters:
+      min_score: 10
+
+  - id: reddit_learn_ai_agents
+    platform: reddit
+    handle: r/learnAIAgents
+    categories: [ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Learning-oriented AI-agent workflows and beginner pain points
+    filters:
+      min_score: 10
+
+  - id: reddit_ai_music
+    platform: reddit
+    handle: r/AI_Music
+    categories: [ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: AI music generation workflows and creator-product needs
+    filters:
+      min_score: 30
+
+  - id: reddit_ai_video
+    platform: reddit
+    handle: r/aivideo
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: AI video generation tools, workflows, and creator pain points
+    filters:
+      min_score: 30
+
+  - id: reddit_elevenlabs
+    platform: reddit
+    handle: r/elevenlabs
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Voice AI workflows, product issues, and creator use cases
+    filters:
+      min_score: 20
+
+  - id: reddit_enhancer_ai
+    platform: reddit
+    handle: r/EnhancerAI
+    categories: [ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Image enhancement workflows and small creator-tool signals
+    filters:
+      min_score: 10
+
+  - id: reddit_foooocus
+    platform: reddit
+    handle: r/foooocus
+    categories: [ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Lightweight image-generation UI workflows and pain points
+    filters:
+      min_score: 20
+
+  - id: reddit_ideogramai
+    platform: reddit
+    handle: r/ideogramai
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Ideogram/image-generation product updates and creator feedback
+    filters:
+      min_score: 20
+
+  - id: reddit_grok
+    platform: reddit
+    handle: r/grok
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Grok product updates and user sentiment; corroborate before trend claims
+    filters:
+      min_score: 30
+
+  - id: reddit_kimi
+    platform: reddit
+    handle: r/kimi
+    categories: [news]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Kimi model/product discussion; secondary source for Moonshot updates
+    filters:
+      min_score: 10
+
+  - id: reddit_labsdotgoogle
+    platform: reddit
+    handle: r/labsdotgoogle
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Google Labs experiments and user reactions
+    filters:
+      min_score: 10
+
+  - id: reddit_ai_coding_professional
+    platform: reddit
+    handle: r/AIcodingProfessional
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Professional AI-coding workflows and adoption friction
+    filters:
+      min_score: 10
+
+  - id: reddit_ai_prompt_programming
+    platform: reddit
+    handle: r/aipromptprogramming
+    categories: [ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Prompt-programming patterns; treat as weak implementation signal
+    filters:
+      min_score: 10
+
+  - id: reddit_augment_code_ai
+    platform: reddit
+    handle: r/AugmentCodeAI
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Augment Code usage, release discussion, and developer sentiment
+    filters:
+      min_score: 10
+
+  - id: reddit_chatgpt_coding
+    platform: reddit
+    handle: r/ChatGPTCoding
+    categories: [ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Coding-with-ChatGPT workflows, snippets, and beginner pain points
+    filters:
+      min_score: 30
+
+  - id: reddit_codeium
+    platform: reddit
+    handle: r/Codeium
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Codeium/Windsurf ecosystem updates and developer feedback
+    filters:
+      min_score: 20
+
+  - id: reddit_codex
+    platform: reddit
+    handle: r/codex
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: OpenAI Codex-related discussions and coding-agent workflows
+    filters:
+      min_score: 20
+
+  - id: reddit_llm_devs
+    platform: reddit
+    handle: r/LLMDevs
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: LLM developer implementation questions, tooling gaps, and launch ideas
+    filters:
+      min_score: 10
+
+  - id: reddit_context_engine
+    platform: reddit
+    handle: r/ContextEngine
+    categories: [ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Context/memory product discussion and RAG-agent opportunity signals
+    filters:
+      min_score: 10
+
+  - id: reddit_gpt_store
+    platform: reddit
+    handle: r/GPTStore
+    categories: [ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Custom GPT marketplace patterns and small-product opportunities
+    filters:
+      min_score: 20
+
+
+  # Reddit — quarantine/noisy/obsolete; excluded from main digests by default
+  - id: reddit_agi
+    platform: reddit
+    handle: r/agi
+    categories: [news]
+    tier: quarantine
+    trust: noisy
+    language: en
+    enabled: true
+    description: AGI speculation; too noisy for trend claims without external evidence
+
+  - id: reddit_ai_dangers
+    platform: reddit
+    handle: r/AIDangers
+    categories: [news]
+    tier: quarantine
+    trust: noisy
+    language: en
+    enabled: true
+    description: AI risk discussion; high ideology/noise, audit-only source
+
+  - id: reddit_artificial_sentience
+    platform: reddit
+    handle: r/ArtificialSentience
+    categories: [news]
+    tier: quarantine
+    trust: noisy
+    language: en
+    enabled: true
+    description: Machine-consciousness speculation; not suitable for operational digests
+
+  - id: reddit_ai_art
+    platform: reddit
+    handle: r/aiArt
+    categories: [ideas]
+    tier: quarantine
+    trust: noisy
+    language: en
+    enabled: true
+    description: Image posts and prompt spam; low signal for market/product claims
+
+  - id: reddit_ai_slop
+    platform: reddit
+    handle: r/aislop
+    categories: [news]
+    tier: quarantine
+    trust: noisy
+    language: en
+    enabled: true
+    description: AI-content cringe/noise; audit-only source
+
+  - id: reddit_dalle2
+    platform: reddit
+    handle: r/dalle2
+    categories: [news]
+    tier: quarantine
+    trust: noisy
+    language: en
+    enabled: true
+    description: Legacy DALL-E subreddit; mostly obsolete/secondary for current AI news
+
+  - id: reddit_bard
+    platform: reddit
+    handle: r/Bard
+    categories: [news]
+    tier: quarantine
+    trust: noisy
+    language: en
+    enabled: true
+    description: Legacy Bard naming; use Gemini sources instead
+
+  - id: reddit_gpt3
+    platform: reddit
+    handle: r/GPT3
+    categories: [news]
+    tier: quarantine
+    trust: noisy
+    language: en
+    enabled: true
+    description: Legacy GPT-3 community; low current-news yield
+
+  - id: reddit_gpt5
+    platform: reddit
+    handle: r/gpt5
+    categories: [news]
+    tier: quarantine
+    trust: noisy
+    language: en
+    enabled: true
+    description: Rumor/speculation-heavy model-watch community
+
   - id: reddit_ai_dankmemes
     platform: reddit
     handle: r/AIDankmemes
@@ -143,6 +669,26 @@ sources:
     language: en
     enabled: true
     description: AI memes/noise; kept only for periodic source-quality audits
+
+  - id: reddit_chatgpt_prompt_genius
+    platform: reddit
+    handle: r/ChatGPTPromptGenius
+    categories: [ideas]
+    tier: quarantine
+    trust: noisy
+    language: en
+    enabled: true
+    description: Prompt list/spam source; rarely reliable as product evidence
+
+  - id: reddit_gpt_jailbreaks
+    platform: reddit
+    handle: r/GPT_Jailbreaks
+    categories: [news]
+    tier: quarantine
+    trust: noisy
+    language: en
+    enabled: true
+    description: Jailbreak content; exclude from normal digest and trend language
 
   # -------------------------------------------------------------------------
   # X / Twitter — official, expert, and product-builder sources
@@ -296,6 +842,538 @@ sources:
     language: en
     enabled: true
     description: Indie products, travel/remote-work patterns, and SaaS experiments
+
+
+  - id: x_google_ai_studio
+    platform: x
+    handle: "@GoogleAIStudio"
+    categories: [news]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Google AI Studio developer platform announcements
+
+  - id: x_google_labs
+    platform: x
+    handle: "@GoogleLabs"
+    categories: [news, ideas]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Google Labs experiments and early AI product launches
+
+  - id: x_flow_by_google
+    platform: x
+    handle: "@FlowByGoogle"
+    categories: [news, ideas]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Google Flow creative AI product updates
+
+  - id: x_stitchbygoogle
+    platform: x
+    handle: "@stitchbygoogle"
+    categories: [news, ideas]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Google Stitch UI/prototyping AI product updates
+
+  - id: x_claudecode
+    platform: x
+    handle: "@claudecode"
+    categories: [news, ideas]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Claude Code product updates and developer workflows
+
+  - id: x_vercel
+    platform: x
+    handle: "@vercel"
+    categories: [news, ideas]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Vercel platform and AI/frontend developer product announcements
+
+  - id: x_vercel_dev
+    platform: x
+    handle: "@vercel_dev"
+    categories: [news, ideas]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Vercel developer releases, examples, and AI-app tooling
+
+  - id: x_nvidia
+    platform: x
+    handle: "@nvidia"
+    categories: [news]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: NVIDIA AI platform, model, infra, and GPU ecosystem announcements
+
+  - id: x_menloresearch
+    platform: x
+    handle: "@menloresearch"
+    categories: [news]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Menlo Research model/product announcements
+
+  - id: x_alibaba_wan
+    platform: x
+    handle: "@Alibaba_Wan"
+    categories: [news]
+    tier: core
+    trust: official
+    language: en
+    enabled: true
+    description: Wan video/model releases from Alibaba ecosystem
+
+  - id: x_kling_ai
+    platform: x
+    handle: "@kling_ai"
+    categories: [news, ideas]
+    tier: candidate
+    trust: official
+    language: en
+    enabled: true
+    description: Kling AI video generation product updates and creator workflows
+
+  - id: x_fal
+    platform: x
+    handle: "@fal"
+    categories: [news, ideas]
+    tier: candidate
+    trust: official
+    language: en
+    enabled: true
+    description: AI media/infra platform launches and developer use cases
+
+  - id: x_factory_ai
+    platform: x
+    handle: "@FactoryAI"
+    categories: [news, ideas]
+    tier: candidate
+    trust: official
+    language: en
+    enabled: true
+    description: AI software-engineering agent product updates
+
+  - id: x_warpdotdev
+    platform: x
+    handle: "@warpdotdev"
+    categories: [news, ideas]
+    tier: candidate
+    trust: official
+    language: en
+    enabled: true
+    description: Developer terminal/agent workflow releases and adoption signals
+
+  - id: x_pipedream
+    platform: x
+    handle: "@pipedream"
+    categories: [news, ideas]
+    tier: candidate
+    trust: official
+    language: en
+    enabled: true
+    description: Automation/workflow platform updates relevant to agent tooling
+
+  - id: x_expo
+    platform: x
+    handle: "@expo"
+    categories: [news, ideas]
+    tier: candidate
+    trust: official
+    language: en
+    enabled: true
+    description: App-development platform releases and mobile product tooling signals
+
+  - id: x_stack_auth
+    platform: x
+    handle: "@stack_auth"
+    categories: [ideas]
+    tier: candidate
+    trust: official
+    language: en
+    enabled: true
+    description: Auth developer-product launches and SaaS implementation patterns
+
+  - id: x_demishassabis
+    platform: x
+    handle: "@demishassabis"
+    categories: [news]
+    tier: core
+    trust: expert
+    language: en
+    enabled: true
+    description: DeepMind leadership perspective on AI research and products
+
+  - id: x_shanelegg
+    platform: x
+    handle: "@ShaneLegg"
+    categories: [news]
+    tier: core
+    trust: expert
+    language: en
+    enabled: true
+    description: DeepMind research leadership and AI capability commentary
+
+  - id: x_clefourrier
+    platform: x
+    handle: "@clefourrier"
+    categories: [news]
+    tier: core
+    trust: expert
+    language: en
+    enabled: true
+    description: AI model evaluation, open-model, and benchmark commentary
+
+  - id: x_rlance_martin
+    platform: x
+    handle: "@RLanceMartin"
+    categories: [news, ideas]
+    tier: core
+    trust: expert
+    language: en
+    enabled: true
+    description: LangGraph/LangChain agent patterns and practical LLM app signals
+
+  - id: x_bcherny
+    platform: x
+    handle: "@bcherny"
+    categories: [news, ideas]
+    tier: core
+    trust: expert
+    language: en
+    enabled: true
+    description: AI coding, Claude Code, and developer-tooling expert signal
+
+  - id: x_dexhorthy
+    platform: x
+    handle: "@dexhorthy"
+    categories: [news, ideas]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: AI agent engineering and developer-tooling commentary
+
+  - id: x_kiwicopple
+    platform: x
+    handle: "@kiwicopple"
+    categories: [news, ideas]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: Developer-platform and startup product signals
+
+  - id: x_shadcn
+    platform: x
+    handle: "@shadcn"
+    categories: [ideas]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: Frontend/design-system product taste and developer UX signals
+
+  - id: x_peduarte
+    platform: x
+    handle: "@peduarte"
+    categories: [ideas]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: Design systems, product craft, and UI developer tooling signals
+
+  - id: x_mattpocockuk
+    platform: x
+    handle: "@mattpocockuk"
+    categories: [ideas]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: TypeScript education, developer experience, and product opportunities
+
+  - id: x_willmcgugan
+    platform: x
+    handle: "@willmcgugan"
+    categories: [news, ideas]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: Python/developer tooling releases and builder pain points
+
+  - id: x_danshipper
+    platform: x
+    handle: "@danshipper"
+    categories: [ideas]
+    tier: core
+    trust: expert
+    language: en
+    enabled: true
+    description: AI/productivity essays, product strategy, and business-model insights
+
+  - id: x_every
+    platform: x
+    handle: "@every"
+    categories: [news, ideas]
+    tier: core
+    trust: expert
+    language: en
+    enabled: true
+    description: AI business/product essays and startup trend synthesis
+
+  - id: x_bentossell
+    platform: x
+    handle: "@bentossell"
+    categories: [ideas]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: No-code/AI product building, prompts, and business idea signals
+
+  - id: x_thepatwalls
+    platform: x
+    handle: "@thepatwalls"
+    categories: [ideas]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: Founder stories, niche business ideas, and market validation signals
+
+  - id: x_marc_lou
+    platform: x
+    handle: "@marc_lou"
+    categories: [ideas]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: Indie hacking, fast product launches, and SaaS idea signals
+
+  - id: x_dannypostma
+    platform: x
+    handle: "@dannypostma"
+    categories: [ideas]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: AI/indie-product experiments and marketing insight
+
+  - id: x_nateliason
+    platform: x
+    handle: "@nateliason"
+    categories: [ideas]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: Creator/business systems and product insight
+
+  - id: x_tobi
+    platform: x
+    handle: "@tobi"
+    categories: [news, ideas]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: Shopify/product leadership and AI adoption commentary
+
+  - id: x_iannuttall
+    platform: x
+    handle: "@iannuttall"
+    categories: [ideas]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: Indie hacking, AI app experiments, and launch lessons
+
+  - id: x_sawyerhood
+    platform: x
+    handle: "@sawyerhood"
+    categories: [ideas]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: Startup/product ideas, founder-market observations, and AI app signals
+
+  - id: x_heyglif
+    platform: x
+    handle: "@heyglif"
+    categories: [news, ideas]
+    tier: candidate
+    trust: official
+    language: en
+    enabled: true
+    description: AI creative-tool product updates and usage patterns
+
+  - id: x_trycua
+    platform: x
+    handle: "@trycua"
+    categories: [news, ideas]
+    tier: candidate
+    trust: official
+    language: en
+    enabled: true
+    description: Computer-use agent product updates and workflow signals
+
+  - id: x_qoder_ai_ide
+    platform: x
+    handle: "@qoder_ai_ide"
+    categories: [news, ideas]
+    tier: candidate
+    trust: official
+    language: en
+    enabled: true
+    description: AI IDE product updates and coding-agent workflow signals
+
+  - id: x_ampcode
+    platform: x
+    handle: "@AmpCode"
+    categories: [news, ideas]
+    tier: candidate
+    trust: official
+    language: en
+    enabled: true
+    description: AI coding-agent product releases and developer feedback
+
+  - id: x_taskmasterai
+    platform: x
+    handle: "@TaskMasterAI"
+    categories: [news, ideas]
+    tier: candidate
+    trust: official
+    language: en
+    enabled: true
+    description: Task-management/agent workflow product updates
+
+  - id: x_agentmall
+    platform: x
+    handle: "@AgentMall"
+    categories: [ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Agent marketplace and automation product-discovery signals
+
+  - id: x_variantui
+    platform: x
+    handle: "@variantui"
+    categories: [ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: UI/component product inspiration and design-tooling signals
+
+  - id: x_antigravity
+    platform: x
+    handle: "@antigravity"
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: AI coding/product account from the watchlist; validate via quality audit
+
+  - id: x_p0
+    platform: x
+    handle: "@p0"
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: Developer-agent/product account from the watchlist; validate before promotion
+
+  - id: x_nearexplains
+    platform: x
+    handle: "@nearexplains"
+    categories: [news, ideas]
+    tier: candidate
+    trust: community_low
+    language: en
+    enabled: true
+    description: AI/crypto agent ecosystem explainer account; use only with corroboration
+
+  - id: x_techcrunch
+    platform: x
+    handle: "@TechCrunch"
+    categories: [news]
+    tier: candidate
+    trust: expert
+    language: en
+    enabled: true
+    description: Startup and AI industry news; secondary source for event discovery
+
+  # X — quarantine/noisy/secondary watchlist entries; excluded from main digests
+  - id: x_bellcurvebot
+    platform: x
+    handle: "@bellcurvebot"
+    categories: [news]
+    tier: quarantine
+    trust: noisy
+    language: en
+    enabled: true
+    description: Bot-style content; audit-only until it proves unique signal
+
+  - id: x_cb_doge
+    platform: x
+    handle: "@cb_doge"
+    categories: [news]
+    tier: quarantine
+    trust: noisy
+    language: en
+    enabled: true
+    description: Elon/X fandom amplification; too noisy for AI/product digests
+
+  - id: x_massgravel
+    platform: x
+    handle: "@massgravel"
+    categories: [news]
+    tier: quarantine
+    trust: noisy
+    language: en
+    enabled: true
+    description: Mostly unrelated to AI/product intelligence; quarantine by default
+
+  - id: x_reddit_lies
+    platform: x
+    handle: "@reddit_lies"
+    categories: [news]
+    tier: quarantine
+    trust: noisy
+    language: en
+    enabled: true
+    description: Culture-war/noise account; excluded from market and product claims
 
   # -------------------------------------------------------------------------
   # Telegram — Telethon sources
