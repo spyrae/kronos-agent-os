@@ -3,6 +3,22 @@ from types import SimpleNamespace
 from kronos import bridge
 
 
+def _clear_topic_alias_env(monkeypatch):
+    for env_name in (
+        "TOPIC_GENERAL",
+        "TOPIC_DIGEST",
+        "TOPIC_FINANCE",
+        "TOPIC_DIGEST_NEWS",
+        "TOPIC_JB_COMPETITORS",
+        "TOPIC_JB_SYSTEM",
+        "TOPIC_DIGEST_JOBS",
+        "TOPIC_DIGEST_IDEAS",
+        "TOPIC_JB_TRAVEL_INSIGHTS",
+        "TELEGRAM_KRONOS_TOPIC_ID",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+
+
 def _event(*, private: bool, reply_to=None, action=None):
     return SimpleNamespace(
         is_private=private,
@@ -50,6 +66,7 @@ def test_runtime_info_query_reports_configured_codex_model(monkeypatch):
 
 
 def test_topic_route_matches_supergroup_link_id(monkeypatch):
+    _clear_topic_alias_env(monkeypatch)
     monkeypatch.setattr(bridge.settings, "telegram_swarm_chat_id", 3642435967)
     monkeypatch.setattr(bridge.settings, "telegram_general_topic_id", 23)
     monkeypatch.setattr(bridge.settings, "telegram_kronos_topic_id", 18)
@@ -71,7 +88,74 @@ def test_topic_route_matches_supergroup_link_id(monkeypatch):
     assert unknown.mode == "silent"
 
 
+def test_topic_route_uses_signal_topic_env_aliases(monkeypatch):
+    _clear_topic_alias_env(monkeypatch)
+    monkeypatch.setattr(bridge.settings, "telegram_swarm_chat_id", 3642435967)
+    monkeypatch.setattr(bridge.settings, "telegram_general_topic_id", 23)
+    monkeypatch.setenv("TOPIC_DIGEST_NEWS", "31")
+    monkeypatch.setenv("TOPIC_JB_COMPETITORS", "32")
+    monkeypatch.setenv("TOPIC_JB_SYSTEM", "33")
+    monkeypatch.setenv("TOPIC_DIGEST_JOBS", "34")
+    monkeypatch.setenv("TOPIC_DIGEST_IDEAS", "35")
+    monkeypatch.setenv("TOPIC_JB_TRAVEL_INSIGHTS", "36")
+    monkeypatch.setattr(bridge.settings, "telegram_digest_news_agent", "kronos")
+    monkeypatch.setattr(bridge.settings, "telegram_jb_competitors_agent", "nexus")
+    monkeypatch.setattr(bridge.settings, "telegram_jb_system_agent", "nexus")
+    monkeypatch.setattr(bridge.settings, "telegram_digest_jobs_agent", "kronos")
+    monkeypatch.setattr(bridge.settings, "telegram_digest_ideas_agent", "kronos")
+    monkeypatch.setattr(bridge.settings, "telegram_jb_travel_insights_agent", "kronos")
+
+    news = bridge._resolve_topic_route(-1003642435967, 31)
+    competitors = bridge._resolve_topic_route(-1003642435967, 32)
+    system = bridge._resolve_topic_route(-1003642435967, 33)
+    jobs = bridge._resolve_topic_route(-1003642435967, 34)
+    ideas = bridge._resolve_topic_route(-1003642435967, 35)
+    travel = bridge._resolve_topic_route(-1003642435967, 36)
+
+    assert news == bridge.TopicRoute("owner", label="digest_news", owner_agent="kronos")
+    assert competitors == bridge.TopicRoute(
+        "owner",
+        label="jb_competitors",
+        owner_agent="nexus",
+    )
+    assert system == bridge.TopicRoute("owner", label="jb_system", owner_agent="nexus")
+    assert jobs == bridge.TopicRoute("owner", label="digest_jobs", owner_agent="kronos")
+    assert ideas == bridge.TopicRoute("owner", label="digest_ideas", owner_agent="kronos")
+    assert travel == bridge.TopicRoute(
+        "owner",
+        label="jb_travel_insights",
+        owner_agent="kronos",
+    )
+
+
+def test_topic_route_uses_legacy_digest_env_alias(monkeypatch):
+    _clear_topic_alias_env(monkeypatch)
+    monkeypatch.setattr(bridge.settings, "telegram_swarm_chat_id", 3642435967)
+    monkeypatch.setattr(bridge.settings, "telegram_general_topic_id", 23)
+    monkeypatch.setattr(bridge.settings, "telegram_digest_topic_id", 0)
+    monkeypatch.setattr(bridge.settings, "telegram_digest_agent", "kronos")
+    monkeypatch.setenv("TOPIC_DIGEST", "24")
+
+    route = bridge._resolve_topic_route(-1003642435967, 24)
+
+    assert route == bridge.TopicRoute("owner", label="digest", owner_agent="kronos")
+
+
+def test_topic_owner_can_allow_multiple_agents(monkeypatch):
+    route = bridge.TopicRoute("owner", label="jb_system", owner_agent="kronos,nexus")
+
+    monkeypatch.setattr(bridge.settings, "agent_name", "kronos")
+    assert bridge._agent_owns_topic(route) is True
+
+    monkeypatch.setattr(bridge.settings, "agent_name", "nexus")
+    assert bridge._agent_owns_topic(route) is True
+
+    monkeypatch.setattr(bridge.settings, "agent_name", "worker")
+    assert bridge._agent_owns_topic(route) is False
+
+
 def test_topic_route_falls_back_outside_configured_chat(monkeypatch):
+    _clear_topic_alias_env(monkeypatch)
     monkeypatch.setattr(bridge.settings, "telegram_swarm_chat_id", 3642435967)
     monkeypatch.setattr(bridge.settings, "telegram_general_topic_id", 23)
 

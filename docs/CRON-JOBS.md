@@ -195,13 +195,20 @@ Both support message chunking (4000 char limit) and parse_mode (HTML).
 `TOPIC_DIGEST` remains the backward-compatible fallback. New signal/JourneyBay
 topics can be configured independently:
 
-| Env var | Destination | Current producers |
-|---------|-------------|-------------------|
-| `TOPIC_DIGEST_NEWS` | `Digest: News` | `news-monitor`, `group-digest` |
-| `TOPIC_JB_COMPETITORS` | `JB: Competitors Status` | `competitor-weekly` |
-| `TOPIC_JB_SYSTEM` | `JB: System Status` | analytics pulse/weekly/alerts, SEO/GEO |
-| `TOPIC_DIGEST_JOBS` | `Digest: Jobs` | reserved for signal pipeline |
-| `TOPIC_DIGEST_IDEAS` | `Digest: Product/Business Ideas` | reserved for signal pipeline |
-| `TOPIC_JB_TRAVEL_INSIGHTS` | `JB: Travel Insights` | reserved for signal pipeline |
+| Env var | Destination | Owner agent env/default | Current producers |
+|---------|-------------|-------------------------|-------------------|
+| `TOPIC_DIGEST_NEWS` | `Digest: News` | `TELEGRAM_DIGEST_NEWS_AGENT=kronos` | `news-monitor`, `group-digest` |
+| `TOPIC_JB_COMPETITORS` | `JB: Competitors Status` | `TELEGRAM_JB_COMPETITORS_AGENT=nexus` | `competitor-weekly` |
+| `TOPIC_JB_SYSTEM` | `JB: System Status` | `TELEGRAM_JB_SYSTEM_AGENT=nexus` | analytics pulse/weekly/alerts, SEO/GEO |
+| `TOPIC_DIGEST_JOBS` | `Digest: Jobs` | `TELEGRAM_DIGEST_JOBS_AGENT=kronos` | reserved for signal pipeline |
+| `TOPIC_DIGEST_IDEAS` | `Digest: Product/Business Ideas` | `TELEGRAM_DIGEST_IDEAS_AGENT=kronos` | reserved for signal pipeline |
+| `TOPIC_JB_TRAVEL_INSIGHTS` | `JB: Travel Insights` | `TELEGRAM_JB_TRAVEL_INSIGHTS_AGENT=kronos` | reserved for signal pipeline |
 
 Finance reports continue to use `TOPIC_FINANCE`.
+
+The Telegram bridge also uses these `TOPIC_*` ids for inbound messages in the
+swarm chat. Each configured destination is an owner-only topic: only the owner
+agent can answer user messages there, peer agents stand down before invoking
+the smart group router. Use comma-separated owner values (for example
+`TELEGRAM_JB_SYSTEM_AGENT=kronos,nexus`) only for topics where both agents are
+intentionally allowed to answer.

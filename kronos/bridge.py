@@ -101,6 +101,38 @@ def _same_telegram_chat(left: int | None, right: int | None) -> bool:
     return _normalize_telegram_chat_id(left) == _normalize_telegram_chat_id(right)
 
 
+def _positive_int(value: object) -> int:
+    try:
+        parsed = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return parsed if parsed > 0 else 0
+
+
+def _topic_id_from_env_or_setting(env_name: str, setting_value: int) -> int:
+    """Resolve a topic id for inbound bridge routing.
+
+    Cron notifications historically use ``TOPIC_*`` env aliases, while the
+    bridge settings use ``TELEGRAM_*_TOPIC_ID``. For owner-topic safety the
+    bridge must honor both forms; otherwise a configured cron topic could still
+    fall through to generic group routing for inbound user messages.
+    """
+    return _positive_int(os.environ.get(env_name)) or _positive_int(setting_value)
+
+
+def _topic_owner_agents(owner_agent: str) -> set[str]:
+    """Return normalized allowed owners for a topic.
+
+    Supports comma-separated values such as ``kronos,nexus`` for topics where
+    both agents are allowed to answer.
+    """
+    return {
+        agent.strip().lower()
+        for agent in (owner_agent or "").replace(";", ",").split(",")
+        if agent.strip()
+    }
+
+
 def _resolve_topic_route(chat_id: int, topic_id: int | None) -> TopicRoute:
     """Return how this process should treat a group/topic message."""
     if not settings.telegram_swarm_chat_id:
@@ -109,7 +141,10 @@ def _resolve_topic_route(chat_id: int, topic_id: int | None) -> TopicRoute:
         return TopicRoute("default")
 
     topic = topic_id or 0
-    general_topic = settings.telegram_general_topic_id
+    general_topic = _topic_id_from_env_or_setting(
+        "TOPIC_GENERAL",
+        settings.telegram_general_topic_id,
+    )
 
     if general_topic and topic == general_topic:
         return TopicRoute("swarm", label="general")
@@ -117,9 +152,78 @@ def _resolve_topic_route(chat_id: int, topic_id: int | None) -> TopicRoute:
         return TopicRoute("swarm", label="general")
 
     owner_topics = (
-        (settings.telegram_kronos_topic_id, settings.telegram_kronos_agent, "kronos"),
-        (settings.telegram_finance_topic_id, settings.telegram_finance_agent, "finance"),
-        (settings.telegram_digest_topic_id, settings.telegram_digest_agent, "digest"),
+        (
+            _topic_id_from_env_or_setting(
+                "TELEGRAM_KRONOS_TOPIC_ID",
+                settings.telegram_kronos_topic_id,
+            ),
+            settings.telegram_kronos_agent,
+            "kronos",
+        ),
+        (
+            _topic_id_from_env_or_setting(
+                "TOPIC_FINANCE",
+                settings.telegram_finance_topic_id,
+            ),
+            settings.telegram_finance_agent,
+            "finance",
+        ),
+        (
+            _topic_id_from_env_or_setting(
+                "TOPIC_DIGEST_NEWS",
+                settings.telegram_digest_news_topic_id,
+            ),
+            settings.telegram_digest_news_agent,
+            "digest_news",
+        ),
+        (
+            _topic_id_from_env_or_setting(
+                "TOPIC_JB_COMPETITORS",
+                settings.telegram_jb_competitors_topic_id,
+            ),
+            settings.telegram_jb_competitors_agent,
+            "jb_competitors",
+        ),
+        (
+            _topic_id_from_env_or_setting(
+                "TOPIC_JB_SYSTEM",
+                settings.telegram_jb_system_topic_id,
+            ),
+            settings.telegram_jb_system_agent,
+            "jb_system",
+        ),
+        (
+            _topic_id_from_env_or_setting(
+                "TOPIC_DIGEST_JOBS",
+                settings.telegram_digest_jobs_topic_id,
+            ),
+            settings.telegram_digest_jobs_agent,
+            "digest_jobs",
+        ),
+        (
+            _topic_id_from_env_or_setting(
+                "TOPIC_DIGEST_IDEAS",
+                settings.telegram_digest_ideas_topic_id,
+            ),
+            settings.telegram_digest_ideas_agent,
+            "digest_ideas",
+        ),
+        (
+            _topic_id_from_env_or_setting(
+                "TOPIC_JB_TRAVEL_INSIGHTS",
+                settings.telegram_jb_travel_insights_topic_id,
+            ),
+            settings.telegram_jb_travel_insights_agent,
+            "jb_travel_insights",
+        ),
+        (
+            _topic_id_from_env_or_setting(
+                "TOPIC_DIGEST",
+                settings.telegram_digest_topic_id,
+            ),
+            settings.telegram_digest_agent,
+            "digest",
+        ),
     )
     for configured_topic, owner_agent, label in owner_topics:
         if configured_topic and topic == configured_topic:
@@ -129,7 +233,7 @@ def _resolve_topic_route(chat_id: int, topic_id: int | None) -> TopicRoute:
 
 
 def _agent_owns_topic(route: TopicRoute) -> bool:
-    return route.owner_agent == settings.agent_name.lower()
+    return settings.agent_name.lower() in _topic_owner_agents(route.owner_agent)
 
 
 def _owner_topic_accepts_sender(user_id: int) -> bool:

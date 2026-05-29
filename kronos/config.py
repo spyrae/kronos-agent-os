@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     telegram_kronos_agent: str = "kronos"
     telegram_finance_agent: str = "kronos"
     telegram_digest_agent: str = "kronos"
+    telegram_digest_news_agent: str = "kronos"
+    telegram_jb_competitors_agent: str = "nexus"
+    telegram_jb_system_agent: str = "nexus"
+    telegram_digest_jobs_agent: str = "kronos"
+    telegram_digest_ideas_agent: str = "kronos"
+    telegram_jb_travel_insights_agent: str = "kronos"
     telegram_shared_context_messages: int = 12
 
     # Voice STT

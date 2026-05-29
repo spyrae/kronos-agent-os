@@ -82,11 +82,19 @@ TELEGRAM_DIGEST_TOPIC_ID=24
 TELEGRAM_KRONOS_AGENT=kronos
 TELEGRAM_FINANCE_AGENT=kronos
 TELEGRAM_DIGEST_AGENT=kronos
+TOPIC_DIGEST_NEWS=31
+TOPIC_JB_COMPETITORS=32
+TOPIC_JB_SYSTEM=33
+TELEGRAM_DIGEST_NEWS_AGENT=kronos
+TELEGRAM_JB_COMPETITORS_AGENT=nexus
+TELEGRAM_JB_SYSTEM_AGENT=nexus
 ```
 
 Only the general topic uses relevance-based multi-agent routing. Owner topics
 are answered only by their configured agent; every other agent records the
-message to the shared ledger and stands down.
+message to the shared ledger and stands down before the smart router. Owner
+agent values can be comma-separated (for example `kronos,nexus`) when both
+agents are intentionally allowed in the same topic.
 
 ## Safety
 
