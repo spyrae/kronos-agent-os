@@ -1,6 +1,6 @@
 # Signal Intelligence Source Curation
 
-Source baseline: `/Users/romanbelov/Documents/Obsidian Vault/AI/Reddit и X для AI-энтузиастов.md`.
+Source baseline: a private AI-source watchlist supplied out-of-band.
 
 ## Curation rules
 

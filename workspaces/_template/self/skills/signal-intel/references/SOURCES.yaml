@@ -231,7 +231,7 @@ sources:
     filters:
       min_score: 30
 
-  # Reddit — candidate watchlist from Obsidian; useful only with corroboration
+  # Reddit — candidate watchlist; useful only with corroboration
   - id: reddit_aiagents
     platform: reddit
     handle: r/aiagents
