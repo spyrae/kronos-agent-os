@@ -54,6 +54,10 @@ RESIDUAL_ENGLISH_TERMS = (
     "designer",
     "developer",
     "consultant",
+    "production",
+    "async",
+    "worker",
+    "path",
 )
 ALLOWED_LATIN_WORDS = {
     "journeybay",
@@ -147,7 +151,8 @@ def polish_rendered_digest(digest: RenderedDigest, *, max_chars: int = TELEGRAM_
     """Translate/clean a rendered digest for Russian Telegram presentation."""
     body = _clean_digest_markup(digest.body)
     polished = _polish_digest_with_llm(digest.route.category, body, max_chars=max_chars)
-    return replace(digest, body=_truncate_html(_clean_digest_markup(polished or body), max_chars=max_chars))
+    cleaned = _localize_common_terms(_clean_digest_markup(polished or body))
+    return replace(digest, body=_truncate_html(cleaned, max_chars=max_chars))
 
 
 def _group_clusters(
@@ -436,7 +441,8 @@ def _polish_prompt(category: str, body: str, *, max_chars: int, strict: bool = F
         "Отредактируй Telegram HTML-дайджест для русского пользователя.\n"
         "Задачи:\n"
         "1. Переведи ВЕСЬ английский текст на русский, включая заголовки, названия вакансий и описания.\n"
-        "2. Не переводи только бренды, названия продуктов/моделей, URL, usernames и короткие аббревиатуры.\n"
+        "2. Не переводи только бренды, названия продуктов/моделей, URL, usernames и короткие аббревиатуры; "
+        "AI всегда переводи как ИИ.\n"
         "3. Убери markdown-мусор: **, ###, backticks, markdown-ссылки.\n"
         "4. Сохрани факты, числа и смысл; ничего не добавляй.\n"
         "5. Сохрани все <a href=\"...\"> ссылки и URL.\n"
@@ -454,6 +460,11 @@ def _needs_russian_polish(text: str) -> bool:
     latin_words = re.findall(r"\b[A-Za-z][A-Za-z]{3,}\b", text)
     markdown_noise = any(marker in text for marker in ("**", "```", "]("))
     return markdown_noise or len(latin_words) >= 3
+
+
+def _localize_common_terms(text: str) -> str:
+    """Apply deterministic Russian replacements that LLMs often leave as-is."""
+    return re.sub(r"(?<![A-Za-z])AI(?![A-Za-z])", "ИИ", text)
 
 
 def _needs_strict_russian_rewrite(text: str) -> bool:

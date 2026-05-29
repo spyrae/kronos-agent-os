@@ -65,7 +65,7 @@ def _analytics_item(source: SignalSource, data: Mapping[str, Any]):
         "dau": "DAU",
         "new_signups_24h": "новые регистрации за 24ч",
         "trips_created_24h": "создано поездок за 24ч",
-        "ai_messages_24h": "AI-сообщений за 24ч",
+        "ai_messages_24h": "ИИ-сообщений за 24ч",
         "places_saved_24h": "сохранено мест за 24ч",
         "client_errors_24h": "клиентских ошибок за 24ч",
     }

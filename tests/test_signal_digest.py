@@ -193,6 +193,22 @@ def test_polish_rendered_digest_retries_when_english_role_terms_remain(monkeypat
     assert "Product Manager" not in polished.body
 
 
+def test_polish_rendered_digest_localizes_ai_acronym_without_touching_openai(monkeypatch):
+    monkeypatch.setattr("kronos.llm.is_runtime_llm_configured", lambda: False)
+
+    rendered = render_digest(
+        "travel_insights",
+        [{"id": 1, "category": "travel_insights", "title": "AI trip planner by OpenAI", "summary": "", "item_ids": [1]}],
+        {1: [_item("search_travel_planning_ai", "search", "AI trip planner by OpenAI")]},
+        max_chars=10000,
+    )
+
+    polished = polish_rendered_digest(rendered)
+
+    assert "ИИ trip planner by OpenAI" in polished.body
+    assert "OpenAI" in polished.body
+
+
 def test_render_ideas_digest_uses_product_format_and_limits_to_ten():
     clusters = [
         {

@@ -115,7 +115,7 @@ def journeybay_implication_for_items(items: Sequence[SignalItem]) -> str:
     if any(term in text for term in ("visa", "passport", "nomad", "long-stay", "long stay")):
         return "Добавить гипотезы про чек-листы: визы, документы, лимиты пребывания и ограничения стран."
     if any(term in text for term in ("ai", "planner", "recommendation")):
-        return "Сфокусировать AI-планировщик на ограничениях, объяснимости и редактируемых шагах маршрута."
+        return "Сфокусировать ИИ-планировщик на ограничениях, объяснимости и редактируемых шагах маршрута."
     return "Превратить сигнал в вопрос для исследования, онбординга или планировщика JourneyBay."
 
 
