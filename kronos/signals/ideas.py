@@ -120,7 +120,7 @@ def product_angle_for_items(items: Sequence[SignalItem]) -> str:
         return "Продукт для анализа сообществ, модерации или умных саммари."
     if any(term in text for term in ("content", "newsletter", "seo", "video", "creator")):
         return "Процесс для авторов и контент-операций с измеримой экономией времени."
-    return "Discovery-эксперимент: проверить боль интервью или простым лендингом."
+    return "Исследовательский эксперимент: проверить боль интервью или простым лендингом."
 
 
 def why_now_for_items(items: Sequence[SignalItem], *, can_make_trend_claim: bool) -> str:

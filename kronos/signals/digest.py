@@ -20,7 +20,7 @@ TELEGRAM_SAFE_MAX_CHARS = 3900
 MAX_IDEA_CLUSTERS = 10
 MAX_TRAVEL_CLUSTERS = 10
 TITLE_BY_CATEGORY = {
-    "news": "Новости и AI-индустрия",
+    "news": "Новости и ИИ-индустрия",
     "jobs": "Вакансии и сигналы найма",
     "ideas": "Продуктовые и бизнес-идеи",
     "travel_insights": "JourneyBay: инсайты о путешествиях",
@@ -265,7 +265,7 @@ def _render_idea_cluster(cluster: Mapping[str, Any], items: Sequence[SignalItem]
         ]
     )
     if not assessment.can_make_trend_claim:
-        parts.append("  <i>Осторожно: это вход для discovery, а не подтверждённый спрос.</i>")
+        parts.append("  <i>Осторожно: это вход для исследования, а не подтверждённый спрос.</i>")
     return "\n".join(parts)
 
 

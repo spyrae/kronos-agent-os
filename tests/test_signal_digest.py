@@ -116,7 +116,7 @@ def test_render_digest_is_telegram_chunk_safe():
 def test_truncate_html_preserves_complete_tags():
     text = "\n".join(
         [
-            "<b>Новости и AI-индустрия — обзор сигналов</b>",
+            "<b>Новости и ИИ-индустрия — обзор сигналов</b>",
             "",
             "<b>Наблюдения</b>",
             '• <b>Item</b> (<a href="https://example.com/source">source</a>)',
@@ -135,7 +135,7 @@ def test_truncate_html_preserves_complete_tags():
 
 def test_polish_rendered_digest_uses_llm_for_russian_cleanup(monkeypatch):
     class Response:
-        content = "<b>Новости и AI-индустрия</b>\n• <b>Сигнал</b> — чистый русский текст"
+        content = "<b>Новости и ИИ-индустрия</b>\n• <b>Сигнал</b> — чистый русский текст"
 
     called = False
 
