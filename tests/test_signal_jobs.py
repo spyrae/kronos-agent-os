@@ -40,3 +40,25 @@ def test_generic_hiring_listicle_is_filtered_out():
 
     assert is_job_signal(item) is False
     assert job_signal_score(item) < 25
+
+
+def test_job_channel_signature_does_not_make_news_a_job():
+    item = _item(
+        "Маркетинг-директор уходит из компании",
+        "Яна оставляет должность. Сайт — https://example.com | Telegram — https://t.me/morejobs",
+        "https://t.me/morejobs/15538",
+    )
+
+    assert is_job_signal(item) is False
+    assert job_signal_score(item) < 25
+
+
+def test_interview_advice_is_filtered_out():
+    item = _item(
+        "Как подготовиться к собеседованию",
+        "Интервью с HR может вызвать стресс, вот несколько советов.",
+        "https://t.me/zarubezhom_jobs/3893",
+    )
+
+    assert is_job_signal(item) is False
+    assert job_signal_score(item) < 25

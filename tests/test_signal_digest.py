@@ -8,14 +8,21 @@ from kronos.signals.sources import SignalSource
 from kronos.signals.store import SignalStore
 
 
-def _item(source_id: str, platform: str, text: str, url: str = "") -> SignalItem:
+def _item(
+    source_id: str,
+    platform: str,
+    text: str,
+    url: str = "",
+    *,
+    categories: tuple[str, ...] = ("news",),
+) -> SignalItem:
     return SignalItem(
         source_id=source_id,
         source_platform=platform,
         title=text,
         text=text,
         url=url,
-        categories=("news",),
+        categories=categories,
     )
 
 
@@ -152,6 +159,38 @@ def test_polish_rendered_digest_uses_llm_for_russian_cleanup(monkeypatch):
     assert called is True
     assert "чистый русский текст" in polished.body
     assert "**" not in polished.body
+
+
+def test_polish_rendered_digest_retries_when_english_role_terms_remain(monkeypatch):
+    class Response:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+    calls: list[str] = []
+
+    def fake_invoke(messages, tier):
+        prompt = messages[-1].content
+        calls.append(prompt)
+        if len(calls) == 1:
+            return Response("<b>Jobs</b>\n• <b>Middle Product Manager</b>\nRemote work")
+        return Response("<b>Вакансии</b>\n• <b>Менеджер продукта среднего уровня</b>\nУдалённая работа")
+
+    monkeypatch.setattr("kronos.llm.is_runtime_llm_configured", lambda: True)
+    monkeypatch.setattr("kronos.llm.invoke_with_fallback", fake_invoke)
+
+    rendered = render_digest(
+        "jobs",
+        [{"id": 1, "category": "jobs", "title": "Middle Product Manager", "summary": "Remote work", "item_ids": [1]}],
+        {1: [_item("search_ai_jobs", "search", "Remote work", categories=("jobs",))]},
+        max_chars=10000,
+    )
+
+    polished = polish_rendered_digest(rendered)
+
+    assert len(calls) == 2
+    assert "СТРОГО" in calls[1]
+    assert "Менеджер продукта" in polished.body
+    assert "Product Manager" not in polished.body
 
 
 def test_render_ideas_digest_uses_product_format_and_limits_to_ten():

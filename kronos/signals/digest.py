@@ -39,6 +39,37 @@ EVIDENCE_LABELS = {
     EvidenceLevel.TREND: "подтверждаемый тренд",
     EvidenceLevel.CONFIRMED: "подтверждено",
 }
+RESIDUAL_ENGLISH_TERMS = (
+    "product manager",
+    "product owner",
+    "software engineer",
+    "user acquisition",
+    "job description",
+    "remote work",
+    "workflow",
+    "itinerary",
+    "travel planning",
+    "marketplace",
+    "revenue",
+    "designer",
+    "developer",
+    "consultant",
+)
+ALLOWED_LATIN_WORDS = {
+    "journeybay",
+    "telegram",
+    "reddit",
+    "linkedin",
+    "google",
+    "maps",
+    "openai",
+    "anthropic",
+    "claude",
+    "cursor",
+    "codex",
+    "appstore",
+    "github",
+}
 
 
 @dataclass(frozen=True)
@@ -370,37 +401,77 @@ def _polish_digest_with_llm(category: str, body: str, *, max_chars: int) -> str:
         if not is_runtime_llm_configured():
             return body
 
-        prompt = (
-            "Отредактируй Telegram HTML-дайджест для русского пользователя.\n"
-            "Задачи:\n"
-            "1. Переведи ВЕСЬ английский текст на русский.\n"
-            "2. Убери markdown-мусор: **, ###, backticks, markdown-ссылки.\n"
-            "3. Сохрани факты, числа и смысл; ничего не добавляй.\n"
-            "4. Сохрани все <a href=\"...\"> ссылки и URL.\n"
-            "5. Используй только Telegram HTML-теги: <b>, <i>, <a>.\n"
-            "6. Стиль: коротко, чисто, красиво, без канцелярита.\n"
-            f"7. Итог максимум {max_chars - 120} символов.\n"
-            "Верни только готовый HTML без пояснений.\n\n"
-            f"Категория: {category}\n\n"
-            f"{body}"
-        )
-        response = invoke_with_fallback(
-            [
-                SystemMessage(content="Ты редактор русскоязычных Telegram-дайджестов."),
-                HumanMessage(content=prompt),
-            ],
-            tier=ModelTier.LITE,
-        )
-        content = response.content if isinstance(response.content, str) else str(response.content)
-        return _clean_digest_markup(content) if content and len(content) > 20 else body
+        def invoke_polish(prompt: str) -> str:
+            response = invoke_with_fallback(
+                [
+                    SystemMessage(content="Ты редактор русскоязычных Telegram-дайджестов."),
+                    HumanMessage(content=prompt),
+                ],
+                tier=ModelTier.LITE,
+            )
+            return response.content if isinstance(response.content, str) else str(response.content)
+
+        content = _clean_digest_markup(invoke_polish(_polish_prompt(category, body, max_chars=max_chars)))
+        if content and _needs_strict_russian_rewrite(content):
+            strict_content = _clean_digest_markup(
+                invoke_polish(_polish_prompt(category, content, max_chars=max_chars, strict=True))
+            )
+            if strict_content and len(strict_content) > 20:
+                content = strict_content
+        return content if content and len(content) > 20 else body
     except Exception:
         return body
+
+
+def _polish_prompt(category: str, body: str, *, max_chars: int, strict: bool = False) -> str:
+    strict_rule = (
+        "\n8. СТРОГО: переведи оставшиеся английские роли и общие слова "
+        "(Product Manager → менеджер продукта, Software Engineer → инженер ПО, "
+        "remote work → удалённая работа, workflow → процесс). "
+        "В оригинале можно оставить только бренды, названия продуктов/моделей, URL, usernames и короткие аббревиатуры."
+        if strict
+        else ""
+    )
+    return (
+        "Отредактируй Telegram HTML-дайджест для русского пользователя.\n"
+        "Задачи:\n"
+        "1. Переведи ВЕСЬ английский текст на русский, включая заголовки, названия вакансий и описания.\n"
+        "2. Не переводи только бренды, названия продуктов/моделей, URL, usernames и короткие аббревиатуры.\n"
+        "3. Убери markdown-мусор: **, ###, backticks, markdown-ссылки.\n"
+        "4. Сохрани факты, числа и смысл; ничего не добавляй.\n"
+        "5. Сохрани все <a href=\"...\"> ссылки и URL.\n"
+        "6. Используй только Telegram HTML-теги: <b>, <i>, <a>.\n"
+        "7. Стиль: коротко, чисто, красиво, без канцелярита."
+        f"{strict_rule}\n"
+        f"Итог максимум {max_chars - 120} символов.\n"
+        "Верни только готовый HTML без пояснений.\n\n"
+        f"Категория: {category}\n\n"
+        f"{body}"
+    )
 
 
 def _needs_russian_polish(text: str) -> bool:
     latin_words = re.findall(r"\b[A-Za-z][A-Za-z]{3,}\b", text)
     markdown_noise = any(marker in text for marker in ("**", "```", "]("))
     return markdown_noise or len(latin_words) >= 3
+
+
+def _needs_strict_russian_rewrite(text: str) -> bool:
+    semantic_text = _strip_urls_and_tags(text).lower()
+    if any(term in semantic_text for term in RESIDUAL_ENGLISH_TERMS):
+        return True
+    return len(_semantic_latin_words(semantic_text)) >= 12
+
+
+def _semantic_latin_words(text: str) -> list[str]:
+    words = re.findall(r"\b[A-Za-z][A-Za-z]{3,}\b", _strip_urls_and_tags(text))
+    return [word for word in words if word.lower() not in ALLOWED_LATIN_WORDS]
+
+
+def _strip_urls_and_tags(text: str) -> str:
+    stripped = re.sub(r"https?://\S+", " ", text)
+    stripped = re.sub(r"<[^>]+>", " ", stripped)
+    return stripped
 
 
 def _truncate_html(text: str, *, max_chars: int) -> str:
