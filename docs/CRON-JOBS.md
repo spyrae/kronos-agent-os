@@ -9,6 +9,7 @@ All 11 cron jobs are registered in `kronos/cron/setup.py` and run by the built-i
 | 1 | heartbeat | Every 30 min | Periodic | `heartbeat.py` |
 | 2 | news-monitor | Daily 00:30 UTC (08:30 UTC+8) | Daily | `news_monitor.py` |
 | 3 | group-digest | Daily 01:00 UTC (09:00 UTC+8) | Daily | `group_digest.py` |
+| 4 | signal-jobs | Daily 02:00 UTC (10:00 UTC+8) | Daily | `signal_jobs.py` |
 | 4 | email-expenses | Daily 00:00 UTC (08:00 UTC+8) | Daily | `email_expenses.py` |
 | 5 | sleep-compute | Daily 03:00 UTC (11:00 UTC+8) | Daily | `sleep_compute.py` |
 | 6 | self-improve | Daily 22:00 UTC (06:00 UTC+8) | Daily | `self_improve.py` |
@@ -200,7 +201,7 @@ topics can be configured independently:
 | `TOPIC_DIGEST_NEWS` | `Digest: News` | `TELEGRAM_DIGEST_NEWS_AGENT=kronos` | `news-monitor`, `group-digest` |
 | `TOPIC_JB_COMPETITORS` | `JB: Competitors Status` | `TELEGRAM_JB_COMPETITORS_AGENT=nexus` | `competitor-weekly` |
 | `TOPIC_JB_SYSTEM` | `JB: System Status` | `TELEGRAM_JB_SYSTEM_AGENT=nexus` | analytics pulse/weekly/alerts, SEO/GEO |
-| `TOPIC_DIGEST_JOBS` | `Digest: Jobs` | `TELEGRAM_DIGEST_JOBS_AGENT=kronos` | reserved for signal pipeline |
+| `TOPIC_DIGEST_JOBS` | `Digest: Jobs` | `TELEGRAM_DIGEST_JOBS_AGENT=kronos` | `signal-jobs` |
 | `TOPIC_DIGEST_IDEAS` | `Digest: Product/Business Ideas` | `TELEGRAM_DIGEST_IDEAS_AGENT=kronos` | reserved for signal pipeline |
 | `TOPIC_JB_TRAVEL_INSIGHTS` | `JB: Travel Insights` | `TELEGRAM_JB_TRAVEL_INSIGHTS_AGENT=kronos` | reserved for signal pipeline |
 

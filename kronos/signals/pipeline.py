@@ -10,6 +10,7 @@ from typing import Any
 from kronos.signals.digest import RenderedDigest, render_digest, save_rendered_digest
 from kronos.signals.fetchers import FetchOptions, FetchResult, fetch_sources
 from kronos.signals.fetchers.runner import Fetcher
+from kronos.signals.jobs import is_job_signal, job_signal_score
 from kronos.signals.models import SignalCluster, SignalItem
 from kronos.signals.routing import topic_id_for_category
 from kronos.signals.scoring import assess_evidence, score_item
@@ -89,7 +90,11 @@ def _save_scored_items(
     for result in results:
         source = sources_by_id.get(result.source.id)
         for item in result.items:
+            if "jobs" in item.categories and not is_job_signal(item):
+                continue
             item_score = item.importance_score or score_item(item, source)
+            if "jobs" in item.categories:
+                item_score = max(item_score, job_signal_score(item))
             scored = replace(
                 item,
                 importance_score=item_score,

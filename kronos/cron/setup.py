@@ -36,6 +36,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.news_monitor import run_news_monitor
     from kronos.cron.people_scout import run_people_scout
     from kronos.cron.self_improve import run_self_improve
+    from kronos.cron.signal_jobs import run_jobs_digest
     from kronos.cron.skill_improve import run_skill_improve
     from kronos.cron.sleep_compute import run_sleep_compute
     from kronos.cron.swarm_retention import run_swarm_retention
@@ -51,6 +52,9 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
 
     # Group Digest — daily at 01:00 UTC (09:00 UTC+8)
     scheduler.add_daily("group-digest", run_group_digest, hour_utc=1)
+
+    # Jobs Digest — daily at 02:00 UTC (dedicated Signal Intelligence topic)
+    scheduler.add_daily("signal-jobs", run_jobs_digest, hour_utc=2)
 
     # Self-Improve — daily at 22:00 UTC (was: kronos-self-improve.timer)
     scheduler.add_daily("self-improve", run_self_improve, hour_utc=22)
@@ -102,5 +106,5 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
         nexus_jobs_registered = 5
 
-    total = 12 + nexus_jobs_registered
+    total = 13 + nexus_jobs_registered
     log.info("%d cron jobs registered for agent '%s'", total, me)
