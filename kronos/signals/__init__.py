@@ -9,6 +9,7 @@ from kronos.signals.routing import DigestRoute, route_for_category
 from kronos.signals.scoring import EvidenceAssessment, EvidenceLevel, assess_evidence, sanitize_trend_language
 from kronos.signals.sources import SignalSource, SignalSourceConfigError, SourceRegistry, load_sources
 from kronos.signals.store import SignalStore
+from kronos.signals.travel import is_travel_insight, travel_insight_score
 
 __all__ = [
     "DeduplicationResult",
@@ -29,10 +30,12 @@ __all__ = [
     "deduplicate_items",
     "idea_signal_score",
     "is_idea_signal",
+    "is_travel_insight",
     "load_sources",
     "render_digest",
     "route_for_category",
     "run_signal_digest",
     "sanitize_trend_language",
     "save_rendered_digest",
+    "travel_insight_score",
 ]

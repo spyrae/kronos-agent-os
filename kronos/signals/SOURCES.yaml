@@ -382,6 +382,46 @@ sources:
     enabled: true
     description: Travel planning pains and feature opportunities
 
+  - id: search_travel_app_pain_points
+    platform: search
+    query: '"travel app" pain points itinerary planning reddit'
+    categories: [travel_insights]
+    tier: candidate
+    trust: community_high
+    language: en
+    enabled: true
+    description: Travel app pain points from community discussions
+
+  - id: search_itinerary_app_reddit
+    platform: search
+    query: '"itinerary app" reddit "I wish" "trip planner"'
+    categories: [travel_insights]
+    tier: candidate
+    trust: community_high
+    language: en
+    enabled: true
+    description: Itinerary app feature requests and planning gaps
+
+  - id: search_google_maps_itinerary_problem
+    platform: search
+    query: '"Google Maps" itinerary problem travel planning'
+    categories: [travel_insights]
+    tier: candidate
+    trust: community_high
+    language: en
+    enabled: true
+    description: Google Maps and itinerary workflow friction
+
+  - id: search_travel_planning_ai
+    platform: search
+    query: '"travel planning" "AI" "I wish" itinerary'
+    categories: [travel_insights]
+    tier: candidate
+    trust: community_high
+    language: en
+    enabled: true
+    description: AI travel planning expectations and unmet needs
+
   - id: reddit_travel
     platform: reddit
     handle: r/travel
@@ -393,6 +433,78 @@ sources:
     description: Traveler pain points, planning questions, and destination trends
     filters:
       min_score: 100
+
+  - id: reddit_solotravel
+    platform: reddit
+    handle: r/solotravel
+    categories: [travel_insights]
+    tier: candidate
+    trust: community_high
+    language: en
+    enabled: true
+    description: Solo traveler planning, safety, logistics, and itinerary pains
+    filters:
+      min_score: 30
+
+  - id: reddit_onebag
+    platform: reddit
+    handle: r/onebag
+    categories: [travel_insights]
+    tier: candidate
+    trust: community_high
+    language: en
+    enabled: true
+    description: Packing, luggage, offline/accessibility and lightweight travel workflows
+    filters:
+      min_score: 30
+
+  - id: reddit_digitalnomad
+    platform: reddit
+    handle: r/digitalnomad
+    categories: [travel_insights]
+    tier: candidate
+    trust: community_high
+    language: en
+    enabled: true
+    description: Long-stay, remote-work, visa, budget and destination decision pains
+    filters:
+      min_score: 30
+
+  - id: reddit_travelhacks
+    platform: reddit
+    handle: r/TravelHacks
+    categories: [travel_insights]
+    tier: candidate
+    trust: community_high
+    language: en
+    enabled: true
+    description: Travel planning hacks, booking workflows and friction points
+    filters:
+      min_score: 30
+
+  - id: reddit_flights
+    platform: reddit
+    handle: r/Flights
+    categories: [travel_insights]
+    tier: candidate
+    trust: community_high
+    language: en
+    enabled: true
+    description: Flight disruption, booking import, route and fare-planning pains
+    filters:
+      min_score: 30
+
+  - id: reddit_awardtravel
+    platform: reddit
+    handle: r/awardtravel
+    categories: [travel_insights]
+    tier: candidate
+    trust: community_high
+    language: en
+    enabled: true
+    description: Reward travel planning, availability, routing and points optimization pains
+    filters:
+      min_score: 30
 
   # -------------------------------------------------------------------------
   # JourneyBay competitors — represented from kronos/competitors/competitors.yaml

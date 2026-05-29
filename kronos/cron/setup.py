@@ -38,6 +38,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.self_improve import run_self_improve
     from kronos.cron.signal_ideas import run_ideas_digest
     from kronos.cron.signal_jobs import run_jobs_digest
+    from kronos.cron.signal_travel import run_travel_insights_digest
     from kronos.cron.skill_improve import run_skill_improve
     from kronos.cron.sleep_compute import run_sleep_compute
     from kronos.cron.swarm_retention import run_swarm_retention
@@ -59,6 +60,9 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
 
     # Product/Business Ideas — daily at 04:00 UTC (dedicated topic)
     scheduler.add_daily("signal-ideas", run_ideas_digest, hour_utc=4)
+
+    # JourneyBay Travel Insights — daily at 05:00 UTC (dedicated topic)
+    scheduler.add_daily("signal-travel-insights", run_travel_insights_digest, hour_utc=5)
 
     # Self-Improve — daily at 22:00 UTC (was: kronos-self-improve.timer)
     scheduler.add_daily("self-improve", run_self_improve, hour_utc=22)
@@ -110,5 +114,5 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
         nexus_jobs_registered = 5
 
-    total = 14 + nexus_jobs_registered
+    total = 15 + nexus_jobs_registered
     log.info("%d cron jobs registered for agent '%s'", total, me)

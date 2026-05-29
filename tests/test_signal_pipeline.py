@@ -49,6 +49,12 @@ sources:
     categories: [news, jobs, ideas]
     tier: core
     trust: expert
+  - id: reddit_travel
+    platform: reddit
+    handle: r/travel
+    categories: [travel_insights]
+    tier: candidate
+    trust: community_high
 """,
         encoding="utf-8",
     )
@@ -185,3 +191,43 @@ async def test_run_signal_digest_filters_non_idea_items_for_ideas(tmp_path, sign
 
     assert ideas_run.saved_item_count == 2
     assert "Product angle:" in ideas_run.rendered.body
+
+
+@pytest.mark.asyncio
+async def test_run_signal_digest_filters_travel_noise(tmp_path, signal_store):
+    sources_path = _write_sources(tmp_path)
+
+    async def fake_fetcher(source, options):
+        return FetchResult(
+            source=source,
+            items=(
+                SignalItem(
+                    source_id=source.id,
+                    source_platform=source.platform,
+                    source_item_key=f"{source.id}-noise",
+                    title="Top 10 destinations with best beaches",
+                    text="Photo dump from my trip report.",
+                    categories=source.categories,
+                ),
+                SignalItem(
+                    source_id=source.id,
+                    source_platform=source.platform,
+                    source_item_key=f"{source.id}-insight",
+                    title="Itinerary sharing is confusing for group travel",
+                    text="I wish trip planner apps supported collaboration and offline maps.",
+                    categories=source.categories,
+                ),
+            ),
+        )
+
+    travel_run = await run_signal_digest(
+        "travel_insights",
+        sources_path=sources_path,
+        dry_run=True,
+        send=False,
+        store=signal_store,
+        fetchers={"reddit": fake_fetcher},
+    )
+
+    assert travel_run.saved_item_count == 1
+    assert "JourneyBay implication:" in travel_run.rendered.body

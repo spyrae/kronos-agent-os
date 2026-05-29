@@ -11,15 +11,16 @@ All core cron jobs are registered in `kronos/cron/setup.py` and run by the built
 | 3 | group-digest | Daily 01:00 UTC (09:00 UTC+8) | Daily | `group_digest.py` |
 | 4 | signal-jobs | Daily 02:00 UTC (10:00 UTC+8) | Daily | `signal_jobs.py` |
 | 5 | signal-ideas | Daily 04:00 UTC (12:00 UTC+8) | Daily | `signal_ideas.py` |
-| 6 | email-expenses | Daily 00:00 UTC (08:00 UTC+8) | Daily | `email_expenses.py` |
-| 7 | sleep-compute | Daily 03:00 UTC (11:00 UTC+8) | Daily | `sleep_compute.py` |
-| 8 | self-improve | Daily 22:00 UTC (06:00 UTC+8) | Daily | `self_improve.py` |
-| 9 | expense-digest | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `expense_digest.py` |
-| 10 | people-scout | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `people_scout.py` |
-| 11 | skill-improve | Weekly Sun 20:00 UTC (04:00 UTC+8) | Weekly | `skill_improve.py` |
-| 12 | user-model | Weekly Wed 20:00 UTC (04:00 UTC+8) | Weekly | `user_model.py` |
-| 13 | market-review | Weekly Fri 10:00 UTC (18:00 UTC+8) | Weekly | `market_review.py` |
-| 14 | swarm-retention | Weekly Sun 03:00 UTC (11:00 UTC+8) | Weekly | `swarm_retention.py` |
+| 6 | signal-travel-insights | Daily 05:00 UTC (13:00 UTC+8) | Daily | `signal_travel.py` |
+| 7 | email-expenses | Daily 00:00 UTC (08:00 UTC+8) | Daily | `email_expenses.py` |
+| 8 | sleep-compute | Daily 03:00 UTC (11:00 UTC+8) | Daily | `sleep_compute.py` |
+| 9 | self-improve | Daily 22:00 UTC (06:00 UTC+8) | Daily | `self_improve.py` |
+| 10 | expense-digest | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `expense_digest.py` |
+| 11 | people-scout | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `people_scout.py` |
+| 12 | skill-improve | Weekly Sun 20:00 UTC (04:00 UTC+8) | Weekly | `skill_improve.py` |
+| 13 | user-model | Weekly Wed 20:00 UTC (04:00 UTC+8) | Weekly | `user_model.py` |
+| 14 | market-review | Weekly Fri 10:00 UTC (18:00 UTC+8) | Weekly | `market_review.py` |
+| 15 | swarm-retention | Weekly Sun 03:00 UTC (11:00 UTC+8) | Weekly | `swarm_retention.py` |
 
 ## Job Details
 
@@ -87,7 +88,20 @@ Product/business ideas digest:
 
 **Notification:** Bot API → Telegram `Digest: Product/Business Ideas` topic
 
-### 6. email-expenses
+### 6. signal-travel-insights
+**Schedule:** Daily 05:00 UTC
+**Module:** `kronos/cron/signal_travel.py`
+
+JourneyBay travel insights digest:
+1. Load `travel_insights` sources from the Signal Intelligence registry.
+2. Fetch travel Reddit/search, competitor changes, and owned review/status sources when adapters are available.
+3. Filter generic travel news/destination content and keep pain/feature/workflow signals.
+4. Render evidence-ranked insights with problem/pain, JourneyBay implication, caveat, and trend guardrails.
+5. Send to Telegram via Bot API (`TOPIC_JB_TRAVEL_INSIGHTS`, fallback `TOPIC_DIGEST`).
+
+**Notification:** Bot API → Telegram `JB: Travel Insights` topic
+
+### 7. email-expenses
 **Schedule:** Daily 00:00 UTC
 **Module:** `kronos/cron/email_expenses.py`
 
@@ -100,7 +114,7 @@ Auto-extract expenses from Gmail receipts:
 **Status:** Partially implemented — Gmail search requires MCP integration, currently a stub
 **Notification:** Webhook → Telegram DM
 
-### 7. sleep-compute
+### 8. sleep-compute
 **Schedule:** Daily 03:00 UTC (L4 Memory)
 **Module:** `kronos/cron/sleep_compute.py`
 
@@ -114,7 +128,7 @@ Nightly memory consolidation:
 **Dependencies:** FTS5 database, Knowledge Graph database
 **Notification:** Webhook → Telegram DM (entities added, relations, insights)
 
-### 8. self-improve
+### 9. self-improve
 **Schedule:** Daily 22:00 UTC
 **Module:** `kronos/cron/self_improve.py`
 
@@ -128,7 +142,7 @@ Daily agent self-improvement:
 **Dependencies:** audit.jsonl
 **Notification:** Webhook → Telegram DM
 
-### 9. expense-digest
+### 10. expense-digest
 **Schedule:** Weekly Sunday 02:00 UTC
 **Module:** `kronos/cron/expense_digest.py`
 
@@ -140,7 +154,7 @@ Weekly expense report:
 **Dependencies:** NOTION_API_KEY, user-configured expenses database
 **Notification:** Bot API → Telegram Finance topic
 
-### 10. people-scout
+### 11. people-scout
 **Schedule:** Weekly Sunday 02:00 UTC
 **Module:** `kronos/cron/people_scout.py`
 
@@ -154,7 +168,7 @@ LinkedIn profile discovery:
 **Dependencies:** CRITERIA.md, SEEN.md
 **Notification:** Bot API → Telegram Scout topic
 
-### 11. skill-improve
+### 12. skill-improve
 **Schedule:** Weekly Sunday 20:00 UTC
 **Module:** `kronos/cron/skill_improve.py`
 
@@ -168,7 +182,7 @@ Auto-improvement of skill files:
 **Dependencies:** audit.jsonl, skill SKILL.md files
 **Notification:** Webhook → Telegram DM
 
-### 12. user-model
+### 13. user-model
 **Schedule:** Weekly Wednesday 20:00 UTC
 **Module:** `kronos/cron/user_model.py`
 
@@ -184,7 +198,7 @@ Dialectical user modeling:
 **Dependencies:** audit.jsonl, session search index, USER-MODEL.md (previous model)
 **Notification:** Webhook → Telegram DM
 
-### 13. market-review
+### 14. market-review
 **Schedule:** Weekly Friday 10:00 UTC
 **Module:** `kronos/cron/market_review.py`
 
@@ -197,7 +211,7 @@ Weekly investment market review:
 **Dependencies:** BRAVE_API_KEY, WATCHLIST.md
 **Notification:** Bot API → Telegram Finance topic
 
-### 14. swarm-retention
+### 15. swarm-retention
 **Schedule:** Weekly Sunday 03:00 UTC
 **Module:** `kronos/cron/swarm_retention.py`
 
@@ -242,7 +256,7 @@ topics can be configured independently:
 | `TOPIC_JB_SYSTEM` | `JB: System Status` | `TELEGRAM_JB_SYSTEM_AGENT=nexus` | analytics pulse/weekly/alerts, SEO/GEO |
 | `TOPIC_DIGEST_JOBS` | `Digest: Jobs` | `TELEGRAM_DIGEST_JOBS_AGENT=kronos` | `signal-jobs` |
 | `TOPIC_DIGEST_IDEAS` | `Digest: Product/Business Ideas` | `TELEGRAM_DIGEST_IDEAS_AGENT=kronos` | `signal-ideas` |
-| `TOPIC_JB_TRAVEL_INSIGHTS` | `JB: Travel Insights` | `TELEGRAM_JB_TRAVEL_INSIGHTS_AGENT=kronos` | reserved for signal pipeline |
+| `TOPIC_JB_TRAVEL_INSIGHTS` | `JB: Travel Insights` | `TELEGRAM_JB_TRAVEL_INSIGHTS_AGENT=kronos` | `signal-travel-insights` |
 
 Finance reports continue to use `TOPIC_FINANCE`.
 

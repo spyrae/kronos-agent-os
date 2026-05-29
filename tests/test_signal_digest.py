@@ -141,6 +141,38 @@ def test_render_ideas_digest_uses_product_format_and_limits_to_ten():
     assert "validated demand" in rendered.body
 
 
+def test_render_travel_digest_uses_journeybay_format_and_guardrails():
+    clusters = [
+        {
+            "id": 1,
+            "category": "travel_insights",
+            "title": "Group itinerary sharing is confusing",
+            "summary": "Travelers wish trip planning apps made collaboration and offline maps easier.",
+            "item_ids": [1],
+            "importance_score": 90,
+        }
+    ]
+    items_by_cluster = {
+        1: [
+            SignalItem(
+                source_id="reddit_travel",
+                source_platform="reddit",
+                title="Group itinerary sharing is confusing",
+                text="I wish trip planning apps made collaboration and offline maps easier.",
+                categories=("travel_insights",),
+            )
+        ]
+    }
+
+    rendered = render_digest("travel_insights", clusters, items_by_cluster)
+
+    assert rendered.route.destination == "JB: Travel Insights"
+    assert "<b>Insight:</b>" in rendered.body
+    assert "<b>JourneyBay implication:</b>" in rendered.body
+    assert "shared itinerary/collaboration" in rendered.body
+    assert "do not describe as a travel market trend yet" in rendered.body
+
+
 def test_save_rendered_digest_persists_dry_run(tmp_path, monkeypatch):
     db_dir = tmp_path / "agent"
     db_dir.mkdir()

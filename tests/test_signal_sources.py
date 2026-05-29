@@ -161,7 +161,10 @@ def test_template_registry_is_valid_and_contains_new_telegram_sources():
     assert registry.get("telegram_nobilix_chat") is not None
     assert registry.get("telegram_ai_chat_cutcode") is not None
     assert registry.get("telegram_hiaimediaen") is not None
+    assert registry.get("reddit_solotravel") is not None
+    assert registry.get("search_itinerary_app_reddit") is not None
     assert "jobs" in registry.get("telegram_ai_chat_cutcode").categories
+    assert "travel_insights" in registry.get("reddit_solotravel").categories
     assert [source.id for source in registry.quarantined()] == ["reddit_ai_dankmemes"]
 
 

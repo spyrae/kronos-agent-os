@@ -17,6 +17,7 @@ from kronos.signals.routing import topic_id_for_category
 from kronos.signals.scoring import assess_evidence, score_item
 from kronos.signals.sources import SignalSource, load_sources
 from kronos.signals.store import SignalStore
+from kronos.signals.travel import is_travel_insight, travel_insight_score
 
 
 @dataclass(frozen=True)
@@ -97,11 +98,15 @@ def _save_scored_items(
                 continue
             if category == "ideas" and not is_idea_signal(item):
                 continue
+            if category == "travel_insights" and not is_travel_insight(item):
+                continue
             item_score = item.importance_score or score_item(item, source)
             if category == "jobs":
                 item_score = max(item_score, job_signal_score(item))
             if category == "ideas":
                 item_score = max(item_score, idea_signal_score(item))
+            if category == "travel_insights":
+                item_score = max(item_score, travel_insight_score(item))
             scored = replace(
                 item,
                 importance_score=item_score,

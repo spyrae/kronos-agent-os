@@ -13,9 +13,11 @@ from kronos.signals.routing import DigestRoute, route_for_category
 from kronos.signals.scoring import EvidenceLevel, assess_evidence, sanitize_trend_language
 from kronos.signals.sources import SignalSource
 from kronos.signals.store import SignalStore
+from kronos.signals.travel import journeybay_implication_for_items, travel_caveat_for_items
 
 TELEGRAM_SAFE_MAX_CHARS = 3900
 MAX_IDEA_CLUSTERS = 10
+MAX_TRAVEL_CLUSTERS = 10
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,8 @@ def render_digest(
     selected_clusters = _rank_clusters(selected_clusters, items_by_cluster, source_map, category=route.category)
     if route.category == "ideas":
         selected_clusters = selected_clusters[:MAX_IDEA_CLUSTERS]
+    if route.category == "travel_insights":
+        selected_clusters = selected_clusters[:MAX_TRAVEL_CLUSTERS]
     title = f"{route.destination} — Signal Intelligence"
 
     lines = [f"<b>{escape(title)}</b>", ""]
@@ -132,13 +136,17 @@ def _rank_clusters(
             EvidenceLevel.ANECDOTE: 1,
         }[assessment.level]
         cluster_score = _float(cluster.get("importance_score")) or _float(cluster.get("confidence_score"))
-        idea_bonus = _idea_applicability_score(items) if category == "ideas" else 0.0
+        category_bonus = 0.0
+        if category == "ideas":
+            category_bonus = _idea_applicability_score(items)
+        elif category == "travel_insights":
+            category_bonus = _travel_applicability_score(items)
         return (
             float(level_rank),
             float(assessment.independent_source_count),
             float(assessment.platform_count),
             float(assessment.score),
-            idea_bonus,
+            category_bonus,
             cluster_score,
         )
 
@@ -154,6 +162,8 @@ def _render_cluster(
 ) -> str:
     if category == "ideas":
         return _render_idea_cluster(cluster, items, assessment)
+    if category == "travel_insights":
+        return _render_travel_cluster(cluster, items, assessment)
 
     title = str(cluster.get("title") or "Untitled signal")
     summary = str(cluster.get("summary") or "")
@@ -207,6 +217,34 @@ def _render_idea_cluster(cluster: Mapping[str, Any], items: Sequence[SignalItem]
     return "\n".join(parts)
 
 
+def _render_travel_cluster(cluster: Mapping[str, Any], items: Sequence[SignalItem], assessment) -> str:
+    title = sanitize_trend_language(str(cluster.get("title") or "Untitled travel insight"), assessment)
+    summary = sanitize_trend_language(str(cluster.get("summary") or ""), assessment)
+    evidence = (
+        f"{assessment.independent_source_count} sources / "
+        f"{assessment.platform_count} platforms · {assessment.level.value}"
+    )
+    first_url = next((item.url for item in items if item.url), "")
+    link = f' (<a href="{escape(first_url, quote=True)}">source</a>)' if first_url else ""
+    caveat = travel_caveat_for_items(items, can_make_trend_claim=assessment.can_make_trend_claim)
+
+    parts = [
+        f"• <b>Insight:</b> {escape(title)}{link}",
+        f"  <i>Evidence: {escape(evidence)}</i>",
+    ]
+    if summary:
+        parts.append(f"  <b>Problem/pain:</b> {escape(summary)}")
+    parts.extend(
+        [
+            f"  <b>JourneyBay implication:</b> {escape(journeybay_implication_for_items(items))}",
+            f"  <b>Caveat:</b> {escape(caveat)}",
+        ]
+    )
+    if not assessment.can_make_trend_claim:
+        parts.append("  <i>Guardrail: do not describe as a travel market trend yet.</i>")
+    return "\n".join(parts)
+
+
 def _cluster_category(cluster: Mapping[str, Any]) -> str:
     return str(cluster.get("category") or "").strip().lower()
 
@@ -220,6 +258,18 @@ def _idea_applicability_score(items: Sequence[SignalItem]) -> float:
     for phrase in ("travel", "itinerary", "developer", "coding", "workflow", "automation"):
         if phrase in text:
             score += 5
+    return score
+
+
+def _travel_applicability_score(items: Sequence[SignalItem]) -> float:
+    text = " ".join(f"{item.title} {item.text} {item.normalized_text}".lower() for item in items)
+    score = 0.0
+    for phrase in ("itinerary", "trip planner", "booking", "reservation", "maps", "offline", "visa", "budget"):
+        if phrase in text:
+            score += 8
+    for phrase in ("problem", "pain", "wish", "hard to", "can't share", "manual", "confusing"):
+        if phrase in text:
+            score += 10
     return score
 
 
