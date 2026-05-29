@@ -269,7 +269,7 @@ async def test_app_store_fetcher_normalizes_metrics_and_reviews():
 async def test_play_store_fetcher_treats_missing_optional_config_as_empty():
     result = await fetch_play_store_source(
         _source("play_store", id="jb_google_play_reviews", categories=("jb_system", "travel_insights")),
-        collector=lambda: {"error": "Package name cannot be empty"},
+        collector=lambda: {"error": "App not found(404)."},
     )
 
     assert result.ok is True

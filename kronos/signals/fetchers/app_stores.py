@@ -142,6 +142,7 @@ def _is_optional_android_config_gap(error: str) -> bool:
         "package name" in lowered
         or "android_package" in lowered
         or "google-play-scraper not installed" in lowered
+        or "app not found" in lowered
     )
 
 
