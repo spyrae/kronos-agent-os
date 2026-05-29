@@ -10,6 +10,7 @@ from typing import Any
 from kronos.signals.digest import RenderedDigest, render_digest, save_rendered_digest
 from kronos.signals.fetchers import FetchOptions, FetchResult, fetch_sources
 from kronos.signals.fetchers.runner import Fetcher
+from kronos.signals.ideas import idea_signal_score, is_idea_signal
 from kronos.signals.jobs import is_job_signal, job_signal_score
 from kronos.signals.models import SignalCluster, SignalItem
 from kronos.signals.routing import topic_id_for_category
@@ -59,7 +60,7 @@ async def run_signal_digest(
         fetchers=fetchers,
     )
     sources_by_id = {source.id: source for source in sources}
-    saved_records = _save_scored_items(signal_store, fetch_results, sources_by_id)
+    saved_records = _save_scored_items(signal_store, fetch_results, sources_by_id, category=category)
     clusters, items_by_cluster = _create_clusters(signal_store, category, saved_records, sources_by_id)
     rendered = render_digest(category, clusters, items_by_cluster, sources_by_id=sources_by_id)
     digest_id = save_rendered_digest(signal_store, rendered, dry_run=dry_run)
@@ -85,16 +86,22 @@ def _save_scored_items(
     store: SignalStore,
     results: list[FetchResult],
     sources_by_id: dict[str, SignalSource],
+    *,
+    category: str,
 ) -> list[tuple[int, SignalItem]]:
     records: list[tuple[int, SignalItem]] = []
     for result in results:
         source = sources_by_id.get(result.source.id)
         for item in result.items:
-            if "jobs" in item.categories and not is_job_signal(item):
+            if category == "jobs" and not is_job_signal(item):
+                continue
+            if category == "ideas" and not is_idea_signal(item):
                 continue
             item_score = item.importance_score or score_item(item, source)
-            if "jobs" in item.categories:
+            if category == "jobs":
                 item_score = max(item_score, job_signal_score(item))
+            if category == "ideas":
+                item_score = max(item_score, idea_signal_score(item))
             scored = replace(
                 item,
                 importance_score=item_score,

@@ -36,6 +36,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.news_monitor import run_news_monitor
     from kronos.cron.people_scout import run_people_scout
     from kronos.cron.self_improve import run_self_improve
+    from kronos.cron.signal_ideas import run_ideas_digest
     from kronos.cron.signal_jobs import run_jobs_digest
     from kronos.cron.skill_improve import run_skill_improve
     from kronos.cron.sleep_compute import run_sleep_compute
@@ -47,7 +48,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # Heartbeat — every 30 minutes (was: kronos-heartbeat.timer)
     scheduler.add_periodic("heartbeat", run_heartbeat, interval_seconds=1800)
 
-    # News Monitor — daily at 00:30 UTC (was: kronos-news-monitor.timer)
+    # News Monitor — daily at 00:00 UTC (was: kronos-news-monitor.timer)
     scheduler.add_daily("news-monitor", run_news_monitor, hour_utc=0)
 
     # Group Digest — daily at 01:00 UTC (09:00 UTC+8)
@@ -55,6 +56,9 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
 
     # Jobs Digest — daily at 02:00 UTC (dedicated Signal Intelligence topic)
     scheduler.add_daily("signal-jobs", run_jobs_digest, hour_utc=2)
+
+    # Product/Business Ideas — daily at 04:00 UTC (dedicated topic)
+    scheduler.add_daily("signal-ideas", run_ideas_digest, hour_utc=4)
 
     # Self-Improve — daily at 22:00 UTC (was: kronos-self-improve.timer)
     scheduler.add_daily("self-improve", run_self_improve, hour_utc=22)
@@ -106,5 +110,5 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
         nexus_jobs_registered = 5
 
-    total = 13 + nexus_jobs_registered
+    total = 14 + nexus_jobs_registered
     log.info("%d cron jobs registered for agent '%s'", total, me)

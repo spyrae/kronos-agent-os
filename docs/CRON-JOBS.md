@@ -1,23 +1,25 @@
 # Kronos Agent OS (KAOS) — Cron Jobs
 
-All 11 cron jobs are registered in `kronos/cron/setup.py` and run by the built-in async scheduler (`kronos/cron/scheduler.py`). No external dependencies (no APScheduler). Runs inside the main event loop alongside bridges and dashboard.
+All core cron jobs are registered in `kronos/cron/setup.py` and run by the built-in async scheduler (`kronos/cron/scheduler.py`). No external dependencies (no APScheduler). Runs inside the main event loop alongside bridges and dashboard.
 
 ## Schedule Overview
 
 | # | Name | Schedule | Type | Module |
 |---|------|----------|------|--------|
 | 1 | heartbeat | Every 30 min | Periodic | `heartbeat.py` |
-| 2 | news-monitor | Daily 00:30 UTC (08:30 UTC+8) | Daily | `news_monitor.py` |
+| 2 | news-monitor | Daily 00:00 UTC (08:00 UTC+8) | Daily | `news_monitor.py` |
 | 3 | group-digest | Daily 01:00 UTC (09:00 UTC+8) | Daily | `group_digest.py` |
 | 4 | signal-jobs | Daily 02:00 UTC (10:00 UTC+8) | Daily | `signal_jobs.py` |
-| 4 | email-expenses | Daily 00:00 UTC (08:00 UTC+8) | Daily | `email_expenses.py` |
-| 5 | sleep-compute | Daily 03:00 UTC (11:00 UTC+8) | Daily | `sleep_compute.py` |
-| 6 | self-improve | Daily 22:00 UTC (06:00 UTC+8) | Daily | `self_improve.py` |
-| 7 | expense-digest | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `expense_digest.py` |
-| 8 | people-scout | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `people_scout.py` |
-| 9 | skill-improve | Weekly Sun 20:00 UTC (04:00 UTC+8) | Weekly | `skill_improve.py` |
-| 10 | user-model | Weekly Wed 20:00 UTC (04:00 UTC+8) | Weekly | `user_model.py` |
-| 11 | market-review | Weekly Fri 10:00 UTC (18:00 UTC+8) | Weekly | `market_review.py` |
+| 5 | signal-ideas | Daily 04:00 UTC (12:00 UTC+8) | Daily | `signal_ideas.py` |
+| 6 | email-expenses | Daily 00:00 UTC (08:00 UTC+8) | Daily | `email_expenses.py` |
+| 7 | sleep-compute | Daily 03:00 UTC (11:00 UTC+8) | Daily | `sleep_compute.py` |
+| 8 | self-improve | Daily 22:00 UTC (06:00 UTC+8) | Daily | `self_improve.py` |
+| 9 | expense-digest | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `expense_digest.py` |
+| 10 | people-scout | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `people_scout.py` |
+| 11 | skill-improve | Weekly Sun 20:00 UTC (04:00 UTC+8) | Weekly | `skill_improve.py` |
+| 12 | user-model | Weekly Wed 20:00 UTC (04:00 UTC+8) | Weekly | `user_model.py` |
+| 13 | market-review | Weekly Fri 10:00 UTC (18:00 UTC+8) | Weekly | `market_review.py` |
+| 14 | swarm-retention | Weekly Sun 03:00 UTC (11:00 UTC+8) | Weekly | `swarm_retention.py` |
 
 ## Job Details
 
@@ -31,17 +33,17 @@ Reads `workspace/HEARTBEAT.md` tasks + queries Notion DB for current tasks. Send
 **Notification:** Webhook → Telegram DM
 
 ### 2. news-monitor
-**Schedule:** Daily 00:30 UTC
+**Schedule:** Daily 00:00 UTC
 **Module:** `kronos/cron/news_monitor.py`
 
 Daily news digest pipeline:
-1. Load watchlist from `workspace/skills/news-monitor/references/WATCHLIST.md`
-2. Parse Reddit subreddits and Twitter accounts into search queries
-3. Brave Search for each topic (freshness=past day, up to 10 topics)
-4. LLM synthesis (DeepSeek lite) → structured HTML digest
+1. Load `news` sources from the Signal Intelligence registry.
+2. Fetch X/Reddit/Telegram/search candidates.
+3. Score and cluster items with evidence-aware guardrails.
+4. Render a Telegram HTML digest with confirmed/emerging/anecdotal sections.
 5. Send to Telegram via Bot API (`TOPIC_DIGEST_NEWS`, fallback `TOPIC_DIGEST`)
 
-**Dependencies:** BRAVE_API_KEY, WATCHLIST.md
+**Dependencies:** BRAVE_API_KEY, Telethon session for private Telegram sources
 **Notification:** Bot API → Telegram `Digest: News` topic
 
 ### 3. group-digest
@@ -59,7 +61,33 @@ Daily Telegram group digest:
 **Dependencies:** Telethon client (shared), GROUPS.md
 **Notification:** Bot API → Telegram `Digest: News` topic
 
-### 4. email-expenses
+### 4. signal-jobs
+**Schedule:** Daily 02:00 UTC
+**Module:** `kronos/cron/signal_jobs.py`
+
+Signal Intelligence hiring digest:
+1. Load `jobs` sources from the Signal Intelligence registry.
+2. Fetch Telegram/Reddit/X/search candidates.
+3. Filter generic listicles and keep direct hiring/actionable role signals.
+4. Render evidence-aware clusters.
+5. Send to Telegram via Bot API (`TOPIC_DIGEST_JOBS`, fallback `TOPIC_DIGEST`).
+
+**Notification:** Bot API → Telegram `Digest: Jobs` topic
+
+### 5. signal-ideas
+**Schedule:** Daily 04:00 UTC
+**Module:** `kronos/cron/signal_ideas.py`
+
+Product/business ideas digest:
+1. Load `ideas` sources from the Signal Intelligence registry.
+2. Detect JTBD phrasing, repeated pain points, founder insights, and product-launch opportunities.
+3. Filter promos/listicles/noise.
+4. Render 5–10 evidence-ranked ideas with pain/opportunity, product angle, why-now, confidence caveat, and guardrail language.
+5. Send to Telegram via Bot API (`TOPIC_DIGEST_IDEAS`, fallback `TOPIC_DIGEST`).
+
+**Notification:** Bot API → Telegram `Digest: Product/Business Ideas` topic
+
+### 6. email-expenses
 **Schedule:** Daily 00:00 UTC
 **Module:** `kronos/cron/email_expenses.py`
 
@@ -72,7 +100,7 @@ Auto-extract expenses from Gmail receipts:
 **Status:** Partially implemented — Gmail search requires MCP integration, currently a stub
 **Notification:** Webhook → Telegram DM
 
-### 5. sleep-compute
+### 7. sleep-compute
 **Schedule:** Daily 03:00 UTC (L4 Memory)
 **Module:** `kronos/cron/sleep_compute.py`
 
@@ -86,7 +114,7 @@ Nightly memory consolidation:
 **Dependencies:** FTS5 database, Knowledge Graph database
 **Notification:** Webhook → Telegram DM (entities added, relations, insights)
 
-### 6. self-improve
+### 8. self-improve
 **Schedule:** Daily 22:00 UTC
 **Module:** `kronos/cron/self_improve.py`
 
@@ -100,7 +128,7 @@ Daily agent self-improvement:
 **Dependencies:** audit.jsonl
 **Notification:** Webhook → Telegram DM
 
-### 7. expense-digest
+### 9. expense-digest
 **Schedule:** Weekly Sunday 02:00 UTC
 **Module:** `kronos/cron/expense_digest.py`
 
@@ -112,7 +140,7 @@ Weekly expense report:
 **Dependencies:** NOTION_API_KEY, user-configured expenses database
 **Notification:** Bot API → Telegram Finance topic
 
-### 8. people-scout
+### 10. people-scout
 **Schedule:** Weekly Sunday 02:00 UTC
 **Module:** `kronos/cron/people_scout.py`
 
@@ -126,7 +154,7 @@ LinkedIn profile discovery:
 **Dependencies:** CRITERIA.md, SEEN.md
 **Notification:** Bot API → Telegram Scout topic
 
-### 9. skill-improve
+### 11. skill-improve
 **Schedule:** Weekly Sunday 20:00 UTC
 **Module:** `kronos/cron/skill_improve.py`
 
@@ -140,7 +168,7 @@ Auto-improvement of skill files:
 **Dependencies:** audit.jsonl, skill SKILL.md files
 **Notification:** Webhook → Telegram DM
 
-### 10. user-model
+### 12. user-model
 **Schedule:** Weekly Wednesday 20:00 UTC
 **Module:** `kronos/cron/user_model.py`
 
@@ -156,7 +184,7 @@ Dialectical user modeling:
 **Dependencies:** audit.jsonl, session search index, USER-MODEL.md (previous model)
 **Notification:** Webhook → Telegram DM
 
-### 11. market-review
+### 13. market-review
 **Schedule:** Weekly Friday 10:00 UTC
 **Module:** `kronos/cron/market_review.py`
 
@@ -168,6 +196,17 @@ Weekly investment market review:
 
 **Dependencies:** BRAVE_API_KEY, WATCHLIST.md
 **Notification:** Bot API → Telegram Finance topic
+
+### 14. swarm-retention
+**Schedule:** Weekly Sunday 03:00 UTC
+**Module:** `kronos/cron/swarm_retention.py`
+
+Retention cleanup:
+1. Prune old swarm ledger messages after the configured retention window.
+2. Prune old competitor snapshots/changes beyond retention.
+3. Run safely on all agents; empty per-agent stores are harmless.
+
+**Notification:** Silent unless logs/errors require investigation.
 
 ## Scheduler Implementation
 
@@ -202,7 +241,7 @@ topics can be configured independently:
 | `TOPIC_JB_COMPETITORS` | `JB: Competitors Status` | `TELEGRAM_JB_COMPETITORS_AGENT=nexus` | `competitor-weekly` |
 | `TOPIC_JB_SYSTEM` | `JB: System Status` | `TELEGRAM_JB_SYSTEM_AGENT=nexus` | analytics pulse/weekly/alerts, SEO/GEO |
 | `TOPIC_DIGEST_JOBS` | `Digest: Jobs` | `TELEGRAM_DIGEST_JOBS_AGENT=kronos` | `signal-jobs` |
-| `TOPIC_DIGEST_IDEAS` | `Digest: Product/Business Ideas` | `TELEGRAM_DIGEST_IDEAS_AGENT=kronos` | reserved for signal pipeline |
+| `TOPIC_DIGEST_IDEAS` | `Digest: Product/Business Ideas` | `TELEGRAM_DIGEST_IDEAS_AGENT=kronos` | `signal-ideas` |
 | `TOPIC_JB_TRAVEL_INSIGHTS` | `JB: Travel Insights` | `TELEGRAM_JB_TRAVEL_INSIGHTS_AGENT=kronos` | reserved for signal pipeline |
 
 Finance reports continue to use `TOPIC_FINANCE`.

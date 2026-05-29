@@ -106,6 +106,41 @@ def test_render_digest_is_telegram_chunk_safe():
     assert "truncated for Telegram length" in rendered.body
 
 
+def test_render_ideas_digest_uses_product_format_and_limits_to_ten():
+    clusters = [
+        {
+            "id": index,
+            "category": "ideas",
+            "title": f"Looking for a tool #{index}",
+            "summary": "I wish there was a tool to automate this manual workflow.",
+            "item_ids": [index],
+            "importance_score": 100 - index,
+        }
+        for index in range(1, 13)
+    ]
+    items_by_cluster = {
+        index: [
+            SignalItem(
+                source_id="reddit_ai_agents",
+                source_platform="reddit",
+                title=f"Looking for a tool #{index}",
+                text="I wish there was a tool to automate this manual workflow.",
+                categories=("ideas",),
+            )
+        ]
+        for index in range(1, 13)
+    }
+
+    rendered = render_digest("ideas", clusters, items_by_cluster, max_chars=10000)
+
+    assert rendered.body.count("<b>Opportunity:</b>") == 10
+    assert len(rendered.cluster_ids) == 10
+    assert "<b>Product angle:</b>" in rendered.body
+    assert "<b>Why now:</b>" in rendered.body
+    assert "<b>Caveat:</b>" in rendered.body
+    assert "validated demand" in rendered.body
+
+
 def test_save_rendered_digest_persists_dry_run(tmp_path, monkeypatch):
     db_dir = tmp_path / "agent"
     db_dir.mkdir()

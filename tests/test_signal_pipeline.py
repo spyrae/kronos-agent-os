@@ -43,6 +43,12 @@ sources:
     categories: [ideas]
     tier: core
     trust: expert
+  - id: x_ycombinator
+    platform: x
+    handle: "@ycombinator"
+    categories: [news, jobs, ideas]
+    tier: core
+    trust: expert
 """,
         encoding="utf-8",
     )
@@ -78,8 +84,8 @@ async def test_run_signal_digest_dry_run_persists_news_digest(tmp_path, signal_s
         fetchers={"reddit": fake_fetcher, "x": fake_fetcher},
     )
 
-    assert run.saved_item_count == 2
-    assert run.cluster_count == 2
+    assert run.saved_item_count == 3
+    assert run.cluster_count == 3
     assert run.sent is False
     assert "Digest: News — Signal Intelligence" in run.rendered.body
     assert "Evidence:" in run.rendered.body
@@ -107,4 +113,75 @@ async def test_run_signal_digest_filters_sources_by_category(tmp_path, signal_st
         fetchers={"x": fake_fetcher},
     )
 
-    assert seen == ["x_ideas"]
+    assert seen == ["x_ideas", "x_ycombinator"]
+
+
+@pytest.mark.asyncio
+async def test_run_signal_digest_applies_job_filter_only_to_jobs(tmp_path, signal_store):
+    sources_path = _write_sources(tmp_path)
+
+    async def fake_fetcher(source, options):
+        return FetchResult(
+            source=source,
+            items=(
+                SignalItem(
+                    source_id=source.id,
+                    source_platform=source.platform,
+                    source_item_key=f"{source.id}-news",
+                    title="Startup batch launches new AI tools",
+                    text="Product launches and founder updates, not a hiring post.",
+                    categories=source.categories,
+                ),
+            ),
+        )
+
+    news_run = await run_signal_digest(
+        "news",
+        sources_path=sources_path,
+        dry_run=True,
+        send=False,
+        store=signal_store,
+        fetchers={"x": fake_fetcher, "reddit": fake_fetcher},
+    )
+
+    assert news_run.saved_item_count == 3
+
+
+@pytest.mark.asyncio
+async def test_run_signal_digest_filters_non_idea_items_for_ideas(tmp_path, signal_store):
+    sources_path = _write_sources(tmp_path)
+
+    async def fake_fetcher(source, options):
+        return FetchResult(
+            source=source,
+            items=(
+                SignalItem(
+                    source_id=source.id,
+                    source_platform=source.platform,
+                    source_item_key=f"{source.id}-promo",
+                    title="Top 10 business ideas",
+                    text="Sponsored newsletter roundup with a giveaway.",
+                    categories=source.categories,
+                ),
+                SignalItem(
+                    source_id=source.id,
+                    source_platform=source.platform,
+                    source_item_key=f"{source.id}-idea",
+                    title="Looking for a tool to automate user research",
+                    text="I wish this manual workflow was easier.",
+                    categories=source.categories,
+                ),
+            ),
+        )
+
+    ideas_run = await run_signal_digest(
+        "ideas",
+        sources_path=sources_path,
+        dry_run=True,
+        send=False,
+        store=signal_store,
+        fetchers={"x": fake_fetcher},
+    )
+
+    assert ideas_run.saved_item_count == 2
+    assert "Product angle:" in ideas_run.rendered.body

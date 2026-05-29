@@ -2,6 +2,7 @@
 
 from kronos.signals.clustering import DeduplicationResult, deduplicate_items
 from kronos.signals.digest import RenderedDigest, render_digest, save_rendered_digest
+from kronos.signals.ideas import idea_signal_score, is_idea_signal
 from kronos.signals.models import SignalCluster, SignalDigest, SignalItem, StoreWriteResult
 from kronos.signals.pipeline import SignalDigestRun, run_signal_digest
 from kronos.signals.routing import DigestRoute, route_for_category
@@ -26,6 +27,8 @@ __all__ = [
     "StoreWriteResult",
     "assess_evidence",
     "deduplicate_items",
+    "idea_signal_score",
+    "is_idea_signal",
     "load_sources",
     "render_digest",
     "route_for_category",
