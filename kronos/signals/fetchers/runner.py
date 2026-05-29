@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Awaitable, Callable
 
+from kronos.signals.fetchers.app_stores import fetch_app_store_source, fetch_play_store_source
 from kronos.signals.fetchers.base import (
     FetcherError,
     FetchErrorKind,
@@ -110,12 +111,20 @@ def _default_fetchers() -> dict[str, Fetcher]:
     async def _competitor(source: SignalSource, options: FetchOptions) -> FetchResult:
         return await fetch_competitor_source(source, options=options)
 
+    async def _app_store(source: SignalSource, options: FetchOptions) -> FetchResult:
+        return await fetch_app_store_source(source, options=options)
+
+    async def _play_store(source: SignalSource, options: FetchOptions) -> FetchResult:
+        return await fetch_play_store_source(source, options=options)
+
     return {
         "search": _search,
         "reddit": _reddit,
         "x": _x,
         "telegram": _telegram,
         "competitor": _competitor,
+        "app_store": _app_store,
+        "play_store": _play_store,
     }
 
 

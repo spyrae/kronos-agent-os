@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from kronos.signals.fetchers.app_stores import fetch_app_store_source, fetch_play_store_source
 from kronos.signals.fetchers.base import FetcherError, FetchErrorKind, FetchOptions, FetchResult
 from kronos.signals.fetchers.brave_search import fetch_search_source
 from kronos.signals.fetchers.competitor import fetch_competitor_source
@@ -231,6 +232,65 @@ async def test_competitor_fetcher_normalizes_changes():
     assert result.items[0].title == "wanderlog: rating_drop"
     assert result.items[0].importance_score == 70.0
     assert result.items[0].raw_payload["channel"] == "ios"
+
+
+@pytest.mark.asyncio
+async def test_app_store_fetcher_normalizes_metrics_and_reviews():
+    result = await fetch_app_store_source(
+        _source("app_store", id="jb_app_store_reviews", categories=("jb_system", "travel_insights")),
+        options=FetchOptions(limit=2),
+        collector=lambda: {
+            "ios_rating": 4.8,
+            "ios_reviews_count": 42,
+            "ios_version": "1.2.3",
+            "ios_release_notes": "Better trip planning",
+            "ios_recent_reviews": [
+                {
+                    "rating": 5,
+                    "title": "Great planner",
+                    "body": "Made our group trip easier.",
+                    "territory": "US",
+                    "date": "2026-05-29",
+                }
+            ],
+        },
+    )
+
+    assert result.ok is True
+    assert len(result.items) == 2
+    assert result.items[0].source_platform == "app_store"
+    assert "рейтинг" in result.items[0].text.lower()
+    assert result.items[1].title.startswith("Отзыв iOS 5★")
+    assert result.items[1].categories == ("jb_system", "travel_insights")
+
+
+@pytest.mark.asyncio
+async def test_play_store_fetcher_treats_missing_optional_config_as_empty():
+    result = await fetch_play_store_source(
+        _source("play_store", id="jb_google_play_reviews", categories=("jb_system", "travel_insights")),
+        collector=lambda: {"error": "Package name cannot be empty"},
+    )
+
+    assert result.ok is True
+    assert result.items == ()
+
+
+@pytest.mark.asyncio
+async def test_play_store_fetcher_normalizes_metrics():
+    result = await fetch_play_store_source(
+        _source("play_store", id="jb_google_play_reviews", categories=("jb_system", "travel_insights")),
+        collector=lambda: {
+            "android_rating": 4.6,
+            "android_reviews_count": 10,
+            "android_installs": 1000,
+            "android_version": "1.0.0",
+        },
+    )
+
+    assert result.ok is True
+    assert len(result.items) == 1
+    assert result.items[0].source_platform == "play_store"
+    assert "рейтинг Android" in result.items[0].text
 
 
 @pytest.mark.asyncio
