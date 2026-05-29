@@ -164,7 +164,20 @@ def default_sources_path() -> Path:
     """Return the workspace path for the Signal Intelligence source registry."""
     from kronos.workspace import ws
 
-    return ws.skills_dir / "signal-intel" / "references" / "SOURCES.yaml"
+    workspace_path = ws.skills_dir / "signal-intel" / "references" / "SOURCES.yaml"
+    if workspace_path.exists():
+        return workspace_path
+
+    return (
+        Path(__file__).resolve().parents[2]
+        / "workspaces"
+        / "_template"
+        / "self"
+        / "skills"
+        / "signal-intel"
+        / "references"
+        / "SOURCES.yaml"
+    )
 
 
 def load_sources(path: str | Path | None = None) -> SourceRegistry:

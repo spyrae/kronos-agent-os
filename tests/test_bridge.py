@@ -133,6 +133,7 @@ def test_topic_route_uses_legacy_digest_env_alias(monkeypatch):
     monkeypatch.setattr(bridge.settings, "telegram_swarm_chat_id", 3642435967)
     monkeypatch.setattr(bridge.settings, "telegram_general_topic_id", 23)
     monkeypatch.setattr(bridge.settings, "telegram_digest_topic_id", 0)
+    monkeypatch.setattr(bridge.settings, "telegram_digest_news_topic_id", 0)
     monkeypatch.setattr(bridge.settings, "telegram_digest_agent", "kronos")
     monkeypatch.setenv("TOPIC_DIGEST", "24")
 
