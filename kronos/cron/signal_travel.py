@@ -15,7 +15,7 @@ async def run_travel_insights_digest() -> None:
 
     from kronos.signals.pipeline import run_signal_digest
 
-    run = await run_signal_digest("travel_insights", topic_id=TOPIC_JB_TRAVEL_INSIGHTS)
+    run = await run_signal_digest("travel_insights", topic_id=TOPIC_JB_TRAVEL_INSIGHTS, polish=True)
     log.info(
         "Signal travel insights digest: %d items, %d clusters, sent=%s",
         run.saved_item_count,

@@ -71,6 +71,7 @@ async def run_signal_dry_run(
     output_format: str = "json",
     store: SignalStore | None = None,
     fetchers: dict[str, Fetcher] | None = None,
+    polish: bool = False,
 ) -> SignalDryRunArtifact:
     """Run a no-send digest pass and optionally write a debug artifact."""
     run = await run_signal_digest(
@@ -82,6 +83,7 @@ async def run_signal_dry_run(
         fetch_limit=fetch_limit,
         store=store,
         fetchers=fetchers,
+        polish=polish,
     )
     artifact = build_dry_run_artifact(run)
     if output_path:

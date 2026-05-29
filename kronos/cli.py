@@ -822,6 +822,7 @@ async def _run_signals_dry_run(
     fetch_limit: int,
     output: str,
     output_format: str,
+    polish: bool,
 ) -> int:
     """Run Signal Intelligence without Telegram sends and print debug summary."""
     from kronos.signals.verification import artifact_payload, run_signal_dry_run
@@ -832,6 +833,7 @@ async def _run_signals_dry_run(
         fetch_limit=fetch_limit,
         output_path=output or None,
         output_format=output_format,
+        polish=polish,
     )
     print(_format_tool_payload(artifact_payload(artifact)))
     if output:
@@ -930,6 +932,7 @@ def build_parser() -> argparse.ArgumentParser:
     signals_dry.add_argument("--fetch-limit", type=int, default=8, help="max items fetched per source")
     signals_dry.add_argument("--output", "-o", default="", help="optional artifact output path")
     signals_dry.add_argument("--format", choices=("json", "md"), default="json", help="artifact format")
+    signals_dry.add_argument("--no-polish", action="store_true", help="skip Russian LLM polish/cleanup")
 
     connect = sub.add_parser("connect", help="guided connector setup")
     connect_sub = connect.add_subparsers(dest="connector")
@@ -1010,6 +1013,7 @@ def main(argv: list[str] | None = None) -> int:
                     fetch_limit=args.fetch_limit,
                     output=args.output,
                     output_format=args.format,
+                    polish=not args.no_polish,
                 )
             )
         parser.parse_args(["signals", "--help"])

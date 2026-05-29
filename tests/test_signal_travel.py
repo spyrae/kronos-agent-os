@@ -54,4 +54,4 @@ def test_official_competitor_change_is_allowed():
 def test_journeybay_implication_detects_booking_import():
     item = _item("Flight reservation import problem", "Manual booking and calendar import is annoying.")
 
-    assert "booking/calendar import" in journeybay_implication_for_items([item])
+    assert "импорт бронирований/календаря" in journeybay_implication_for_items([item])

@@ -1,7 +1,7 @@
 import pytest
 
 from kronos.config import settings
-from kronos.signals.digest import _truncate_html, render_digest, save_rendered_digest
+from kronos.signals.digest import _truncate_html, polish_rendered_digest, render_digest, save_rendered_digest
 from kronos.signals.models import SignalItem
 from kronos.signals.routing import route_for_category
 from kronos.signals.sources import SignalSource
@@ -75,13 +75,13 @@ def test_render_digest_groups_by_evidence_and_sanitizes_anecdote_language():
     rendered = render_digest("news", clusters, items_by_cluster, sources_by_id=sources)
 
     assert rendered.route.destination == "Digest: News"
-    assert "<b>Confirmed / Official</b>" in rendered.body
-    assert "<b>Emerging Signals</b>" in rendered.body
-    assert "<b>Anecdotes / Watchlist</b>" in rendered.body
+    assert "<b>✅ Подтверждено / официально</b>" in rendered.body
+    assert "<b>📈 Формирующиеся сигналы</b>" in rendered.body
+    assert "<b>👀 Наблюдения к проверке</b>" in rendered.body
     assert "есть единичный сигнал к Codex" in rendered.body
     assert "отдельные источники упоминают в отдельных обсуждениях" in rendered.body
     assert "рынок сдвигается" not in rendered.body
-    assert "Guardrail: weak evidence" in rendered.body
+    assert "Осторожно: это наблюдение" in rendered.body
     assert 'href="https://x.com/OpenAIDevs/status/1"' in rendered.body
 
 
@@ -103,15 +103,15 @@ def test_render_digest_is_telegram_chunk_safe():
     )
 
     assert len(rendered.body) <= 220
-    assert "truncated for Telegram length" in rendered.body
+    assert "обрезано под лимит Telegram" in rendered.body
 
 
 def test_truncate_html_preserves_complete_tags():
     text = "\n".join(
         [
-            "<b>Digest: News — Signal Intelligence</b>",
+            "<b>Новости и AI-индустрия — обзор сигналов</b>",
             "",
-            "<b>Anecdotes / Watchlist</b>",
+            "<b>Наблюдения</b>",
             '• <b>Item</b> (<a href="https://example.com/source">source</a>)',
             "  " + ("long summary " * 80),
         ]
@@ -120,10 +120,38 @@ def test_truncate_html_preserves_complete_tags():
     truncated = _truncate_html(text, max_chars=175)
 
     assert len(truncated) <= 175
-    assert "truncated for Telegram length" in truncated
+    assert "обрезано под лимит Telegram" in truncated
     assert truncated.count("<b>") == truncated.count("</b>")
     assert truncated.count("<i>") == truncated.count("</i>")
     assert truncated.count("<a ") == truncated.count("</a>")
+
+
+def test_polish_rendered_digest_uses_llm_for_russian_cleanup(monkeypatch):
+    class Response:
+        content = "<b>Новости и AI-индустрия</b>\n• <b>Сигнал</b> — чистый русский текст"
+
+    called = False
+
+    def fake_invoke(messages, tier):
+        nonlocal called
+        called = True
+        return Response()
+
+    monkeypatch.setattr("kronos.llm.is_runtime_llm_configured", lambda: True)
+    monkeypatch.setattr("kronos.llm.invoke_with_fallback", fake_invoke)
+
+    rendered = render_digest(
+        "news",
+        [{"id": 1, "category": "news", "title": "**AI launch**", "summary": "New tool shipped", "item_ids": [1]}],
+        {1: [_item("x_openai_devs", "x", "New tool shipped")]},
+        max_chars=10000,
+    )
+
+    polished = polish_rendered_digest(rendered)
+
+    assert called is True
+    assert "чистый русский текст" in polished.body
+    assert "**" not in polished.body
 
 
 def test_render_ideas_digest_uses_product_format_and_limits_to_ten():
@@ -153,12 +181,12 @@ def test_render_ideas_digest_uses_product_format_and_limits_to_ten():
 
     rendered = render_digest("ideas", clusters, items_by_cluster, max_chars=10000)
 
-    assert rendered.body.count("<b>Opportunity:</b>") == 10
+    assert rendered.body.count("<b>Идея:</b>") == 10
     assert len(rendered.cluster_ids) == 10
-    assert "<b>Product angle:</b>" in rendered.body
-    assert "<b>Why now:</b>" in rendered.body
-    assert "<b>Caveat:</b>" in rendered.body
-    assert "validated demand" in rendered.body
+    assert "<b>Продуктовый угол:</b>" in rendered.body
+    assert "<b>Почему сейчас:</b>" in rendered.body
+    assert "<b>Ограничение:</b>" in rendered.body
+    assert "подтверждённый спрос" in rendered.body
 
 
 def test_render_travel_digest_uses_journeybay_format_and_guardrails():
@@ -187,10 +215,10 @@ def test_render_travel_digest_uses_journeybay_format_and_guardrails():
     rendered = render_digest("travel_insights", clusters, items_by_cluster)
 
     assert rendered.route.destination == "JB: Travel Insights"
-    assert "<b>Insight:</b>" in rendered.body
-    assert "<b>JourneyBay implication:</b>" in rendered.body
-    assert "shared itinerary/collaboration" in rendered.body
-    assert "do not describe as a travel market trend yet" in rendered.body
+    assert "<b>Инсайт:</b>" in rendered.body
+    assert "<b>Что это значит для JourneyBay:</b>" in rendered.body
+    assert "совместные маршруты" in rendered.body
+    assert "нельзя называть это трендом" in rendered.body
 
 
 def test_save_rendered_digest_persists_dry_run(tmp_path, monkeypatch):

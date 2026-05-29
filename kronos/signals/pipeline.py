@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from kronos.signals.digest import RenderedDigest, render_digest, save_rendered_digest
+from kronos.signals.digest import RenderedDigest, polish_rendered_digest, render_digest, save_rendered_digest
 from kronos.signals.fetchers import FetchOptions, FetchResult, fetch_sources
 from kronos.signals.fetchers.runner import Fetcher
 from kronos.signals.ideas import idea_signal_score, is_idea_signal
@@ -46,6 +46,7 @@ async def run_signal_digest(
     fetchers: dict[str, Fetcher] | None = None,
     source_limit: int | None = None,
     fetch_limit: int = 8,
+    polish: bool = False,
 ) -> SignalDigestRun:
     """Fetch, score, cluster, render and optionally send one category digest."""
     registry = load_sources(sources_path)
@@ -67,6 +68,8 @@ async def run_signal_digest(
     saved_records = _save_scored_items(signal_store, fetch_results, sources_by_id, category=category)
     clusters, items_by_cluster = _create_clusters(signal_store, category, saved_records, sources_by_id)
     rendered = render_digest(category, clusters, items_by_cluster, sources_by_id=sources_by_id)
+    if polish:
+        rendered = polish_rendered_digest(rendered)
     digest_id = save_rendered_digest(signal_store, rendered, dry_run=dry_run)
 
     sent = False

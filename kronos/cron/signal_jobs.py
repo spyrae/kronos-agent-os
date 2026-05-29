@@ -15,7 +15,7 @@ async def run_jobs_digest() -> None:
 
     from kronos.signals.pipeline import run_signal_digest
 
-    run = await run_signal_digest("jobs", topic_id=TOPIC_DIGEST_JOBS)
+    run = await run_signal_digest("jobs", topic_id=TOPIC_DIGEST_JOBS, polish=True)
     log.info(
         "Signal jobs digest: %d items, %d clusters, sent=%s",
         run.saved_item_count,

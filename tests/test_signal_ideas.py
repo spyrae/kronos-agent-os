@@ -43,4 +43,4 @@ def test_generic_promo_roundup_is_filtered_out():
 def test_product_angle_detects_travel_workflow():
     item = _item("Itinerary planning is annoying", "Group trip planning takes too long.")
 
-    assert "Travel planning" in product_angle_for_items([item])
+    assert "планирование поездки" in product_angle_for_items([item])

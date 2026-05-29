@@ -111,38 +111,38 @@ def product_angle_for_items(items: Sequence[SignalItem]) -> str:
     """Infer a scoped product angle from the cluster text."""
     text = _items_text(items)
     if any(term in text for term in ("travel", "trip", "itinerary", "flight", "hotel", "nomad")):
-        return "Travel planning workflow or JourneyBay feature experiment."
+        return "Эксперимент для JourneyBay: планирование поездки, маршруты или совместная работа над поездкой."
     if any(term in text for term in ("cursor", "claude code", "codex", "developer", "ide", "coding")):
-        return "Developer workflow/tooling feature or micro-SaaS experiment."
+        return "Фича или небольшой SaaS для рабочего процесса разработчиков и AI-кодинга."
     if any(term in text for term in ("automate", "automation", "workflow", "manual", "руками")):
-        return "Automation assistant around a repeated manual workflow."
+        return "Ассистент автоматизации для повторяющегося ручного процесса."
     if any(term in text for term in ("community", "telegram", "reddit", "discord")):
-        return "Community intelligence, moderation, or summarization product angle."
+        return "Продукт для анализа сообществ, модерации или умных саммари."
     if any(term in text for term in ("content", "newsletter", "seo", "video", "creator")):
-        return "Creator/content ops workflow with measurable time savings."
-    return "Discovery experiment: validate the pain with interviews or a lightweight landing page."
+        return "Процесс для авторов и контент-операций с измеримой экономией времени."
+    return "Discovery-эксперимент: проверить боль интервью или простым лендингом."
 
 
 def why_now_for_items(items: Sequence[SignalItem], *, can_make_trend_claim: bool) -> str:
     """Return a conservative why-now statement separated from evidence."""
     text = _items_text(items)
     if can_make_trend_claim:
-        return "Multiple independent signals make this worth structured discovery now."
+        return "Есть несколько независимых сигналов — стоит оформить исследование сейчас."
     if any(term in text for term in ("launch", "launched", "released", "waitlist", "mvp")):
-        return "Recent launch/product activity suggests a testable opportunity, not validated demand yet."
+        return "Свежие запуски/релизы дают проверяемую гипотезу, но спрос ещё не доказан."
     if any(term in text for term in ("ai", "agent", "llm", "automation")):
-        return "AI tooling is changing the cost of solving this workflow; evidence is still early."
-    return "Fresh anecdote worth watching; needs corroboration before prioritization."
+        return "AI-инструменты снижают стоимость решения такого процесса; доказательств пока мало."
+    return "Свежий сигнал к наблюдению; перед приоритизацией нужна повторяемость."
 
 
 def caveat_for_items(items: Sequence[SignalItem], *, can_make_trend_claim: bool) -> str:
     """Return a guardrail caveat for product/business ideas."""
     if can_make_trend_claim:
-        return "Still requires user interviews, willingness-to-pay checks, and usage data."
+        return "Нужны интервью, проверка готовности платить и реальные данные использования."
     platforms = {item.source_platform for item in items}
     if len(platforms) <= 1:
-        return "Anecdotal and platform-concentrated; do not call this market demand yet."
-    return "Weak evidence; use as discovery backlog item, not roadmap proof."
+        return "Сигнал из одного источника/платформы; это ещё не рыночный спрос."
+    return "Доказательность слабая; класть в список гипотез для исследования, не в дорожную карту."
 
 
 def _item_text(item: SignalItem) -> str:

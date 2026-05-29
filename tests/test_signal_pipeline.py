@@ -93,8 +93,8 @@ async def test_run_signal_digest_dry_run_persists_news_digest(tmp_path, signal_s
     assert run.saved_item_count == 3
     assert run.cluster_count == 3
     assert run.sent is False
-    assert "Digest: News — Signal Intelligence" in run.rendered.body
-    assert "Evidence:" in run.rendered.body
+    assert "Новости и AI-индустрия — обзор сигналов" in run.rendered.body
+    assert "Доказательность:" in run.rendered.body
 
     digest = signal_store.list_digests(destination="Digest: News")[0]
     assert digest["title"].startswith("[dry-run]")
@@ -190,7 +190,7 @@ async def test_run_signal_digest_filters_non_idea_items_for_ideas(tmp_path, sign
     )
 
     assert ideas_run.saved_item_count == 2
-    assert "Product angle:" in ideas_run.rendered.body
+    assert "Продуктовый угол:" in ideas_run.rendered.body
     stats = signal_store.get_source_quality_stats("x_ideas")[0]
     assert stats["items_seen"] == 2
     assert stats["selected_count"] == 1
@@ -234,4 +234,4 @@ async def test_run_signal_digest_filters_travel_noise(tmp_path, signal_store):
     )
 
     assert travel_run.saved_item_count == 1
-    assert "JourneyBay implication:" in travel_run.rendered.body
+    assert "Что это значит для JourneyBay:" in travel_run.rendered.body

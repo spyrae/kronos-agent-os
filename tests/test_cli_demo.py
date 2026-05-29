@@ -211,6 +211,7 @@ def test_signals_dry_run_command_routes_to_runner(monkeypatch, capsys):
         assert kwargs["fetch_limit"] == 3
         assert kwargs["output"] == "/tmp/news.json"
         assert kwargs["output_format"] == "json"
+        assert kwargs["polish"] is True
         return 0
 
     monkeypatch.setattr(cli, "_run_signals_dry_run", fake_dry_run)

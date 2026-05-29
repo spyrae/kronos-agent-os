@@ -105,28 +105,28 @@ def journeybay_implication_for_items(items: Sequence[SignalItem]) -> str:
     """Infer an actionable JourneyBay product implication."""
     text = _items_text(items)
     if any(term in text for term in ("group", "share", "collaborate", "can't share", "cannot share")):
-        return "Prioritize shared itinerary/collaboration flows and permissioned trip editing."
+        return "Проверить совместные маршруты, права доступа и редактирование поездки несколькими людьми."
     if any(term in text for term in ("flight", "hotel", "booking", "reservation", "calendar", "import")):
-        return "Explore booking/calendar import, disruption alerts, and automatic itinerary updates."
+        return "Проверить импорт бронирований/календаря, алерты по изменениям и автообновление маршрута."
     if any(term in text for term in ("offline", "maps", "route", "google maps")):
-        return "Strengthen offline itinerary/map handoff and day-by-day navigation context."
+        return "Усилить офлайн-доступ, связку с картами и дневной контекст маршрута."
     if any(term in text for term in ("budget", "split costs", "points", "award travel")):
-        return "Test budget/points-aware planning and shared cost tracking."
+        return "Проверить планирование с бюджетом/баллами и совместный учёт расходов."
     if any(term in text for term in ("visa", "passport", "nomad", "long-stay", "long stay")):
-        return "Add logistics checklist hypotheses: visa, documents, stay limits, and country constraints."
+        return "Добавить гипотезы про чек-листы: визы, документы, лимиты пребывания и ограничения стран."
     if any(term in text for term in ("ai", "planner", "recommendation")):
-        return "Scope AI planner output around constraints, explainability, and editable itinerary steps."
-    return "Convert into a discovery question for JourneyBay onboarding or planning workflow."
+        return "Сфокусировать AI-планировщик на ограничениях, объяснимости и редактируемых шагах маршрута."
+    return "Превратить сигнал в вопрос для исследования, онбординга или планировщика JourneyBay."
 
 
 def travel_caveat_for_items(items: Sequence[SignalItem], *, can_make_trend_claim: bool) -> str:
     """Return a conservative caveat for travel insights."""
     if can_make_trend_claim:
-        return "Actionable signal, but validate with user interviews and in-app behavior before roadmap commitment."
+        return "Сигнал полезный, но перед дорожной картой нужны интервью и подтверждение в поведении пользователей."
     platforms = {item.source_platform for item in items}
     if len(platforms) <= 1:
-        return "Anecdotal or single-platform signal; useful for discovery, not proof of market demand."
-    return "Weakly corroborated; keep as hypothesis until repeated in reviews, support, or analytics."
+        return "Единичный/одноплатформенный сигнал: годится для discovery, но не доказывает спрос."
+    return "Слабое подтверждение; держать как гипотезу до повторения в отзывах, поддержке или аналитике."
 
 
 def _item_text(item: SignalItem) -> str:
