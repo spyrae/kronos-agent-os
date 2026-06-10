@@ -27,7 +27,8 @@ Database ID: `{NOTION_EXPENSES_DB_ID}`
 и попроси вызвать `add_expense`.
 
 Категории: Food, Transport, Subscriptions, Shopping, Travel, Health, Entertainment, Other.
-Валюты: IDR (Amount_IDR), MYR (Amount_MYR). Amount_RUB = сумма в рублях.
+Валюты: IDR (Amount_IDR), MYR (Amount_MYR). Rate = IDR за 1 RUB.
+Amount_RUB = round(Amount_IDR / Rate).
 Split = true → сумма делится пополам.
 
 Для запроса расходов используй `API-query-data-source` с database_id.

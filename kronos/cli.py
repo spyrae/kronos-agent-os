@@ -348,6 +348,16 @@ def run_doctor() -> int:
     if settings.openai_api_key:
         ok("OpenAI optional key", "configured")
 
+    if settings.notion_api_key:
+        ok("Notion", "API key configured")
+        if os.environ.get("NOTION_EXPENSES_DB_ID", "").strip():
+            ok("Notion expenses", "database configured")
+        else:
+            warn(
+                "Notion expenses",
+                "NOTION_EXPENSES_DB_ID is unset; add_expense and expense digest cannot write/query expenses",
+            )
+
     fallback_workspace = Path("workspaces") / settings.agent_name
     workspace = Path(settings.workspace_path) if settings.workspace_path else fallback_workspace
     if workspace.exists():

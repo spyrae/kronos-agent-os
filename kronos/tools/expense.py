@@ -42,6 +42,12 @@ VALID_CATEGORIES = {
     "Other",
 }
 
+# Canonical expense schema:
+# - BUDGET.md tranche rate is IDR per 1 RUB.
+# - Notion `Rate` stores the same IDR/RUB value (for example 233.5).
+# - `Amount_RUB` is calculated as round(Amount_IDR / Rate).
+# Do not convert Rate to RUB/IDR or RUB per 1000 IDR.
+
 
 def _today() -> str:
     """Today's date in user timezone (UTC+8)."""
@@ -218,6 +224,11 @@ def _fifo_calculate(amount_idr: float, tranches: list[dict]) -> tuple[float, flo
     return round(total_rub), effective_rate, tranches
 
 
+def _notion_rate(rate_idr_per_rub: float) -> float:
+    """Return Notion `Rate` value in the canonical IDR/RUB format."""
+    return round(rate_idr_per_rub, 1)
+
+
 def _notion_create_page(properties: dict) -> dict:
     """Create a page in Notion Expenses DB. Returns the created page or raises."""
     token = settings.notion_api_key
@@ -334,7 +345,7 @@ def add_expense(
     if amount_rub is not None:
         properties["Amount_RUB"] = {"number": amount_rub}
     if rate_idr_per_rub is not None:
-        properties["Rate"] = {"number": round(rate_idr_per_rub, 1)}
+        properties["Rate"] = {"number": _notion_rate(rate_idr_per_rub)}
 
     if ref:
         properties["Ref"] = {"rich_text": [{"text": {"content": ref}}]}

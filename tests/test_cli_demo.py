@@ -133,6 +133,29 @@ def test_doctor_fails_when_dynamic_tools_enabled_without_sandbox_image(monkeypat
     assert "sandbox image is missing; run scripts/build-sandbox.sh" in out
 
 
+def test_doctor_warns_when_notion_expenses_db_missing(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='fresh-kaos'\n", encoding="utf-8")
+    monkeypatch.setattr(settings, "agent_name", "kronos")
+    monkeypatch.setattr(settings, "workspace_path", "")
+    monkeypatch.setattr(settings, "db_dir", "data/kronos")
+    monkeypatch.setattr(settings, "notion_api_key", "ntn_test")
+    monkeypatch.setattr(settings, "enable_dynamic_tools", False)
+    monkeypatch.setattr(settings, "enable_mcp_gateway_management", False)
+    monkeypatch.setattr(settings, "enable_dynamic_mcp_servers", False)
+    monkeypatch.setattr(settings, "enable_server_ops", False)
+    monkeypatch.setattr(settings, "allowed_users", "")
+    monkeypatch.setattr(settings, "allow_all_users", False)
+    monkeypatch.delenv("NOTION_EXPENSES_DB_ID", raising=False)
+
+    result = main(["doctor"])
+
+    out = capsys.readouterr().out
+    assert result == 0
+    assert "[OK] Notion: API key configured" in out
+    assert "[WARN] Notion expenses: NOTION_EXPENSES_DB_ID is unset" in out
+
+
 def test_tool_event_printer_redacts_secret_args(capsys):
     from kronos.cli import _make_tool_event_printer
 

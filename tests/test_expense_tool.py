@@ -70,6 +70,24 @@ def test_add_expense_updates_budget_after_notion_success(monkeypatch, tmp_path):
     assert "| 1 | 01.06.2026 | 1,000 | 800 | 200.0 | Test |" in budget_file.read_text()
 
 
+def test_notion_rate_stays_idr_per_rub():
+    tranches = [
+        {
+            "num": 1,
+            "date": "01.06.2026",
+            "total": 1_000_000,
+            "remaining": 1_000_000,
+            "rate": 233.5,
+            "note": "Test",
+        }
+    ]
+
+    amount_rub, effective_rate, _ = expense._fifo_calculate(411_500, tranches)
+
+    assert amount_rub == 1762
+    assert expense._notion_rate(effective_rate) == 233.5
+
+
 def test_notion_create_page_requires_expenses_database_id(monkeypatch):
     monkeypatch.setattr(expense.settings, "notion_api_key", "secret")
     monkeypatch.delenv("NOTION_EXPENSES_DB_ID", raising=False)

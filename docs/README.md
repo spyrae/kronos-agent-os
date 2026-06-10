@@ -24,6 +24,7 @@ Start here if you want to understand or contribute to Kronos Agent OS.
 | [Dashboard](DASHBOARD.md) | Local control room and API map |
 | [Deployment](DEPLOYMENT.md) | Local, Docker, systemd, and server ops setup |
 | [Security](SECURITY.md) | Threat model and safe defaults |
+| [Expense Tracking](EXPENSES.md) | Canonical Notion expense schema, FIFO rules, and Rate invariant |
 
 ## First-Time Path
 

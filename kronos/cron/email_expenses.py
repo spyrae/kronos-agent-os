@@ -9,17 +9,21 @@ Uses Google Workspace MCP for Gmail access (requires OAuth setup).
 import json
 import logging
 import os
-import urllib.request
 from datetime import UTC, datetime
 
 from kronos.config import settings
 from kronos.cron.notify import TOPIC_GENERAL, send_bot_api
 from kronos.llm import ModelTier, get_model
+from kronos.tools.expense import VALID_CATEGORIES, add_expense
 
 log = logging.getLogger("kronos.cron.email_expenses")
 
 GMAIL_ACCOUNT = os.environ.get("GMAIL_ACCOUNT", "")
-EXPENSES_DB_ID = os.environ.get("NOTION_EXPENSES_DB_ID", "")
+
+CATEGORY_ALIASES = {
+    "Services": "Other",
+    "Subscription": "Subscriptions",
+}
 
 EXTRACT_PROMPT = """Extract expense information from these email snippets.
 
@@ -130,35 +134,38 @@ async def _extract_expenses(emails: list[str]) -> list[dict]:
 
 
 def _create_notion_expense(expense: dict) -> bool:
-    """Create an expense page in Notion."""
-    token = settings.notion_api_key
-    if not token:
+    """Create an expense through the canonical add_expense tool."""
+    if not settings.notion_api_key:
         return False
 
     try:
-        payload = json.dumps({
-            "parent": {"database_id": EXPENSES_DB_ID},
-            "properties": {
-                "Name": {"title": [{"text": {"content": expense.get("description", "Email expense")}}]},
-                "Amount": {"number": expense.get("amount", 0)},
-                "Category": {"select": {"name": expense.get("category", "Other")}},
-                "Date": {"date": {"start": expense.get("date", datetime.now(UTC).strftime("%Y-%m-%d"))}},
-                "Source": {"select": {"name": "Email"}},
-            },
-        }).encode("utf-8")
-
-        req = urllib.request.Request(
-            "https://api.notion.com/v1/pages",
-            data=payload,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "Notion-Version": "2022-06-28",
-            },
-        )
-        resp = urllib.request.urlopen(req, timeout=15)
-        return resp.status == 200
-
-    except Exception as e:
-        log.error("Notion expense creation failed: %s", e)
+        amount = float(expense.get("amount", 0))
+    except (TypeError, ValueError):
+        log.warning("Skipping email expense with invalid amount: %s", expense.get("amount"))
         return False
+
+    currency = str(expense.get("currency", "IDR")).upper()
+    if currency != "IDR":
+        log.info("Skipping email expense with unsupported currency: %s", currency)
+        return False
+
+    raw_category = str(expense.get("category", "Other"))
+    category = CATEGORY_ALIASES.get(raw_category, raw_category)
+    if category not in VALID_CATEGORIES:
+        category = "Other"
+
+    result = add_expense.invoke(
+        {
+            "description": str(expense.get("description", "Email expense")),
+            "amount": amount,
+            "currency": "IDR",
+            "category": category,
+            "date": str(expense.get("date", datetime.now(UTC).strftime("%Y-%m-%d"))),
+            "ref": str(expense.get("source", "")) or None,
+        }
+    )
+    if str(result).startswith("[ERROR]"):
+        log.error("Email expense creation failed: %s", result)
+        return False
+
+    return True
