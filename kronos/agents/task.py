@@ -4,6 +4,8 @@ Uses: notion, google-workspace, filesystem MCP tools.
 LLM: Lite tier (structured operations, doesn't need expensive model).
 """
 
+import os
+
 from langchain_core.tools import BaseTool
 
 from kronos.engine import create_agent
@@ -19,23 +21,10 @@ TASK_SYSTEM_PROMPT = """Ты — Task Agent в системе Kronos. Твоя �
 ### Expenses (затраты)
 Database ID: `{NOTION_EXPENSES_DB_ID}`
 
-Для создания расхода используй tool `API-post-page` с таким payload:
-```json
-{
-  "parent": {"database_id": "{NOTION_EXPENSES_DB_ID}"},
-  "properties": {
-    "Description": {"title": [{"text": {"content": "описание расхода"}}]},
-    "Date": {"date": {"start": "2026-04-09"}},
-    "Amount_IDR": {"number": 100000},
-    "Category": {"select": {"name": "Food"}},
-    "Split": {"checkbox": false},
-    "Rate": {"number": 5.80},
-    "Amount_RUB": {"number": 580},
-    "Ref": {"rich_text": [{"text": {"content": "ref-id"}}]},
-    "Status": {"select": {"name": "Processed"}}
-  }
-}
-```
+НЕ создавай расходы через Notion MCP/API-post-page. Создание расходов выполняет
+только прямой supervisor tool `add_expense`, потому что он конвертирует RUB и
+обновляет FIFO-бюджет. Если сюда делегировали создание расхода — верни ошибку
+и попроси вызвать `add_expense`.
 
 Категории: Food, Transport, Subscriptions, Shopping, Travel, Health, Entertainment, Other.
 Валюты: IDR (Amount_IDR), MYR (Amount_MYR). Amount_RUB = сумма в рублях.
@@ -65,11 +54,15 @@ def create_task_agent(tools: list[BaseTool], on_tool_event=None):
         return None
 
     model = get_model(ModelTier.STANDARD)
+    system_prompt = TASK_SYSTEM_PROMPT.replace(
+        "{NOTION_EXPENSES_DB_ID}",
+        os.environ.get("NOTION_EXPENSES_DB_ID", ""),
+    )
 
     return create_agent(
         model=model,
         tools=task_tools,
-        system_prompt=TASK_SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         name="task_agent",
         on_tool_event=on_tool_event,
     )

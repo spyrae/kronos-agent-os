@@ -183,19 +183,19 @@ def build_supervisor(
         descriptions.append("- **delegate_to_research**: быстрый поиск в интернете")
         log.info("Research agent created")
 
-    # Task — productivity (ONLY way to write to Notion)
+    # Task — productivity (Notion except expenses)
     task = create_task_agent(tools, on_tool_event=on_tool_event)
     if task:
         delegation_tools.append(_make_delegation_tool(
             "task",
-            "ЕДИНСТВЕННЫЙ способ работать с Notion, расходами, задачами, календарём, email, файлами. "
-            "Для ЛЮБОЙ записи/чтения Notion — ОБЯЗАТЕЛЬНО вызови этот tool. Без вызова этого tool запись в Notion НЕВОЗМОЖНА.",
+            "Способ работать с Notion (кроме расходов), задачами, календарём, email, файлами. "
+            "Расходы НЕ делегируй сюда: для расходов используй только прямой tool add_expense.",
             task,
         ))
         descriptions.append(
-            "- **delegate_to_task**: ЕДИНСТВЕННЫЙ способ записать в Notion, "
-            "работать с расходами, задачами, календарём, email, файлами. "
-            "Без вызова delegate_to_task запись в Notion НЕВОЗМОЖНА."
+            "- **delegate_to_task**: работа с Notion (кроме расходов), "
+            "задачами, календарём, email, файлами. "
+            "Расходы запрещено делегировать: только add_expense."
         )
         log.info("Task agent created")
 

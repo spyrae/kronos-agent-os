@@ -11,6 +11,8 @@ directly with structured parameters. All logic is deterministic Python:
 import json
 import logging
 import os
+import tempfile
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -20,7 +22,6 @@ from kronos.config import settings
 
 log = logging.getLogger("kronos.tools.expense")
 
-EXPENSES_DB_ID = os.environ.get("NOTION_EXPENSES_DB_ID", "")
 NOTION_VERSION = "2022-06-28"
 
 # User timezone — Bali/KL (UTC+8)
@@ -31,8 +32,14 @@ DATE_MAX_PAST_DAYS = 30
 DATE_MAX_FUTURE_DAYS = 1
 
 VALID_CATEGORIES = {
-    "Food", "Transport", "Subscriptions", "Shopping",
-    "Travel", "Health", "Entertainment", "Other",
+    "Food",
+    "Transport",
+    "Subscriptions",
+    "Shopping",
+    "Travel",
+    "Health",
+    "Entertainment",
+    "Other",
 }
 
 
@@ -79,7 +86,13 @@ def _validate_date(date_str: str | None) -> tuple[str, str | None]:
 
 def _budget_path() -> str:
     from kronos.workspace import ws
+
     return str(ws.skill_ref("expense-tracker", "BUDGET"))
+
+
+def _expenses_db_id() -> str:
+    """Return the configured Notion Expenses database ID."""
+    return os.environ.get("NOTION_EXPENSES_DB_ID", "").strip()
 
 
 def _parse_tranches(text: str) -> list[dict]:
@@ -105,10 +118,16 @@ def _parse_tranches(text: str) -> list[dict]:
                     remaining = float(cells[3].replace(",", "").replace(" ", ""))
                     rate = float(cells[4].replace(",", "").replace(" ", ""))
                     note = cells[5].strip() if len(cells) > 5 else ""
-                    tranches.append({
-                        "num": num, "date": date, "total": total,
-                        "remaining": remaining, "rate": rate, "note": note,
-                    })
+                    tranches.append(
+                        {
+                            "num": num,
+                            "date": date,
+                            "total": total,
+                            "remaining": remaining,
+                            "rate": rate,
+                            "note": note,
+                        }
+                    )
                 except (ValueError, IndexError):
                     continue
     return tranches
@@ -127,14 +146,14 @@ def _update_budget(text: str, tranches: list[dict]) -> str:
         return text
 
     # Find the next ## section after active tranches
-    after_header = text[idx_start + len(marker_start):]
+    after_header = text[idx_start + len(marker_start) :]
     idx_next = after_header.find("\n## ")
     if idx_next == -1:
         before = text[:idx_start]
         after = ""
     else:
         before = text[:idx_start]
-        after = after_header[idx_next + 1:]  # +1 to skip the \n
+        after = after_header[idx_next + 1 :]  # +1 to skip the \n
 
     # Build new active section
     table_lines = [
@@ -145,12 +164,27 @@ def _update_budget(text: str, tranches: list[dict]) -> str:
     ]
     for t in tranches:
         table_lines.append(
-            f"| {t['num']} | {t['date']} | {t['total']:,.0f} | "
-            f"{t['remaining']:,.0f} | {t['rate']} | {t['note']} |"
+            f"| {t['num']} | {t['date']} | {t['total']:,.0f} | {t['remaining']:,.0f} | {t['rate']} | {t['note']} |"
         )
     table_lines.append("")
 
     return before + "\n".join(table_lines) + "\n" + after
+
+
+def _write_text_atomic(path: str, text: str) -> None:
+    """Write text to a file via atomic replace."""
+    directory = os.path.dirname(path) or "."
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp-budget-", dir=directory)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _fifo_calculate(amount_idr: float, tranches: list[dict]) -> tuple[float, float, list[dict]]:
@@ -184,16 +218,28 @@ def _fifo_calculate(amount_idr: float, tranches: list[dict]) -> tuple[float, flo
     return round(total_rub), effective_rate, tranches
 
 
+def _rate_rub_per_1000_idr(rate_idr_per_rub: float) -> float:
+    """Convert IDR/RUB FIFO rate to Notion's RUB per 1000 IDR rate."""
+    if rate_idr_per_rub <= 0:
+        return 0
+    return round(1000 / rate_idr_per_rub, 2)
+
+
 def _notion_create_page(properties: dict) -> dict:
     """Create a page in Notion Expenses DB. Returns the created page or raises."""
     token = settings.notion_api_key
     if not token:
         raise RuntimeError("NOTION_API_KEY not configured")
+    database_id = _expenses_db_id()
+    if not database_id:
+        raise RuntimeError("NOTION_EXPENSES_DB_ID not configured")
 
-    payload = json.dumps({
-        "parent": {"database_id": EXPENSES_DB_ID},
-        "properties": properties,
-    }).encode("utf-8")
+    payload = json.dumps(
+        {
+            "parent": {"database_id": database_id},
+            "properties": properties,
+        }
+    ).encode("utf-8")
 
     req = urllib.request.Request(
         "https://api.notion.com/v1/pages",
@@ -204,7 +250,11 @@ def _notion_create_page(properties: dict) -> dict:
             "Notion-Version": NOTION_VERSION,
         },
     )
-    resp = urllib.request.urlopen(req, timeout=15)
+    try:
+        resp = urllib.request.urlopen(req, timeout=15)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {e.code}: {body}") from e
     return json.loads(resp.read())
 
 
@@ -251,6 +301,9 @@ def add_expense(
     amount_rub = None
     rate_idr_per_rub = None
     budget_updated = False
+    budget_file = ""
+    budget_new_text = None
+    tranches: list[dict] = []
 
     if currency == "IDR":
         budget_file = _budget_path()
@@ -265,12 +318,7 @@ def add_expense(
                     amount_rub, rate_idr_per_rub, tranches = _fifo_calculate(amount, tranches)
                     if split and amount_rub:
                         amount_rub = round(amount_rub / 2)
-                    # Update BUDGET.md
-                    new_text = _update_budget(budget_text, tranches)
-                    with open(budget_file, "w") as f:
-                        f.write(new_text)
-                    budget_updated = True
-                    log.info("FIFO: %s IDR → %s RUB (rate %.1f), budget updated", amount, amount_rub, rate_idr_per_rub or 0)
+                    budget_new_text = _update_budget(budget_text, tranches)
                 else:
                     log.warning("FIFO: insufficient budget (%s IDR available, need %s)", total_remaining, amount)
             else:
@@ -293,7 +341,7 @@ def add_expense(
     if amount_rub is not None:
         properties["Amount_RUB"] = {"number": amount_rub}
     if rate_idr_per_rub is not None:
-        properties["Rate"] = {"number": round(rate_idr_per_rub, 1)}
+        properties["Rate"] = {"number": _rate_rub_per_1000_idr(rate_idr_per_rub)}
 
     if ref:
         properties["Ref"] = {"rich_text": [{"text": {"content": ref}}]}
@@ -301,25 +349,43 @@ def add_expense(
     # --- Write to Notion ---
     try:
         result = _notion_create_page(properties)
-        page_id = result.get("id", "unknown")
-        log.info("Expense created: %s %s %s → page %s", description, amount, currency, page_id)
-
-        parts = [f"✅ '{description}' — {amount:,.0f} {currency}"]
-        if amount_rub is not None:
-            parts.append(f"= {amount_rub:,} ₽")
-            if split:
-                parts.append("(split, твоя доля)")
-        parts.append(f"| Дата: {date}")
-        if budget_updated:
-            remaining = sum(t["remaining"] for t in tranches)
-            parts.append(f"| Остаток: {remaining:,.0f} IDR")
-        if date_warning:
-            parts.append(f"| ⚠️ {date_warning}")
-        return " ".join(parts)
-
     except Exception as e:
         log.error("Failed to create expense: %s", e)
         return f"[ERROR] Failed to write to Notion: {e}"
+
+    page_id = result.get("id", "unknown")
+    log.info("Expense created: %s %s %s → page %s", description, amount, currency, page_id)
+
+    budget_warning = None
+    if budget_new_text is not None and budget_file:
+        try:
+            _write_text_atomic(budget_file, budget_new_text)
+        except Exception as e:
+            log.error("Expense created, but failed to update budget: %s", e)
+            budget_warning = f"[BUDGET ERROR] Notion записан, но бюджет не обновлён: {e}"
+        else:
+            budget_updated = True
+            log.info(
+                "FIFO: %s IDR → %s RUB (rate %.1f), budget updated",
+                amount,
+                amount_rub,
+                rate_idr_per_rub or 0,
+            )
+
+    parts = [f"✅ '{description}' — {amount:,.0f} {currency}"]
+    if amount_rub is not None:
+        parts.append(f"= {amount_rub:,} ₽")
+        if split:
+            parts.append("(split, твоя доля)")
+    parts.append(f"| Дата: {date}")
+    if budget_updated:
+        remaining = sum(t["remaining"] for t in tranches)
+        parts.append(f"| Остаток: {remaining:,.0f} IDR")
+    if budget_warning:
+        parts.append(f"| ⚠️ {budget_warning}")
+    if date_warning:
+        parts.append(f"| ⚠️ {date_warning}")
+    return " ".join(parts)
 
 
 @tool
@@ -349,14 +415,16 @@ def add_tranche(
     next_num = max((t["num"] for t in tranches), default=0) + 1
     today = datetime.now(USER_TZ).strftime("%d.%m.%Y")
 
-    tranches.append({
-        "num": next_num,
-        "date": today,
-        "total": amount_idr,
-        "remaining": amount_idr,
-        "rate": rate,
-        "note": note or f"Транш #{next_num}",
-    })
+    tranches.append(
+        {
+            "num": next_num,
+            "date": today,
+            "total": amount_idr,
+            "remaining": amount_idr,
+            "rate": rate,
+            "note": note or f"Транш #{next_num}",
+        }
+    )
 
     new_text = _update_budget(text, tranches)
     with open(budget_file, "w") as f:
