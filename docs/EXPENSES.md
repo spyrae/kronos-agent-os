@@ -46,6 +46,10 @@ tranches: IDR/RUB.
   for that expense.
 - `BUDGET.md` is updated only after Notion successfully creates the expense
   page. If Notion fails, the budget must not be deducted.
+- After a canonical write, KAOS archives incomplete duplicate Notion pages with
+  the same `Date`, `Amount_IDR`, and normalized `Description` when `Amount_RUB`
+  or `Rate` is missing. This protects against stale/non-canonical writers that
+  still try to create IDR-only rows.
 
 ## Required environment
 
@@ -64,3 +68,4 @@ The guard tests live in `tests/test_expense_tool.py`. They assert:
 - Notion failure does not deduct `BUDGET.md`.
 - Successful Notion write deducts budget afterward.
 - `Rate` stays in IDR/RUB (`411500 / 233.5 = 1762`, `Rate = 233.5`).
+- Incomplete IDR-only duplicates are archived while complete rows are preserved.

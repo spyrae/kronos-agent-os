@@ -12,6 +12,8 @@ import json
 import logging
 import os
 import tempfile
+import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -229,30 +231,24 @@ def _notion_rate(rate_idr_per_rub: float) -> float:
     return round(rate_idr_per_rub, 1)
 
 
-def _notion_create_page(properties: dict) -> dict:
-    """Create a page in Notion Expenses DB. Returns the created page or raises."""
+def _notion_headers() -> dict[str, str]:
     token = settings.notion_api_key
     if not token:
         raise RuntimeError("NOTION_API_KEY not configured")
-    database_id = _expenses_db_id()
-    if not database_id:
-        raise RuntimeError("NOTION_EXPENSES_DB_ID not configured")
+    return {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Notion-Version": NOTION_VERSION,
+    }
 
-    payload = json.dumps(
-        {
-            "parent": {"database_id": database_id},
-            "properties": properties,
-        }
-    ).encode("utf-8")
 
+def _notion_request_json(method: str, url: str, payload: dict | None = None) -> dict:
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
     req = urllib.request.Request(
-        "https://api.notion.com/v1/pages",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Notion-Version": NOTION_VERSION,
-        },
+        url,
+        data=data,
+        headers=_notion_headers(),
+        method=method,
     )
     try:
         resp = urllib.request.urlopen(req, timeout=15)
@@ -260,6 +256,132 @@ def _notion_create_page(properties: dict) -> dict:
         body = e.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"HTTP {e.code}: {body}") from e
     return json.loads(resp.read())
+
+
+def _notion_create_page(properties: dict) -> dict:
+    """Create a page in Notion Expenses DB. Returns the created page or raises."""
+    database_id = _expenses_db_id()
+    if not database_id:
+        raise RuntimeError("NOTION_EXPENSES_DB_ID not configured")
+
+    return _notion_request_json(
+        "POST",
+        "https://api.notion.com/v1/pages",
+        {
+            "parent": {"database_id": database_id},
+            "properties": properties,
+        },
+    )
+
+
+def _normalize_expense_description(value: str) -> str:
+    """Normalize descriptions for duplicate detection."""
+    return " ".join(value.casefold().split())
+
+
+def _page_title(page: dict) -> str:
+    title = page.get("properties", {}).get("Description", {}).get("title", [])
+    return "".join(item.get("plain_text", "") for item in title)
+
+
+def _query_duplicate_candidates(date: str, amount_idr: float) -> list[dict]:
+    database_id = _expenses_db_id()
+    if not database_id:
+        return []
+    data = _notion_request_json(
+        "POST",
+        f"https://api.notion.com/v1/databases/{database_id}/query",
+        {
+            "filter": {
+                "and": [
+                    {"property": "Date", "date": {"equals": date}},
+                    {"property": "Amount_IDR", "number": {"equals": amount_idr}},
+                ]
+            },
+            "page_size": 20,
+        },
+    )
+    return list(data.get("results", []))
+
+
+def _archive_page(page_id: str) -> None:
+    _notion_request_json(
+        "PATCH",
+        f"https://api.notion.com/v1/pages/{page_id}",
+        {"archived": True},
+    )
+
+
+def _cleanup_incomplete_duplicates(
+    *,
+    description: str,
+    amount_idr: float,
+    date: str,
+    keep_page_id: str,
+) -> int:
+    """Archive IDR-only duplicate pages created by non-canonical writers."""
+    expected_description = _normalize_expense_description(description)
+    archived = 0
+    for page in _query_duplicate_candidates(date, amount_idr):
+        page_id = page.get("id", "")
+        if not page_id or page_id == keep_page_id:
+            continue
+        if _normalize_expense_description(_page_title(page)) != expected_description:
+            continue
+
+        props = page.get("properties", {})
+        amount_rub = props.get("Amount_RUB", {}).get("number")
+        rate = props.get("Rate", {}).get("number")
+        if amount_rub is not None and rate is not None:
+            continue
+
+        try:
+            _archive_page(page_id)
+        except Exception as e:
+            log.warning("Failed to archive incomplete duplicate expense %s: %s", page_id, e)
+            continue
+        archived += 1
+        log.info("Archived incomplete duplicate expense page: %s", page_id)
+    return archived
+
+
+def _schedule_duplicate_cleanup(
+    *,
+    description: str,
+    amount_idr: float,
+    date: str,
+    keep_page_id: str,
+) -> None:
+    """Run duplicate cleanup now and once more after a short delay."""
+    try:
+        _cleanup_incomplete_duplicates(
+            description=description,
+            amount_idr=amount_idr,
+            date=date,
+            keep_page_id=keep_page_id,
+        )
+    except Exception as e:
+        log.warning("Immediate duplicate cleanup failed: %s", e)
+
+    delay = float(os.environ.get("EXPENSE_DUPLICATE_CLEANUP_DELAY_SECONDS", "5"))
+    if delay <= 0:
+        return
+
+    def delayed_cleanup() -> None:
+        time.sleep(delay)
+        try:
+            archived = _cleanup_incomplete_duplicates(
+                description=description,
+                amount_idr=amount_idr,
+                date=date,
+                keep_page_id=keep_page_id,
+            )
+            if archived:
+                log.info("Delayed duplicate cleanup archived %d page(s)", archived)
+        except Exception as e:
+            log.warning("Delayed duplicate cleanup failed: %s", e)
+
+    threading.Thread(target=delayed_cleanup, daemon=True).start()
 
 
 @tool
@@ -359,6 +481,14 @@ def add_expense(
 
     page_id = result.get("id", "unknown")
     log.info("Expense created: %s %s %s → page %s", description, amount, currency, page_id)
+
+    if currency == "IDR" and page_id != "unknown":
+        _schedule_duplicate_cleanup(
+            description=description,
+            amount_idr=amount,
+            date=date,
+            keep_page_id=page_id,
+        )
 
     budget_warning = None
     if budget_new_text is not None and budget_file:

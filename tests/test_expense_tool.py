@@ -47,6 +47,7 @@ def test_add_expense_updates_budget_after_notion_success(monkeypatch, tmp_path):
     captured_properties = {}
 
     monkeypatch.setattr(expense, "_budget_path", lambda: str(budget_file))
+    monkeypatch.setattr(expense, "_schedule_duplicate_cleanup", lambda **kwargs: None)
 
     def fake_notion_create_page(properties):
         captured_properties.update(properties)
@@ -68,6 +69,41 @@ def test_add_expense_updates_budget_after_notion_success(monkeypatch, tmp_path):
     assert captured_properties["Amount_RUB"] == {"number": 1}
     assert captured_properties["Rate"] == {"number": 200.0}
     assert "| 1 | 01.06.2026 | 1,000 | 800 | 200.0 | Test |" in budget_file.read_text()
+
+
+def test_cleanup_archives_only_incomplete_duplicate(monkeypatch):
+    def page(page_id, title, amount_rub, rate):
+        return {
+            "id": page_id,
+            "properties": {
+                "Description": {"title": [{"plain_text": title}]},
+                "Amount_RUB": {"number": amount_rub},
+                "Rate": {"number": rate},
+            },
+        }
+
+    monkeypatch.setattr(
+        expense,
+        "_query_duplicate_candidates",
+        lambda date, amount_idr: [
+            page("keep", "путешествия, жилье", 9078, 233.5),
+            page("bad", "Путешествия, жилье", None, None),
+            page("complete", "Путешествия, жилье", 9078, 233.5),
+            page("other-title", "путешествия", None, None),
+        ],
+    )
+    archived = []
+    monkeypatch.setattr(expense, "_archive_page", archived.append)
+
+    count = expense._cleanup_incomplete_duplicates(
+        description="путешествия, жилье",
+        amount_idr=2_120_000,
+        date="2026-06-10",
+        keep_page_id="keep",
+    )
+
+    assert count == 1
+    assert archived == ["bad"]
 
 
 def test_notion_rate_stays_idr_per_rub():
