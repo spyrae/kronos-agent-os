@@ -36,3 +36,29 @@ def test_email_expense_uses_canonical_add_expense(monkeypatch):
         "date": "2026-06-10",
         "ref": "email-123",
     }
+
+
+def test_email_expense_allows_rub(monkeypatch):
+    fake_tool = _FakeAddExpense()
+    monkeypatch.setattr(settings, "notion_api_key", "ntn_test")
+    monkeypatch.setattr(email_expenses, "add_expense", fake_tool)
+
+    ok = email_expenses._create_notion_expense(
+        {
+            "description": "Hosting",
+            "amount": 496,
+            "currency": "RUB",
+            "category": "Subscription",
+            "date": "2026-06-10",
+        }
+    )
+
+    assert ok
+    assert fake_tool.args == {
+        "description": "Hosting",
+        "amount": 496.0,
+        "currency": "RUB",
+        "category": "Subscriptions",
+        "date": "2026-06-10",
+        "ref": None,
+    }

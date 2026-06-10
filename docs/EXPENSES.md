@@ -11,14 +11,14 @@ Task Agent prompts.
 | `Description` | Expense title |
 | `Date` | Expense date |
 | `Category` | One of the allowed expense categories |
-| `Amount_IDR` | Original amount in Indonesian rupiah |
-| `Amount_RUB` | Calculated ruble amount |
-| `Rate` | **IDR per 1 RUB** |
+| `Amount_IDR` | Original amount in Indonesian rupiah; empty for RUB-native expenses |
+| `Amount_RUB` | Calculated ruble amount for IDR, or original RUB amount for RUB-native expenses |
+| `Rate` | **IDR per 1 RUB**; empty for RUB-native expenses |
 | `Split` | Whether only half of the expense belongs to the user |
 | `Status` | Processing status |
 | `Ref` | Optional deduplication reference |
 
-Important invariant:
+Important IDR invariant:
 
 ```text
 Amount_RUB = round(Amount_IDR / Rate)
@@ -37,10 +37,29 @@ Do **not** convert `Rate` to `RUB per IDR`, `RUB per 1000 IDR`, or any other
 derived unit. `Rate` in Notion must stay in the same unit as `BUDGET.md`
 tranches: IDR/RUB.
 
+Important RUB invariant:
+
+```text
+Amount_RUB = original RUB amount
+Amount_IDR = empty
+Rate = empty
+```
+
+Example:
+
+```text
+496 ₽ JourneyBay hosting
+Amount_RUB = 496
+Amount_IDR = empty
+Rate = empty
+```
+
 ## FIFO budget rules
 
 - Active tranches live in `expense-tracker/references/BUDGET.md`.
 - Each tranche `rate` is IDR per 1 RUB.
+- FIFO applies only to IDR expenses. RUB-native expenses never read or update
+  tranches.
 - FIFO consumes the oldest active tranche first.
 - If an expense spans multiple tranches, `Rate` is the effective IDR/RUB rate
   for that expense.

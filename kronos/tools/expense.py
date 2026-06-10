@@ -46,8 +46,9 @@ VALID_CATEGORIES = {
 
 # Canonical expense schema:
 # - BUDGET.md tranche rate is IDR per 1 RUB.
-# - Notion `Rate` stores the same IDR/RUB value (for example 233.5).
-# - `Amount_RUB` is calculated as round(Amount_IDR / Rate).
+# - IDR expenses: Notion `Rate` stores the same IDR/RUB value (for example 233.5).
+# - IDR expenses: `Amount_RUB` is calculated as round(Amount_IDR / Rate).
+# - RUB expenses: `Amount_RUB` stores the original amount, no Rate/Amount_IDR/FIFO.
 # Do not convert Rate to RUB/IDR or RUB per 1000 IDR.
 
 
@@ -394,18 +395,19 @@ def add_expense(
     split: bool = False,
     ref: str | None = None,
 ) -> str:
-    """Add an expense to Notion with automatic FIFO budget calculation.
+    """Add an expense to Notion with optional automatic FIFO budget calculation.
 
-    Automatically reads BUDGET.md, calculates RUB from FIFO tranches,
-    writes to Notion, and updates the budget. No need to provide rate.
+    For IDR expenses, automatically reads BUDGET.md, calculates RUB from FIFO
+    tranches, writes to Notion, and updates the budget. No need to provide rate.
+    For RUB expenses, writes Amount_RUB as-is and does not touch tranches.
 
     IMPORTANT: Do NOT pass `date` unless the user explicitly says a different date.
     The tool uses today's date automatically. Wrong dates will be auto-corrected.
 
     Args:
         description: What was purchased (e.g. "Кафе", "Grab", "Продукты")
-        amount: Transaction amount in IDR (e.g. 300870)
-        currency: Must be "IDR"
+        amount: Transaction amount (e.g. 300870 IDR or 496 RUB)
+        currency: "IDR" or "RUB"
         category: One of: Food, Transport, Subscriptions, Shopping, Travel, Health, Entertainment, Other
         date: DO NOT SET unless user specified a date. Auto-defaults to today. Dates >30 days ago are rejected.
         split: True if expense is split 50/50 (with Sasha). Default False.
@@ -417,8 +419,8 @@ def add_expense(
 
     # Validate currency
     currency = currency.upper()
-    if currency not in ("IDR",):
-        return f"[ERROR] Invalid currency '{currency}'. Must be IDR."
+    if currency not in ("IDR", "RUB"):
+        return f"[ERROR] Invalid currency '{currency}'. Must be IDR or RUB."
 
     # Validate and sanitize date (catches LLM hallucinating wrong year/month)
     date, date_warning = _validate_date(date)
@@ -451,6 +453,10 @@ def add_expense(
                 log.warning("No active tranches in BUDGET.md")
         else:
             log.warning("BUDGET.md not found at %s", budget_file)
+    elif currency == "RUB":
+        amount_rub = round(amount)
+        if split:
+            amount_rub = round(amount_rub / 2)
 
     # --- Build Notion properties ---
     properties: dict = {
@@ -506,11 +512,12 @@ def add_expense(
                 rate_idr_per_rub or 0,
             )
 
-    parts = [f"✅ '{description}' — {amount:,.0f} {currency}"]
-    if amount_rub is not None:
+    amount_display = f"{amount:,.0f} ₽" if currency == "RUB" else f"{amount:,.0f} {currency}"
+    parts = [f"✅ '{description}' — {amount_display}"]
+    if currency == "IDR" and amount_rub is not None:
         parts.append(f"= {amount_rub:,} ₽")
-        if split:
-            parts.append("(split, твоя доля)")
+    if split:
+        parts.append("(split, твоя доля)")
     parts.append(f"| Дата: {date}")
     if budget_updated:
         remaining = sum(t["remaining"] for t in tranches)

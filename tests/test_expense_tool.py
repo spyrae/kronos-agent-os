@@ -71,6 +71,42 @@ def test_add_expense_updates_budget_after_notion_success(monkeypatch, tmp_path):
     assert "| 1 | 01.06.2026 | 1,000 | 800 | 200.0 | Test |" in budget_file.read_text()
 
 
+def test_add_expense_rub_writes_amount_rub_without_fifo(monkeypatch):
+    captured_properties = {}
+
+    monkeypatch.setattr(
+        expense,
+        "_budget_path",
+        lambda: (_ for _ in ()).throw(AssertionError("RUB must not read budget")),
+    )
+    monkeypatch.setattr(
+        expense,
+        "_schedule_duplicate_cleanup",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("RUB must not run IDR duplicate cleanup")),
+    )
+
+    def fake_notion_create_page(properties):
+        captured_properties.update(properties)
+        return {"id": "page-id"}
+
+    monkeypatch.setattr(expense, "_notion_create_page", fake_notion_create_page)
+
+    result = expense.add_expense.invoke(
+        {
+            "description": "JourneyBay (хостинг)",
+            "amount": 496,
+            "currency": "RUB",
+            "category": "Subscriptions",
+        }
+    )
+
+    assert "✅ 'JourneyBay (хостинг)' — 496 ₽" in result
+    assert "Остаток" not in result
+    assert captured_properties["Amount_RUB"] == {"number": 496}
+    assert "Amount_IDR" not in captured_properties
+    assert "Rate" not in captured_properties
+
+
 def test_cleanup_archives_only_incomplete_duplicate(monkeypatch):
     def page(page_id, title, amount_rub, rate):
         return {

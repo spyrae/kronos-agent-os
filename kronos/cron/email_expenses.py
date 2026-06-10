@@ -36,7 +36,7 @@ For each expense found, output JSON:
     {{
       "description": "What was purchased",
       "amount": 123.45,
-      "currency": "IDR|USD|MYR",
+      "currency": "IDR|RUB|USD|MYR",
       "category": "Food|Transport|Shopping|Services|Subscription|Health|Entertainment|Other",
       "date": "2026-03-25",
       "source": "Which email/service"
@@ -145,7 +145,7 @@ def _create_notion_expense(expense: dict) -> bool:
         return False
 
     currency = str(expense.get("currency", "IDR")).upper()
-    if currency != "IDR":
+    if currency not in ("IDR", "RUB"):
         log.info("Skipping email expense with unsupported currency: %s", currency)
         return False
 
@@ -158,7 +158,7 @@ def _create_notion_expense(expense: dict) -> bool:
         {
             "description": str(expense.get("description", "Email expense")),
             "amount": amount,
-            "currency": "IDR",
+            "currency": currency,
             "category": category,
             "date": str(expense.get("date", datetime.now(UTC).strftime("%Y-%m-%d"))),
             "ref": str(expense.get("source", "")) or None,
