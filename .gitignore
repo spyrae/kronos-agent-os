@@ -40,3 +40,6 @@ Thumbs.db
 dashboard-ui/node_modules/
 dashboard-ui/.vite/
 dashboard-ui/dist/
+
+# CodeGraph index
+.codegraph/
