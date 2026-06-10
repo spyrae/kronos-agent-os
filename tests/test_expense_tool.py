@@ -66,7 +66,7 @@ def test_add_expense_updates_budget_after_notion_success(monkeypatch, tmp_path):
     assert "✅ 'Кафе' — 200 IDR = 1 ₽" in result
     assert "| Остаток: 800 IDR" in result
     assert captured_properties["Amount_RUB"] == {"number": 1}
-    assert captured_properties["Rate"] == {"number": 5.0}
+    assert captured_properties["Rate"] == {"number": 200.0}
     assert "| 1 | 01.06.2026 | 1,000 | 800 | 200.0 | Test |" in budget_file.read_text()
 
 

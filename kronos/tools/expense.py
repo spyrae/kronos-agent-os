@@ -218,13 +218,6 @@ def _fifo_calculate(amount_idr: float, tranches: list[dict]) -> tuple[float, flo
     return round(total_rub), effective_rate, tranches
 
 
-def _rate_rub_per_1000_idr(rate_idr_per_rub: float) -> float:
-    """Convert IDR/RUB FIFO rate to Notion's RUB per 1000 IDR rate."""
-    if rate_idr_per_rub <= 0:
-        return 0
-    return round(1000 / rate_idr_per_rub, 2)
-
-
 def _notion_create_page(properties: dict) -> dict:
     """Create a page in Notion Expenses DB. Returns the created page or raises."""
     token = settings.notion_api_key
@@ -341,7 +334,7 @@ def add_expense(
     if amount_rub is not None:
         properties["Amount_RUB"] = {"number": amount_rub}
     if rate_idr_per_rub is not None:
-        properties["Rate"] = {"number": _rate_rub_per_1000_idr(rate_idr_per_rub)}
+        properties["Rate"] = {"number": round(rate_idr_per_rub, 1)}
 
     if ref:
         properties["Ref"] = {"rich_text": [{"text": {"content": ref}}]}
