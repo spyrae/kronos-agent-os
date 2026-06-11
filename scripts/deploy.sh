@@ -28,6 +28,15 @@ fi
 DEPLOY_MODE="${KAOS_DEPLOY_MODE:-remote}"
 REMOTE_DIR="${KAOS_REMOTE_DIR:-/opt/kaos}"
 AGENTS="${KAOS_AGENTS:-kaos}"
+# systemd unit names used for restart/status. These may differ from the
+# agent_name list in KAOS_AGENTS (e.g. the main kronos agent runs as the
+# `kronos-ii` unit). Defaults to KAOS_AGENTS when not set.
+SERVICES="${KAOS_SERVICES:-$AGENTS}"
+# Whether deploy installs app/systemd/* units into /etc/systemd/system. Set
+# false when systemd units are managed outside the deploy (e.g. the kronos-ii
+# install, whose live units don't come from app/systemd/) so the deploy never
+# overwrites them.
+MANAGE_SYSTEMD="${KAOS_MANAGE_SYSTEMD:-true}"
 SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 if [ "$DEPLOY_MODE" != "local" ] && [ "$DEPLOY_MODE" != "remote" ]; then
@@ -45,6 +54,8 @@ echo "=== Deploying Kronos Agent OS ==="
 echo "Mode: $DEPLOY_MODE"
 echo "Target dir: $REMOTE_DIR"
 echo "Agents: $AGENTS"
+echo "Services: $SERVICES"
+echo "Manage systemd: $MANAGE_SYSTEMD"
 
 sync_files() {
   local target
@@ -62,6 +73,7 @@ sync_files() {
   rsync -avz --delete \
     --exclude='.DS_Store' \
     --exclude='.git/' \
+    --exclude='.codegraph/' \
     --exclude='.pytest_cache/' \
     --exclude='.ruff_cache/' \
     --exclude='__pycache__/' \
@@ -84,11 +96,13 @@ target_bash() {
   if [ "$DEPLOY_MODE" = "local" ]; then
     KAOS_REMOTE_DIR="$REMOTE_DIR" \
     KAOS_AGENTS="$AGENTS" \
+    KAOS_SERVICES="$SERVICES" \
+    KAOS_MANAGE_SYSTEMD="$MANAGE_SYSTEMD" \
     KAOS_HEALTH_URL="${KAOS_HEALTH_URL:-}" \
     KAOS_HEALTH_REQUIRED="${KAOS_HEALTH_REQUIRED:-true}" \
     bash -s
   else
-    ssh "$REMOTE" "KAOS_REMOTE_DIR='$REMOTE_DIR' KAOS_AGENTS='$AGENTS' KAOS_HEALTH_URL='${KAOS_HEALTH_URL:-}' KAOS_HEALTH_REQUIRED='${KAOS_HEALTH_REQUIRED:-true}' bash -s"
+    ssh "$REMOTE" "KAOS_REMOTE_DIR='$REMOTE_DIR' KAOS_AGENTS='$AGENTS' KAOS_SERVICES='$SERVICES' KAOS_MANAGE_SYSTEMD='$MANAGE_SYSTEMD' KAOS_HEALTH_URL='${KAOS_HEALTH_URL:-}' KAOS_HEALTH_REQUIRED='${KAOS_HEALTH_REQUIRED:-true}' bash -s"
   fi
 }
 
@@ -170,26 +184,33 @@ else
       fi
     done
 
-    # Update systemd units if changed (replace default User=kronos with actual remote user)
-    REMOTE_USER=$(whoami)
-    for f in app/systemd/*.service app/systemd/*.timer; do
-      [ -f "$f" ] && sudo sed "s/User=kronos/User=$REMOTE_USER/" "$f" | sudo tee "/etc/systemd/system/$(basename "$f")" >/dev/null
-    done
-    sudo systemctl daemon-reload
+    # Update systemd units if changed (replace default User=kronos with actual
+    # remote user). Skipped when KAOS_MANAGE_SYSTEMD=false — for installs whose
+    # live units are managed outside the deploy and don't come from app/systemd/.
+    if [ "${KAOS_MANAGE_SYSTEMD:-true}" = "true" ]; then
+      REMOTE_USER=$(whoami)
+      for f in app/systemd/*.service app/systemd/*.timer; do
+        [ -f "$f" ] && sudo sed "s/User=kronos/User=$REMOTE_USER/" "$f" | sudo tee "/etc/systemd/system/$(basename "$f")" >/dev/null
+      done
+      sudo systemctl daemon-reload
+    else
+      echo "Skipping systemd unit install (KAOS_MANAGE_SYSTEMD=false)."
+    fi
 
     # Reinstall package (in case deps changed)
     app/.venv/bin/python -m pip install -e "app/." --quiet 2>/dev/null || true
 
-    # Restart all agents
+    # Restart all agents (systemd unit names from KAOS_SERVICES, which may
+    # differ from the agent_name list used for the safety checks above).
     echo "Restarting all agents..."
-    sudo systemctl restart $KAOS_AGENTS
+    sudo systemctl restart ${KAOS_SERVICES:-$KAOS_AGENTS}
 
     sleep 3
 
     # Verify all agents are running
     echo ""
     echo "Agent status:"
-    for svc in $KAOS_AGENTS; do
+    for svc in ${KAOS_SERVICES:-$KAOS_AGENTS}; do
       if ! STATUS=$(systemctl is-active "$svc"); then
         echo "  $svc: $STATUS"
         echo ""
