@@ -7,13 +7,16 @@
 #   team     — Team workspace
 #
 # Tokens are loaded from env vars: NOTION_TOKEN_PERSONAL, NOTION_TOKEN_TEAM
-# Fallback: load from /opt/kaos/app/.env if the file exists
+# Fallback: load from the app's .env (resolved relative to this script).
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Load .env if tokens not already in environment
 if [ -z "${NOTION_TOKEN_PERSONAL:-}" ] || [ -z "${NOTION_TOKEN_TEAM:-}" ]; then
-  if [ -f /opt/kaos/app/.env ]; then
+  if [ -f "$APP_DIR/.env" ]; then
     # shellcheck disable=SC1091
-    source /opt/kaos/app/.env 2>/dev/null || true
+    source "$APP_DIR/.env" 2>/dev/null || true
   fi
 fi
 
@@ -34,7 +37,7 @@ if [ -z "$NOTION_KEY" ]; then
   if [ -z "${WORKSPACES[$WORKSPACE]+x}" ]; then
     echo "ERROR: Unknown workspace '$WORKSPACE'. Available: ${!WORKSPACES[*]}"
   else
-    echo "ERROR: Token for workspace '$WORKSPACE' is not set. Set NOTION_TOKEN_${WORKSPACE^^} env var or add it to /opt/kaos/app/.env"
+    echo "ERROR: Token for workspace '$WORKSPACE' is not set. Set NOTION_TOKEN_${WORKSPACE^^} env var or add it to $APP_DIR/.env"
   fi
   exit 1
 fi
@@ -148,7 +151,7 @@ case "$1" in
     echo "  -w team       Team workspace"
     echo ""
     echo "Tokens: set NOTION_TOKEN_PERSONAL and NOTION_TOKEN_TEAM in env"
-    echo "  or add them to /opt/kaos/app/.env"
+    echo "  or add them to $APP_DIR/.env"
     echo ""
     echo "Commands:"
     echo "  search <query>                    Search pages and databases"

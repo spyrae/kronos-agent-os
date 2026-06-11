@@ -2,7 +2,7 @@
 # Setup .env files for optional swarm agents.
 # Run once on the server after initial deploy.
 #
-# Usage: cd /opt/kaos/app && bash scripts/setup-agents.sh
+# Usage: bash scripts/setup-agents.sh   (run from the app dir)
 #
 # Prerequisites:
 #   - .env already exists with shared keys (LLM, MCP, etc.)
@@ -10,7 +10,8 @@
 
 set -euo pipefail
 
-APP_DIR="/opt/kaos/app"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BASE_ENV="$APP_DIR/.env"
 
 if [ ! -f "$BASE_ENV" ]; then

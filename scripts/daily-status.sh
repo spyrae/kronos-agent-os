@@ -7,22 +7,33 @@
 
 set -uo pipefail
 
+# Resolve the install dir relative to this script (works on any deploy path).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Main agent systemd unit name. Generic default; override via KAOS_MAIN_UNIT.
+MAIN_UNIT="${KAOS_MAIN_UNIT:-kaos}"
+
 # NTFY config (loaded from .env if available)
-if [ -f /opt/kaos/app/.env ]; then
+if [ -f "$APP_DIR/.env" ]; then
   # shellcheck disable=SC1091
-  source /opt/kaos/app/.env 2>/dev/null || true
+  source "$APP_DIR/.env" 2>/dev/null || true
 fi
+MAIN_UNIT="${KAOS_MAIN_UNIT:-$MAIN_UNIT}"
 NTFY_URL="${NTFY_URL:-${NTFY_URL:-https://ntfy.sh}}"
 NTFY_TOKEN="${NTFY_TOKEN:-}"
 NTFY_TOPIC="${NTFY_TOPIC:-persona-alerts}"
 
+# Audit log path — matches kronos.audit (Path(db_path).parent/logs); override via env.
+AUDIT_LOG="${KAOS_AUDIT_LOG:-$APP_DIR/data/logs/audit.jsonl}"
+
 # --- Gather data ---
 
 # Service status
-service_status=$(systemctl is-active kaos 2>/dev/null || echo "unknown")
+service_status=$(systemctl is-active "$MAIN_UNIT" 2>/dev/null || echo "unknown")
 
 # Service uptime (from systemd ActiveEnterTimestamp)
-service_started=$(systemctl show kaos --property=ActiveEnterTimestamp --value 2>/dev/null || echo "")
+service_started=$(systemctl show "$MAIN_UNIT" --property=ActiveEnterTimestamp --value 2>/dev/null || echo "")
 if [ -n "$service_started" ] && [ "$service_started" != "n/a" ]; then
   started_ts=$(date -d "$service_started" +%s 2>/dev/null) || started_ts=0
   now_ts=$(date +%s)
@@ -73,10 +84,10 @@ else
 fi
 
 # Recent service restarts (last 24h)
-service_restarts=$(journalctl -u kaos --since "24 hours ago" 2>/dev/null | grep -c "Started\|Stopped" 2>/dev/null) || service_restarts=0
+service_restarts=$(journalctl -u "$MAIN_UNIT" --since "24 hours ago" 2>/dev/null | grep -c "Started\|Stopped" 2>/dev/null) || service_restarts=0
 
 # Audit log stats (if available)
-audit_log="/opt/kaos/data/audit.jsonl"
+audit_log="$AUDIT_LOG"
 audit_stats="N/A"
 if [ -f "$audit_log" ]; then
   audit_today=$(grep "$(date -u +%Y-%m-%d)" "$audit_log" 2>/dev/null | wc -l | tr -d ' ')
@@ -97,7 +108,7 @@ report=$(cat <<EOF
 Kronos Agent OS Daily Status [$status_word]
 
 Services:
-  kaos: $service_status
+  $MAIN_UNIT: $service_status
   Bridge (8788): $bridge_health
   Dashboard (8789): $dashboard_health
 

@@ -2,9 +2,13 @@
 # security-audit.sh — Kronos Agent OS Security Audit Report
 # Usage: security-audit.sh [today|week|all]
 
-SECURITY_LOG="/opt/kaos/data/security.jsonl"
-AUDIT_LOG="/opt/kaos/data/audit.jsonl"
-WORKSPACE_PATH="/opt/kaos/workspace"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+MAIN_UNIT="${KAOS_MAIN_UNIT:-kaos}"
+LOG_DIR="${KAOS_LOG_DIR:-$APP_DIR/data/logs}"
+SECURITY_LOG="$LOG_DIR/security.jsonl"
+AUDIT_LOG="$LOG_DIR/audit.jsonl"
+WORKSPACE_PATH="${KAOS_WORKSPACE_SRC:-$APP_DIR/workspaces}"
 
 PERIOD="${1:-today}"
 TODAY=$(date -u +%Y-%m-%d)
@@ -102,10 +106,10 @@ echo ""
 echo "▸ System Checks"
 
 # Check services
-echo -n "  kaos:         "
-systemctl is-active kaos 2>/dev/null || echo "UNKNOWN"
-echo -n "  heartbeat timer:   "
-systemctl is-active kronos-heartbeat.timer 2>/dev/null || echo "UNKNOWN"
+echo -n "  $MAIN_UNIT:         "
+systemctl is-active "$MAIN_UNIT" 2>/dev/null || echo "UNKNOWN"
+echo -n "  health timer:   "
+systemctl is-active kronos-health.timer 2>/dev/null || echo "UNKNOWN"
 
 # Check API keys exposed in workspace
 echo ""
@@ -120,7 +124,7 @@ fi
 # Check log sizes
 echo ""
 echo "▸ Log Sizes"
-for logfile in "$SECURITY_LOG" "$AUDIT_LOG" "/opt/kaos/data/router-cost.jsonl"; do
+for logfile in "$SECURITY_LOG" "$AUDIT_LOG" "$LOG_DIR/router-cost.jsonl"; do
   if [ -f "$logfile" ]; then
     SIZE=$(du -h "$logfile" | cut -f1)
     LINES=$(wc -l < "$logfile")

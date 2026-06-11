@@ -8,7 +8,7 @@ Usage:
     contact-profiler.py --chat @username [--limit 300] [--dry-run] [--no-notify]
 
 Environment:
-    WORKSPACE           Workspace dir (default: /opt/kaos/app/workspace)
+    WORKSPACE           Workspace dir (default: <app>/workspace)
     BRIDGE_URL          Bridge HTTP URL (default: http://127.0.0.1:8788)
     WEBHOOK_SECRET      Auth secret for bridge
     DEEPSEEK_API_KEY    DeepSeek API key
@@ -35,7 +35,7 @@ from kronos.security.sanitize import sanitize_text, detect_injection, wrap_untru
 
 # --- Config ---
 
-WORKSPACE = Path(os.environ.get("WORKSPACE", "/opt/kaos/workspace"))
+WORKSPACE = Path(os.environ.get("WORKSPACE", str(Path(__file__).resolve().parent.parent / "workspace")))
 CONTACTS_DIR = WORKSPACE / "notes" / "world" / "contacts"
 BRIDGE_URL = os.environ.get("BRIDGE_URL", "http://127.0.0.1:8788")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
