@@ -56,12 +56,13 @@ Production deploys can run through a self-hosted GitHub Actions runner on the
 target server. The runner should be registered to the repository with the label
 `kaos-deploy`.
 
-Current target:
+Register the runner on the target server, then configure it (values are
+install-specific):
 
 ```text
-roman@178.105.30.82
-runner: fkv-kaos-deploy
-labels: self-hosted, kaos-deploy, linux, x64
+host:        <user>@<your-server>
+runner:      <your-runner-name>
+labels:      self-hosted, kaos-deploy, linux, x64
 deploy root: /opt/kaos
 ```
 

@@ -12,14 +12,25 @@ set -uo pipefail
 VERBOSE="${1:-}"
 ALERT="${2:-}"
 
+# Resolve the install dir relative to this script so the checks work on any
+# deployment path without hardcoding it.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Main agent systemd unit name. Generic default; override via KAOS_MAIN_UNIT in
+# the environment / .env (e.g. KAOS_MAIN_UNIT=kronos-ii) when the unit is named
+# differently than the public default.
+MAIN_UNIT="${KAOS_MAIN_UNIT:-kaos}"
+
 WEBHOOK_URL="${REMINDER_WEBHOOK_URL:-http://127.0.0.1:8788/webhook}"
 WEBHOOK_SECRET="${WEBHOOK_SECRET:-}"
 
 # NTFY config (loaded from .env if available)
-if [ -f /opt/kaos/app/.env ]; then
+if [ -f "$APP_DIR/.env" ]; then
   # shellcheck disable=SC1091
-  source /opt/kaos/app/.env 2>/dev/null || true
+  source "$APP_DIR/.env" 2>/dev/null || true
 fi
+MAIN_UNIT="${KAOS_MAIN_UNIT:-$MAIN_UNIT}"
 NTFY_URL="${NTFY_URL:-${NTFY_URL:-https://ntfy.sh}}"
 NTFY_TOKEN="${NTFY_TOKEN:-}"
 NTFY_TOPIC="${NTFY_TOPIC:-persona-alerts}"
@@ -54,12 +65,19 @@ check_warn() {
   warnings+=("$1")
 }
 
-# --- Check 1: kaos systemd service ---
-service_active=$(systemctl is-active kaos 2>/dev/null)
+# --- Check 1: main agent systemd service ---
+service_active=$(systemctl is-active "$MAIN_UNIT" 2>/dev/null)
 if [ "$service_active" = "active" ]; then
-  check_pass "kaos service active"
+  check_pass "$MAIN_UNIT service active"
 else
-  check_fail "kaos service: ${service_active:-unknown}"
+  # The configured unit name may differ from this install's actual unit. The
+  # bridge /health endpoint is the authoritative liveness signal, so treat a
+  # name mismatch with a healthy bridge as a warning, not a failure.
+  if curl -sf --max-time 5 "$BRIDGE_HEALTH" 2>/dev/null | grep -q '"status".*"ok"'; then
+    check_warn "$MAIN_UNIT service not active, but bridge is healthy (set KAOS_MAIN_UNIT to this install's unit name)"
+  else
+    check_fail "$MAIN_UNIT service: ${service_active:-unknown}"
+  fi
 fi
 
 # --- Check 2: Bridge health endpoint (port 8788) ---

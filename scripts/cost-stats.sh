@@ -2,8 +2,11 @@
 # cost-stats.sh — Show LLM cost statistics from audit log
 # Usage: cost-stats.sh [today|week|all]
 
-COST_LOG="/opt/kaos/data/logs/cost.jsonl"
-AUDIT_LOG="/opt/kaos/data/logs/audit.jsonl"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+LOG_DIR="${KAOS_LOG_DIR:-$APP_DIR/data/logs}"
+COST_LOG="$LOG_DIR/cost.jsonl"
+AUDIT_LOG="$LOG_DIR/audit.jsonl"
 
 if [ ! -f "$COST_LOG" ]; then
   echo "No cost log found at $COST_LOG"

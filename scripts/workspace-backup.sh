@@ -1,19 +1,25 @@
 #!/bin/bash
 # workspace-backup.sh — Auto-backup workspace files to Git
-# Commits workspace changes in /opt/kaos/app/ repo and pushes.
+# Commits workspace changes in the app repo and pushes.
 #
 # Usage: workspace-backup.sh
 # Designed to run via cron every 6 hours
 
 set -uo pipefail
 
-WORKSPACE_SRC="/opt/kaos/workspace"
-REPO_DIR="/opt/kaos/app"
+# Resolve the install dir relative to this script (works on any deploy path).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Git repo to commit into = the app dir; workspace source defaults to the
+# per-agent workspaces dir. Override either via env.
+REPO_DIR="${KAOS_REPO_DIR:-$APP_DIR}"
+WORKSPACE_SRC="${KAOS_WORKSPACE_SRC:-$APP_DIR/workspaces}"
 
 # NTFY config
-if [ -f /opt/kaos/app/.env ]; then
+if [ -f "$APP_DIR/.env" ]; then
   # shellcheck disable=SC1091
-  source /opt/kaos/app/.env 2>/dev/null || true
+  source "$APP_DIR/.env" 2>/dev/null || true
 fi
 NTFY_URL="${NTFY_URL:-${NTFY_URL:-https://ntfy.sh}}"
 NTFY_TOKEN="${NTFY_TOKEN:-}"

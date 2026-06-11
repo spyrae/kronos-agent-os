@@ -12,8 +12,8 @@ Usage:
     recall.py stats              — show index statistics
 
 Environment:
-    AUDIT_LOG           Audit log path (default: /opt/kaos/data/audit.jsonl)
-    DB_PATH             SQLite database path (default: /opt/kaos/data/recall.db)
+    AUDIT_LOG           Audit log path (default: <app>/data/logs/audit.jsonl)
+    DB_PATH             SQLite database path (default: <app>/data/recall.db)
     DEEPSEEK_API_KEY    DeepSeek API key (for --summarize)
     RECALL_LOG          Log file (default: /var/log/kaos/recall.log)
 """
@@ -30,8 +30,9 @@ from pathlib import Path
 
 # --- Config ---
 
-AUDIT_LOG = Path(os.environ.get("AUDIT_LOG", "/opt/kaos/data/audit.jsonl"))
-DB_PATH = Path(os.environ.get("DB_PATH", "/opt/kaos/data/recall.db"))
+_APP_DIR = Path(__file__).resolve().parent.parent  # scripts/ -> app/
+AUDIT_LOG = Path(os.environ.get("AUDIT_LOG", str(_APP_DIR / "data" / "logs" / "audit.jsonl")))
+DB_PATH = Path(os.environ.get("DB_PATH", str(_APP_DIR / "data" / "recall.db")))
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 LOG_FILE = os.environ.get("RECALL_LOG", "/var/log/kaos/recall.log")
 
