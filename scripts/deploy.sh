@@ -32,10 +32,12 @@ AGENTS="${KAOS_AGENTS:-kaos}"
 # agent_name list in KAOS_AGENTS (e.g. the main kronos agent runs as the
 # `kronos-ii` unit). Defaults to KAOS_AGENTS when not set.
 SERVICES="${KAOS_SERVICES:-$AGENTS}"
-# Whether deploy installs app/systemd/* units into /etc/systemd/system. Set
-# false when systemd units are managed outside the deploy (e.g. the kronos-ii
-# install, whose live units don't come from app/systemd/) so the deploy never
-# overwrites them.
+# Whether deploy installs app/systemd/* units into /etc/systemd/system. The
+# units in app/systemd/ are generic: they use the /opt/kaos placeholder path
+# and User=kronos. On install the deploy rewrites /opt/kaos -> KAOS_REMOTE_DIR
+# and User=kronos -> the remote user, so the public units land correctly on any
+# install dir (incl. /opt/kronos-ii). Set false only when units are fully
+# provisioned outside the deploy (e.g. hand-managed per-agent named units).
 MANAGE_SYSTEMD="${KAOS_MANAGE_SYSTEMD:-true}"
 SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -137,10 +139,14 @@ PY
     app/.venv/bin/pip install -e "app/.[dev]"
     app/.venv/bin/pip install edge-tts
 
-    # Install systemd units (replace default User=kronos with actual remote user)
+    # Install systemd units: rewrite the generic /opt/kaos placeholder to this
+    # install's KAOS_REMOTE_DIR and the User=kronos placeholder to the remote user.
     REMOTE_USER=$(whoami)
     for f in app/systemd/*.service app/systemd/*.timer; do
-      sudo sed "s/User=kronos/User=$REMOTE_USER/" "$f" | sudo tee "/etc/systemd/system/$(basename "$f")" >/dev/null
+      sudo sed \
+        -e "s/User=kronos/User=$REMOTE_USER/" \
+        -e "s|/opt/kaos|$KAOS_REMOTE_DIR|g" \
+        "$f" | sudo tee "/etc/systemd/system/$(basename "$f")" >/dev/null
     done
     sudo systemctl daemon-reload
 
@@ -184,13 +190,19 @@ else
       fi
     done
 
-    # Update systemd units if changed (replace default User=kronos with actual
-    # remote user). Skipped when KAOS_MANAGE_SYSTEMD=false — for installs whose
-    # live units are managed outside the deploy and don't come from app/systemd/.
+    # Install/update systemd units: rewrite the generic /opt/kaos placeholder to
+    # this install's KAOS_REMOTE_DIR and the User=kronos placeholder to the
+    # remote user. The generic public units (kaos.service, ops .service/.timer)
+    # thus land with correct absolute paths on any install dir. Hand-managed
+    # per-agent named units (not in the repo) are left untouched.
+    # Skipped when KAOS_MANAGE_SYSTEMD=false.
     if [ "${KAOS_MANAGE_SYSTEMD:-true}" = "true" ]; then
       REMOTE_USER=$(whoami)
       for f in app/systemd/*.service app/systemd/*.timer; do
-        [ -f "$f" ] && sudo sed "s/User=kronos/User=$REMOTE_USER/" "$f" | sudo tee "/etc/systemd/system/$(basename "$f")" >/dev/null
+        [ -f "$f" ] && sudo sed \
+          -e "s/User=kronos/User=$REMOTE_USER/" \
+          -e "s|/opt/kaos|$KAOS_REMOTE_DIR|g" \
+          "$f" | sudo tee "/etc/systemd/system/$(basename "$f")" >/dev/null
       done
       sudo systemctl daemon-reload
     else
