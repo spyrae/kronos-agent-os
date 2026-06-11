@@ -37,7 +37,9 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.people_scout import run_people_scout
     from kronos.cron.self_improve import run_self_improve
     from kronos.cron.signal_ideas import run_ideas_digest
-    from kronos.cron.signal_jobs import run_jobs_digest
+
+    # DISABLED 2026-06-11: job-search digest paused (see registration below).
+    # from kronos.cron.signal_jobs import run_jobs_digest
     from kronos.cron.signal_travel import run_travel_insights_digest
     from kronos.cron.skill_improve import run_skill_improve
     from kronos.cron.sleep_compute import run_sleep_compute
@@ -56,8 +58,12 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # Group Digest — daily at 01:00 UTC (09:00 UTC+8)
     scheduler.add_daily("group-digest", run_group_digest, hour_utc=1)
 
-    # Jobs Digest — daily at 02:00 UTC (dedicated Signal Intelligence topic)
-    scheduler.add_daily("signal-jobs", run_jobs_digest, hour_utc=2)
+    # Jobs Digest — daily at 02:00 UTC (dedicated Signal Intelligence topic).
+    # DISABLED 2026-06-11: paused — job-search signals are not being collected
+    # for now. The pipeline, config fields and Telegram topic stay intact.
+    # To re-enable: uncomment the import above + this line, bump the job count
+    # below back to 16, then restart the kronos agent.
+    # scheduler.add_daily("signal-jobs", run_jobs_digest, hour_utc=2)
 
     # Product/Business Ideas — daily at 04:00 UTC (dedicated topic)
     scheduler.add_daily("signal-ideas", run_ideas_digest, hour_utc=4)
@@ -118,5 +124,5 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
         nexus_jobs_registered = 5
 
-    total = 16 + nexus_jobs_registered
+    total = 15 + nexus_jobs_registered  # 16 base jobs; signal-jobs paused (-1)
     log.info("%d cron jobs registered for agent '%s'", total, me)
