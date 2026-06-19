@@ -63,7 +63,7 @@ install-specific):
 host:        <user>@<your-server>
 runner:      <your-runner-name>
 labels:      self-hosted, kaos-deploy, linux, x64
-deploy root: /opt/kaos
+deploy root: <install-dir> (passed as KAOS_REMOTE_DIR)
 ```
 
 Use **Actions -> Deploy -> Run workflow**.
@@ -82,6 +82,10 @@ The workflow runs `scripts/deploy.sh` with `KAOS_DEPLOY_MODE=local`, so no SSH
 private key is needed in GitHub. Runtime state is preserved: `.env`, `.env.*`,
 `data/`, `workspaces/`, `.venv/`, and `*.session` are excluded from rsync.
 
+Set the workflow `remote_dir` input to the install root on the target host. The
+deploy script receives it as `KAOS_REMOTE_DIR` and syncs code into
+`$KAOS_REMOTE_DIR/app`.
+
 For renamed installs, set `KAOS_SERVICES` to the real systemd unit names and
 `KAOS_MAIN_UNIT` to the main agent service. Deploy rewrites ops unit
 dependencies from the public template `After=kaos.service` to
@@ -91,7 +95,7 @@ are left untouched. Set `KAOS_MANAGE_SYSTEMD=false` to skip all systemd unit
 installation.
 
 `KAOS_REMOTE_DIR` must be an absolute path using only `[A-Za-z0-9/_.-]`
-(for example `/opt/kronos-ii`) because deploy rewrites systemd templates with
+(for example `/srv/kaos`) because deploy rewrites systemd templates with
 that path before installation.
 
 After every deploy, the workflow checks service state. If deploy fails, it prints
@@ -148,7 +152,34 @@ Enable these only in trusted deployments.
 
 ## Systemd
 
-Example single-agent unit:
+The files in `systemd/` are public templates. They intentionally contain
+`/opt/kaos` and `User=kronos` placeholders so `scripts/deploy.sh` can rewrite
+them to the target install dir and runtime user before installation. Do not
+copy those templates raw on non-`/opt/kaos` installs.
+
+Recommended install/update flow:
+
+```bash
+export KAOS_DEPLOY_MODE=local
+export KAOS_REMOTE_DIR=<install-dir>
+export KAOS_AGENTS="kaos"
+export KAOS_SERVICES="kaos"
+export KAOS_MAIN_UNIT="kaos"
+bash scripts/deploy.sh --first-run
+```
+
+For a remote host, put `KAOS_DEPLOY_MODE=remote`, `KAOS_REMOTE=<user>@<host>`,
+and `KAOS_REMOTE_DIR=<install-dir>` in `.env`, then run:
+
+```bash
+bash scripts/deploy.sh --first-run
+```
+
+If systemd units are provisioned by another tool (Ansible, Nix, Terraform, or
+hand-managed renamed units), set `KAOS_MANAGE_SYSTEMD=false`. Deploy will still
+sync code and install Python dependencies, but it will not install templates.
+
+Equivalent single-agent unit after rewrite:
 
 ```ini
 [Unit]
@@ -158,21 +189,26 @@ After=network.target
 [Service]
 Type=simple
 User=kaos
-WorkingDirectory=/opt/kaos/app
-ExecStart=/opt/kaos/app/.venv/bin/python -m kronos
+WorkingDirectory=<install-dir>/app
+ExecStart=<install-dir>/app/.venv/bin/python -m kronos
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=/opt/kaos/app/.env
+EnvironmentFile=<install-dir>/app/.env
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Install/update:
+Manual installs must rewrite both the install dir and runtime user before
+copying units to `/etc/systemd/system`. The deploy script already does this and
+also rewrites ops dependencies such as `After=kaos.service` to
+`After=$KAOS_MAIN_UNIT`.
+
+Manual package update when units are already managed elsewhere:
 
 ```bash
-cd /opt/kaos/app
+cd <install-dir>/app
 python3 -m venv .venv
 .venv/bin/pip install -e ".[memory]"
 sudo systemctl restart kaos
@@ -194,12 +230,12 @@ The shared swarm ledger is configured by:
 SWARM_DB_PATH=./data/swarm.db
 ```
 
-For systemd-managed sub-agents, copy the template unit and create one private
-env file per agent:
+For systemd-managed sub-agents, create one private env file per agent and let
+deploy install/rewrite the template units:
 
 ```bash
-sudo cp systemd/kaos@.service /etc/systemd/system/
-sudo systemctl daemon-reload
+export KAOS_MANAGE_SYSTEMD=true
+bash scripts/deploy.sh --first-run
 sudo systemctl enable --now kaos@kaos-worker
 ```
 
@@ -209,7 +245,7 @@ Server operations are disabled by default. To enable:
 
 ```bash
 ENABLE_SERVER_OPS=true
-SERVER_REGISTRY_PATH=/opt/kaos/servers.yaml
+SERVER_REGISTRY_PATH=<install-dir>/app/servers.yaml
 ```
 
 Use `servers.example.yaml` as the template. Keep `servers.yaml` private and gitignored.
@@ -225,7 +261,27 @@ curl http://127.0.0.1:8789/api/health
 ## Data Layout
 
 ```text
-/opt/kaos/
+<install-dir>/
+└── app/
+    ├── kronos/
+    ├── dashboard/
+    ├── dashboard-ui/
+    ├── workspaces/          # local runtime state
+    │   └── _template/       # public starter template
+    ├── data/
+    │   ├── <agent>/session.db
+    │   ├── <agent>/memory_fts.db
+    │   ├── <agent>/knowledge_graph.db
+    │   └── swarm.db
+    ├── .env
+    ├── agents.yaml
+    └── servers.yaml
+```
+
+Default in-repo/local layout:
+
+```text
+app/
 ├── kronos/
 ├── dashboard/
 ├── dashboard-ui/

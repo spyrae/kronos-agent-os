@@ -19,15 +19,15 @@ DEPLOY_MODE="${KAOS_DEPLOY_MODE:-remote}"
 REMOTE_DIR="${KAOS_REMOTE_DIR:-/opt/kaos}"
 AGENTS="${KAOS_AGENTS:-kaos}"
 # systemd unit names used for restart/status. These may differ from the
-# agent_name list in KAOS_AGENTS (e.g. the main kronos agent runs as the
-# `kronos-ii` unit). Defaults to KAOS_AGENTS when not set.
+# agent_name list in KAOS_AGENTS (e.g. a main agent can run as a renamed
+# systemd unit). Defaults to KAOS_AGENTS when not set.
 SERVICES="${KAOS_SERVICES:-$AGENTS}"
 MAIN_UNIT="${KAOS_MAIN_UNIT:-${SERVICES%% *}}"
 # Whether deploy installs app/systemd/* units into /etc/systemd/system. The
 # units in app/systemd/ are generic: they use the /opt/kaos placeholder path
 # and User=kronos. On install the deploy rewrites /opt/kaos -> KAOS_REMOTE_DIR
 # and User=kronos -> the remote user, so the public units land correctly on any
-# install dir (incl. /opt/kronos-ii). Set false only when units are fully
+# install dir (incl. /srv/kaos). Set false only when units are fully
 # provisioned outside the deploy (e.g. hand-managed per-agent named units).
 MANAGE_SYSTEMD="${KAOS_MANAGE_SYSTEMD:-true}"
 SOURCE_DIR="$KAOS_APP_DIR"
@@ -39,13 +39,13 @@ fail() {
 
 validate_remote_dir() {
   if [ -z "$REMOTE_DIR" ]; then
-    fail "KAOS_REMOTE_DIR must not be empty. Example: /opt/kronos-ii"
+    fail "KAOS_REMOTE_DIR must not be empty. Example: /srv/kaos"
   fi
   if [[ "$REMOTE_DIR" != /* ]]; then
-    fail "KAOS_REMOTE_DIR must be an absolute path. Example: /opt/kronos-ii"
+    fail "KAOS_REMOTE_DIR must be an absolute path. Example: /srv/kaos"
   fi
   if [[ ! "$REMOTE_DIR" =~ ^/[A-Za-z0-9/_.-]+$ ]]; then
-    fail "KAOS_REMOTE_DIR contains unsafe characters for systemd template rewrite: '$REMOTE_DIR'. Allowed: [A-Za-z0-9/_.-], example: /opt/kronos-ii"
+    fail "KAOS_REMOTE_DIR contains unsafe characters for systemd template rewrite: '$REMOTE_DIR'. Allowed: [A-Za-z0-9/_.-], example: /srv/kaos"
   fi
 }
 

@@ -155,8 +155,8 @@ def test_deploy_rewrites_ops_after_and_skips_generic_main_on_renamed_install(tmp
             "PATH": f"{_fake_bin(tmp_path)}:{env['PATH']}",
             "KAOS_REMOTE_DIR": str(remote_dir),
             "KAOS_AGENTS": "kronos",
-            "KAOS_SERVICES": "kronos-ii impulse",
-            "KAOS_MAIN_UNIT": "kronos-ii",
+            "KAOS_SERVICES": "kaos-main worker",
+            "KAOS_MAIN_UNIT": "kaos-main",
             "KAOS_MANAGE_SYSTEMD": "true",
             "FAKE_SUDO_LOG": str(sudo_log),
             "FAKE_PIP_LOG": str(tmp_path / "pip.log"),
@@ -176,10 +176,10 @@ def test_deploy_rewrites_ops_after_and_skips_generic_main_on_renamed_install(tmp
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "Skipping kaos.service install (KAOS_SERVICES does not include kaos; main unit: kronos-ii)." in result.stdout
+    assert "Skipping kaos.service install (KAOS_SERVICES does not include kaos; main unit: kaos-main)." in result.stdout
     assert not (systemd_out / "kaos.service").exists()
     installed_health = (systemd_out / "kronos-health.service").read_text(encoding="utf-8")
-    assert "After=kronos-ii" in installed_health
+    assert "After=kaos-main" in installed_health
     assert "After=kaos.service" not in installed_health
     assert f"ExecStart={remote_dir}/app/scripts/health-check.sh" in installed_health
     assert "systemctl daemon-reload" in sudo_log.read_text(encoding="utf-8")
@@ -212,7 +212,7 @@ def test_deploy_rejects_unsafe_remote_dir_before_sync_or_systemd(tmp_path: Path)
 
     assert result.returncode == 1
     assert "KAOS_REMOTE_DIR contains unsafe characters" in result.stderr
-    assert "Allowed: [A-Za-z0-9/_.-], example: /opt/kronos-ii" in result.stderr
+    assert "Allowed: [A-Za-z0-9/_.-], example: /srv/kaos" in result.stderr
     assert not sudo_log.exists()
     assert not rsync_log.exists()
 
@@ -268,11 +268,19 @@ def test_deploy_uses_common_env_precedence_before_resolving(tmp_path: Path) -> N
 def test_deploy_docs_document_renamed_install_contract() -> None:
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
     deployment = (ROOT / "docs" / "DEPLOYMENT.md").read_text(encoding="utf-8")
+    setup_agents = (ROOT / "scripts" / "setup-agents.sh").read_text(encoding="utf-8")
 
-    assert "KAOS_MAIN_UNIT=kronos-ii" in env_example
+    assert "KAOS_MAIN_UNIT=kaos" in env_example
     assert "defaults to first KAOS_SERVICES item" in env_example
+    assert "KAOS_BACKUP_REPO_DIR=" in env_example
+    assert "KAOS_LOG_DIR=" in env_example
     assert "After=$KAOS_MAIN_UNIT" in deployment
     assert "kaos.service` template is installed only" in deployment
     assert "KAOS_MANAGE_SYSTEMD=false" in deployment
     assert "`KAOS_REMOTE_DIR` must be an absolute path" in deployment
     assert "[A-Za-z0-9/_.-]" in deployment
+    assert "copy those templates raw" in deployment.lower()
+    assert "cp systemd/kaos@.service" not in deployment
+    assert "cp systemd/kaos@.service" not in setup_agents
+    assert "KAOS_MANAGE_SYSTEMD=true bash scripts/deploy.sh --first-run" in setup_agents
+    assert "deploy root: <install-dir>" in deployment
