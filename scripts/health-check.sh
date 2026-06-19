@@ -34,25 +34,18 @@ done
 # Resolve the install dir relative to this script so the checks work on any
 # deployment path without hardcoding it.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_DIR="${KAOS_APP_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+# shellcheck source=scripts/_common.sh
+source "$SCRIPT_DIR/_common.sh"
+kaos_common_init
+APP_DIR="$KAOS_APP_DIR"
 
 # Main agent systemd unit name. Generic default; override via KAOS_MAIN_UNIT in
 # the environment / .env (e.g. KAOS_MAIN_UNIT=kronos-ii) when the unit is named
 # differently than the public default.
-MAIN_UNIT="${KAOS_MAIN_UNIT:-kaos}"
+MAIN_UNIT="$KAOS_MAIN_UNIT_RESOLVED"
 
 WEBHOOK_URL="${REMINDER_WEBHOOK_URL:-http://127.0.0.1:8788/webhook}"
 WEBHOOK_SECRET="${WEBHOOK_SECRET:-}"
-
-# NTFY config (loaded from .env if available)
-if [ -f "$APP_DIR/.env" ]; then
-  # shellcheck disable=SC1091
-  source "$APP_DIR/.env" 2>/dev/null || true
-fi
-MAIN_UNIT="${KAOS_MAIN_UNIT:-$MAIN_UNIT}"
-NTFY_URL="${NTFY_URL:-${NTFY_URL:-https://ntfy.sh}}"
-NTFY_TOKEN="${NTFY_TOKEN:-}"
-NTFY_TOPIC="${NTFY_TOPIC:-persona-alerts}"
 
 BRIDGE_HEALTH="http://127.0.0.1:8788/health"
 DASHBOARD_HEALTH="http://127.0.0.1:8789/api/health"

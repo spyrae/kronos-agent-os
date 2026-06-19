@@ -8,33 +8,15 @@
 #   DB_DIR -> DB_DIR/logs
 #   otherwise -> data/${KAOS_AGENT_NAME:-${AGENT_NAME:-kronos}}/logs
 
+# shellcheck source=scripts/_common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
+
 kaos_init_env() {
-  if [ -n "${KAOS_ENV_INITIALIZED:-}" ]; then
+  if [ -n "${KAOS_COMMON_INITIALIZED:-}" ]; then
     return 0
   fi
 
-  if [ -z "${KAOS_APP_DIR:-}" ]; then
-    local resolver_dir
-    resolver_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    KAOS_APP_DIR="$(cd "$resolver_dir/.." && pwd)"
-  fi
-
-  if [ -f "$KAOS_APP_DIR/.env" ]; then
-    # shellcheck disable=SC1091
-    source "$KAOS_APP_DIR/.env" 2>/dev/null || true
-  fi
-
-  KAOS_MAIN_UNIT_RESOLVED="${KAOS_MAIN_UNIT:-kaos}"
-  KAOS_ENV_INITIALIZED=1
-}
-
-kaos_abs_path() {
-  local path="$1"
-  if [[ "$path" = /* ]]; then
-    (cd "$(dirname "$path")" 2>/dev/null && printf '%s/%s\n' "$(pwd -P)" "$(basename "$path")") || printf '%s\n' "$path"
-  else
-    printf '%s/%s\n' "$KAOS_APP_DIR" "$path"
-  fi
+  kaos_common_init
 }
 
 kaos_resolve_log_sources() {
@@ -53,7 +35,7 @@ kaos_resolve_log_sources() {
     return 0
   fi
 
-  local agent_name="${KAOS_AGENT_NAME:-${AGENT_NAME:-kronos}}"
+  local agent_name="$KAOS_AGENT_NAME_RESOLVED"
   local mode="${KAOS_LOG_MODE:-}"
   if [ "$mode" = "aggregate" ] || [ "$mode" = "all" ] || [ "$agent_name" = "all" ]; then
     KAOS_LOG_MODE_RESOLVED="aggregate"

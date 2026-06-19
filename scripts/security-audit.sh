@@ -8,15 +8,8 @@ APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/_log_resolver.sh"
 kaos_init_env
 APP_DIR="$KAOS_APP_DIR"
-MAIN_UNIT="${KAOS_MAIN_UNIT:-kaos}"
+MAIN_UNIT="$KAOS_MAIN_UNIT_RESOLVED"
 kaos_resolve_log_sources
-resolve_app_relative_path() {
-  case "$1" in
-    /*) printf '%s\n' "$1" ;;
-    *) printf '%s\n' "$APP_DIR/$1" ;;
-  esac
-}
-
 SECURITY_ARGS=()
 AUDIT_ARGS=()
 for i in "${!KAOS_LOG_DIRS[@]}"; do
@@ -29,11 +22,7 @@ for i in "${!KAOS_LOG_DIRS[@]}"; do
     AUDIT_ARGS+=("${KAOS_LOG_LABELS[$i]}=$audit_path")
   fi
 done
-if [ -n "${WORKSPACE_PATH:-}" ]; then
-  WORKSPACE_AUDIT_PATH="$(resolve_app_relative_path "$WORKSPACE_PATH")"
-else
-  WORKSPACE_AUDIT_PATH="$APP_DIR/workspaces"
-fi
+WORKSPACE_AUDIT_PATH="$KAOS_WORKSPACE_PATH_RESOLVED"
 
 PERIOD="${1:-today}"
 TODAY=$(date -u +%Y-%m-%d)

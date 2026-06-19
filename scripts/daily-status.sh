@@ -16,11 +16,8 @@ kaos_init_env
 APP_DIR="$KAOS_APP_DIR"
 
 # Main agent systemd unit name. Generic default; override via KAOS_MAIN_UNIT.
-MAIN_UNIT="${KAOS_MAIN_UNIT:-$KAOS_MAIN_UNIT_RESOLVED}"
-HEALTH_UNIT="${KAOS_HEALTH_UNIT:-kronos-health.service}"
-NTFY_URL="${NTFY_URL:-${NTFY_URL:-https://ntfy.sh}}"
-NTFY_TOKEN="${NTFY_TOKEN:-}"
-NTFY_TOPIC="${NTFY_TOPIC:-persona-alerts}"
+MAIN_UNIT="$KAOS_MAIN_UNIT_RESOLVED"
+HEALTH_UNIT="$KAOS_HEALTH_UNIT_RESOLVED"
 
 kaos_resolve_log_sources
 AUDIT_ARGS=()
