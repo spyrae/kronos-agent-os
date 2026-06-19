@@ -62,6 +62,7 @@ class KronosAgent:
         self._system_prompt: str | None = None
         self._session_store = session_store
         self._external_tool_event_callback = tool_event_callback
+        self._durable_recovery_checked = False
 
         self._init_tools()
         self._init_memory(enable_memory)
@@ -187,6 +188,14 @@ class KronosAgent:
         """
         is_ephemeral = not persist_user_turn
 
+        if (
+            self._session_store
+            and not is_ephemeral
+            and not getattr(self, "_durable_recovery_checked", False)
+        ):
+            await self._session_store.recover_abandoned_turns()
+            self._durable_recovery_checked = True
+
         # Load conversation history
         history: list[BaseMessage] = []
         if self._session_store:
@@ -238,6 +247,37 @@ class KronosAgent:
                 log.warning("Memory retrieval failed (non-fatal): %s", e)
 
         # Step 3: Route — supervisor or direct LLM
+        turn_id: str | None = None
+        react_loop_kwargs: dict[str, Any] = {}
+        if self._session_store and not is_ephemeral:
+            turn_id = await self._session_store.begin_turn(thread_id, message)
+
+            async def journal_delta(delta: list[BaseMessage]) -> None:
+                assert turn_id is not None
+                await self._session_store.append_turn_messages(
+                    turn_id=turn_id,
+                    thread_id=thread_id,
+                    messages=delta,
+                )
+
+            async def get_cached_tool_result(tool_call_id: str) -> str | None:
+                assert turn_id is not None
+                return await self._session_store.get_tool_result(turn_id, tool_call_id)
+
+            async def save_tool_result(tool_call_id: str, content: str) -> None:
+                assert turn_id is not None
+                await self._session_store.save_tool_result(
+                    turn_id=turn_id,
+                    tool_call_id=tool_call_id,
+                    content=content,
+                )
+
+            react_loop_kwargs = {
+                "on_message_delta": journal_delta,
+                "get_cached_tool_result": get_cached_tool_result,
+                "save_tool_result": save_tool_result,
+            }
+
         audit_token = set_tool_audit_context(
             agent=settings.agent_name,
             thread_id=thread_id,
@@ -246,21 +286,27 @@ class KronosAgent:
             source_kind=source_kind,
         )
         try:
-            if self._supervisor:
-                result = await self._supervisor(working_history)
-                response_text = result.content
-            else:
-                # Direct LLM call with tools (single-agent mode)
-                tier = classify_tier(message)
-                model = get_model(tier)
-                result = await react_loop(
-                    model=model,
-                    messages=working_history,
-                    tools=self._tools,
-                    system_prompt=self._get_system_prompt(),
-                    on_tool_event=self._emit_tool_event,
-                )
-                response_text = result.content
+            try:
+                if self._supervisor:
+                    result = await self._supervisor(working_history, **react_loop_kwargs)
+                    response_text = result.content
+                else:
+                    # Direct LLM call with tools (single-agent mode)
+                    tier = classify_tier(message)
+                    model = get_model(tier)
+                    result = await react_loop(
+                        model=model,
+                        messages=working_history,
+                        tools=self._tools,
+                        system_prompt=self._get_system_prompt(),
+                        on_tool_event=self._emit_tool_event,
+                        **react_loop_kwargs,
+                    )
+                    response_text = result.content
+            except Exception as e:
+                if self._session_store and turn_id:
+                    await self._session_store.fail_turn(turn_id, str(e))
+                raise
         finally:
             reset_tool_audit_context(audit_token)
 
@@ -286,7 +332,14 @@ class KronosAgent:
         # Step 6: Save conversation history.
         if self._session_store and not is_ephemeral:
             save_messages = [m for m in persisted_history if not isinstance(m, SystemMessage)]
-            await self._session_store.save(thread_id, save_messages)
+            if turn_id:
+                await self._session_store.finalize_turn(
+                    thread_id=thread_id,
+                    messages=save_messages,
+                    turn_id=turn_id,
+                )
+            else:
+                await self._session_store.save(thread_id, save_messages)
 
         return response_text
 

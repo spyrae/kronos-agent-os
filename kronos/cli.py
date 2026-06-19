@@ -140,6 +140,7 @@ async def run_cli(
 
     async with ctx as tools:
         session_store = SessionStore(settings.db_path, agent_name=settings.agent_name)
+        await session_store.recover_abandoned_turns()
         agent = KronosAgent(
             tools=tools or None,
             enable_memory=enable_memory,

@@ -92,6 +92,7 @@ async def main():
     _ensure_data_dirs()
 
     session_store = SessionStore(settings.db_path, agent_name=settings.agent_name)
+    await session_store.recover_abandoned_turns()
 
     async with managed_mcp_tools() as tools:
         agent = KronosAgent(

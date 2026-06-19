@@ -326,7 +326,7 @@ def build_supervisor(
     # Combine: delegation tools + supervisor-only tools + direct tools
     all_tools = delegation_tools + supervisor_tools + direct_tools
 
-    async def run(messages: list[BaseMessage]) -> AgentResult:
+    async def run(messages: list[BaseMessage], **react_loop_kwargs) -> AgentResult:
         """Route request to appropriate sub-agent or respond directly."""
         return await react_loop(
             model=model,
@@ -335,6 +335,7 @@ def build_supervisor(
             system_prompt=prompt,
             max_turns=10,  # supervisor shouldn't need many turns
             on_tool_event=on_tool_event,
+            **react_loop_kwargs,
         )
 
     run.__name__ = "supervisor"

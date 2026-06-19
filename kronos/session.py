@@ -7,6 +7,7 @@ Stores messages as JSON in SQLite, keyed by thread_id.
 import hashlib
 import json
 import logging
+import uuid
 from contextlib import asynccontextmanager
 
 import aiosqlite
@@ -106,8 +107,307 @@ class SessionStore:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS active_turns (
+                    turn_id TEXT PRIMARY KEY,
+                    thread_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    input_message TEXT NOT NULL,
+                    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    error TEXT
+                )
+            """)
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_active_turns_running
+                    ON active_turns(status, started_at)
+            """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS turn_journal (
+                    turn_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    seq INTEGER NOT NULL,
+                    message_json TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'appended',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (turn_id, seq)
+                )
+            """)
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_turn_journal_thread
+                    ON turn_journal(thread_id, created_at)
+            """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS tool_results (
+                    turn_id TEXT NOT NULL,
+                    tool_call_id TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (turn_id, tool_call_id)
+                )
+            """)
             await db.commit()
             self._initialized = True
+
+    async def begin_turn(self, thread_id: str, input_message: str) -> str:
+        """Open a durable turn record and return its id."""
+        turn_id = str(uuid.uuid4())
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute(
+                """
+                INSERT INTO active_turns
+                    (turn_id, thread_id, status, input_message)
+                VALUES (?, ?, 'running', ?)
+                """,
+                (turn_id, thread_id, input_message),
+            )
+            await db.commit()
+        return turn_id
+
+    async def append_turn_messages(
+        self,
+        *,
+        turn_id: str,
+        thread_id: str,
+        messages: list[BaseMessage],
+    ) -> None:
+        """Append message deltas to a durable turn journal."""
+        if not messages:
+            return
+
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                "SELECT COALESCE(MAX(seq), 0) FROM turn_journal WHERE turn_id = ?",
+                (turn_id,),
+            )
+            row = await cursor.fetchone()
+            next_seq = int(row[0]) + 1 if row else 1
+            await db.executemany(
+                """
+                INSERT INTO turn_journal
+                    (turn_id, thread_id, seq, message_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (
+                        turn_id,
+                        thread_id,
+                        next_seq + offset,
+                        json.dumps(_serialize_message(message), ensure_ascii=False),
+                    )
+                    for offset, message in enumerate(messages)
+                ],
+            )
+            await db.commit()
+
+    async def get_tool_result(self, turn_id: str, tool_call_id: str) -> str | None:
+        """Return memoized tool content for this turn/tool call, if present."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                """
+                SELECT content FROM tool_results
+                WHERE turn_id = ? AND tool_call_id = ?
+                """,
+                (turn_id, tool_call_id),
+            )
+            row = await cursor.fetchone()
+        return str(row[0]) if row else None
+
+    async def save_tool_result(
+        self,
+        *,
+        turn_id: str,
+        tool_call_id: str,
+        content: str,
+    ) -> None:
+        """Memoize a tool result for the active durable turn."""
+        if not tool_call_id:
+            return
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute(
+                """
+                INSERT OR IGNORE INTO tool_results
+                    (turn_id, tool_call_id, content)
+                VALUES (?, ?, ?)
+                """,
+                (turn_id, tool_call_id, content),
+            )
+            await db.commit()
+
+    async def finish_turn(self, turn_id: str) -> None:
+        """Mark a turn done and remove its ephemeral journal/cache rows."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute(
+                """
+                UPDATE active_turns
+                SET status = 'done', completed_at = CURRENT_TIMESTAMP, error = NULL
+                WHERE turn_id = ?
+                """,
+                (turn_id,),
+            )
+            await db.execute("DELETE FROM turn_journal WHERE turn_id = ?", (turn_id,))
+            await db.execute("DELETE FROM tool_results WHERE turn_id = ?", (turn_id,))
+            await db.commit()
+
+    async def finalize_turn(
+        self,
+        *,
+        thread_id: str,
+        messages: list[BaseMessage],
+        turn_id: str,
+    ) -> None:
+        """Atomically save session history and close a durable turn."""
+        trimmed = messages[-MAX_HISTORY:] if len(messages) > MAX_HISTORY else messages
+        data = json.dumps(
+            [_serialize_message(m) for m in trimmed],
+            ensure_ascii=False,
+        )
+
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute(
+                """INSERT INTO sessions (thread_id, messages, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(thread_id) DO UPDATE SET
+                     messages = excluded.messages,
+                     updated_at = excluded.updated_at""",
+                (thread_id, data),
+            )
+            await db.execute(
+                """
+                UPDATE active_turns
+                SET status = 'done', completed_at = CURRENT_TIMESTAMP, error = NULL
+                WHERE turn_id = ?
+                """,
+                (turn_id,),
+            )
+            await db.execute("DELETE FROM turn_journal WHERE turn_id = ?", (turn_id,))
+            await db.execute("DELETE FROM tool_results WHERE turn_id = ?", (turn_id,))
+            await db.commit()
+
+        self._index_to_swarm_fts(thread_id, trimmed)
+
+    async def fail_turn(self, turn_id: str, error: str) -> None:
+        """Mark a turn failed after a handled exception."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute(
+                """
+                UPDATE active_turns
+                SET status = 'failed',
+                    completed_at = CURRENT_TIMESTAMP,
+                    error = ?
+                WHERE turn_id = ?
+                """,
+                (error[:1000], turn_id),
+            )
+            await db.commit()
+
+    async def recover_abandoned_turns(self) -> int:
+        """Recover running turns left behind by a crashed/restarted process.
+
+        MVP behavior is recover-and-report: append the input, journaled
+        assistant/tool deltas, and an interruption notice to the persisted
+        session. It does not resume tool execution.
+        """
+        recovered_sessions: list[tuple[str, list[BaseMessage]]] = []
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                """
+                SELECT turn_id, thread_id, input_message
+                FROM active_turns
+                WHERE status = 'running'
+                ORDER BY started_at ASC
+                """
+            )
+            active_rows = await cursor.fetchall()
+
+            for turn_id, thread_id, input_message in active_rows:
+                session_cursor = await db.execute(
+                    "SELECT messages FROM sessions WHERE thread_id = ?",
+                    (thread_id,),
+                )
+                session_row = await session_cursor.fetchone()
+                messages: list[BaseMessage] = []
+                if session_row:
+                    try:
+                        data = json.loads(session_row[0])
+                        messages = [_deserialize_message(d) for d in data]
+                    except (json.JSONDecodeError, KeyError, TypeError) as e:
+                        log.warning("Skipping malformed session %s during turn recovery: %s", thread_id, e)
+                        messages = []
+
+                messages.append(HumanMessage(content=input_message))
+
+                journal_cursor = await db.execute(
+                    """
+                    SELECT message_json FROM turn_journal
+                    WHERE turn_id = ?
+                    ORDER BY seq ASC
+                    """,
+                    (turn_id,),
+                )
+                journal_rows = await journal_cursor.fetchall()
+                for (raw_message,) in journal_rows:
+                    try:
+                        messages.append(_deserialize_message(json.loads(raw_message)))
+                    except (json.JSONDecodeError, KeyError, TypeError) as e:
+                        log.warning("Skipping malformed journal message for turn %s: %s", turn_id, e)
+
+                messages.append(AIMessage(
+                    content=(
+                        "⚠️ Предыдущий ход был прерван до завершения. "
+                        "Я восстановил уже записанные шаги из журнала, "
+                        "но не продолжаю его автоматически."
+                    ),
+                ))
+                trimmed = messages[-MAX_HISTORY:] if len(messages) > MAX_HISTORY else messages
+                data = json.dumps([_serialize_message(m) for m in trimmed], ensure_ascii=False)
+                await db.execute(
+                    """INSERT INTO sessions (thread_id, messages, updated_at)
+                       VALUES (?, ?, CURRENT_TIMESTAMP)
+                       ON CONFLICT(thread_id) DO UPDATE SET
+                         messages = excluded.messages,
+                         updated_at = excluded.updated_at""",
+                    (thread_id, data),
+                )
+                await db.execute(
+                    """
+                    UPDATE active_turns
+                    SET status = 'recovered',
+                        completed_at = CURRENT_TIMESTAMP,
+                        error = 'recovered after interrupted turn'
+                    WHERE turn_id = ?
+                    """,
+                    (turn_id,),
+                )
+                recovered_sessions.append((thread_id, trimmed))
+
+            await db.commit()
+
+        for thread_id, messages in recovered_sessions:
+            self._index_to_swarm_fts(thread_id, messages)
+
+        recovered = len(recovered_sessions)
+        if recovered:
+            log.warning("Recovered %d abandoned durable turn(s)", recovered)
+            self._record_durable_metric("durable_turns_recovered", recovered)
+        return recovered
+
+    def _record_durable_metric(self, metric: str, delta: int) -> None:
+        """Record durable-turn metrics in swarm_metrics when available."""
+        try:
+            from kronos.swarm_store import get_swarm
+
+            get_swarm().incr_metric(metric, delta)
+        except Exception as e:
+            log.debug("Durable metric write failed (non-fatal): %s", e)
 
     async def load(self, thread_id: str) -> list[BaseMessage]:
         """Load conversation history for a thread."""

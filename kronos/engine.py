@@ -9,6 +9,7 @@ No LangGraph dependency. Uses langchain_core messages and tools directly.
 """
 
 import asyncio
+import inspect
 import logging
 import time
 from collections.abc import Callable
@@ -26,6 +27,9 @@ log = logging.getLogger("kronos.engine")
 MAX_REACT_TURNS = 25
 TOOL_TIMEOUT_SECONDS = 120
 ToolEventCallback = Callable[[str, dict[str, Any]], None]
+MessageDeltaCallback = Callable[[list[BaseMessage]], Any]
+ToolCacheGetCallback = Callable[[str], Any]
+ToolCacheSaveCallback = Callable[[str, str], Any]
 
 
 @dataclass
@@ -79,6 +83,9 @@ async def react_loop(
     max_turns: int = MAX_REACT_TURNS,
     error_handler: Callable[[Exception], str] = classify_tool_error,
     on_tool_event: ToolEventCallback | None = None,
+    on_message_delta: MessageDeltaCallback | None = None,
+    get_cached_tool_result: ToolCacheGetCallback | None = None,
+    save_tool_result: ToolCacheSaveCallback | None = None,
 ) -> AgentResult:
     """Run the ReAct loop: LLM → tool_calls → execute → LLM → ...
 
@@ -117,6 +124,37 @@ async def react_loop(
         except Exception as e:
             log.debug("Tool event callback failed: %s", e)
 
+    async def maybe_await(value: Any) -> Any:
+        if inspect.isawaitable(value):
+            return await value
+        return value
+
+    async def emit_message_delta(delta: list[BaseMessage]) -> None:
+        if not on_message_delta or not delta:
+            return
+        try:
+            await maybe_await(on_message_delta(delta))
+        except Exception as e:
+            log.warning("Message journal callback failed (non-fatal): %s", e)
+
+    async def read_cached_tool_result(tool_call_id: str) -> str | None:
+        if not get_cached_tool_result or not tool_call_id:
+            return None
+        try:
+            cached = await maybe_await(get_cached_tool_result(tool_call_id))
+            return str(cached) if cached is not None else None
+        except Exception as e:
+            log.warning("Tool result cache read failed (non-fatal): %s", e)
+            return None
+
+    async def write_tool_result(tool_call_id: str, content: str) -> None:
+        if not save_tool_result or not tool_call_id:
+            return
+        try:
+            await maybe_await(save_tool_result(tool_call_id, content))
+        except Exception as e:
+            log.warning("Tool result cache write failed (non-fatal): %s", e)
+
     for turn in range(max_turns):
         # Call LLM
         try:
@@ -125,6 +163,7 @@ async def react_loop(
             log.error("LLM call failed (turn %d): %s", turn, e)
             error_msg = AIMessage(content="Произошла ошибка при обработке. Попробуй ещё раз.")
             messages.append(error_msg)
+            await emit_message_delta([error_msg])
             return AgentResult(
                 messages=messages,
                 content=error_msg.content,
@@ -133,6 +172,7 @@ async def react_loop(
 
         messages.append(response)
         call_messages.append(response)
+        await emit_message_delta([response])
 
         # No tool calls → done
         if not getattr(response, "tool_calls", None):
@@ -164,6 +204,7 @@ async def react_loop(
                     content=f"[ERROR] Unknown tool: '{tool_name}'. Available: {list(tool_map.keys())}",
                     tool_call_id=tool_call_id,
                 )
+                await write_tool_result(tool_call_id, str(tm.content))
                 emit_tool_event("tool_result", {
                     "name": tool_name,
                     "call_id": tool_call_id,
@@ -173,14 +214,21 @@ async def react_loop(
                     "duration_ms": round((time.perf_counter() - tool_started) * 1000),
                 })
             else:
-                log.info("Executing tool: %s (args: %s)", tool_name, str(tc.get("args", {}))[:200])
-                tm = await execute_tool(tool, tc, error_handler)
-                log.info("Tool result: %s → %s", tool_name, str(tm.content)[:200])
+                cached_content = await read_cached_tool_result(tool_call_id)
+                if cached_content is not None:
+                    tm = ToolMessage(content=cached_content, tool_call_id=tool_call_id)
+                    log.info("Tool result cache hit: %s (%s)", tool_name, tool_call_id)
+                else:
+                    log.info("Executing tool: %s (args: %s)", tool_name, str(tc.get("args", {}))[:200])
+                    tm = await execute_tool(tool, tc, error_handler)
+                    await write_tool_result(tool_call_id, str(tm.content))
+                    log.info("Tool result: %s → %s", tool_name, str(tm.content)[:200])
                 emit_tool_event("tool_result", {
                     "name": tool_name,
                     "call_id": tool_call_id,
                     "ok": not str(tm.content).startswith("[ERROR]"),
                     "content": tm.content,
+                    "cached": cached_content is not None,
                     "turn": turn + 1,
                     "duration_ms": round((time.perf_counter() - tool_started) * 1000),
                 })
@@ -189,11 +237,13 @@ async def react_loop(
 
         messages.extend(tool_messages)
         call_messages.extend(tool_messages)
+        await emit_message_delta(tool_messages)
 
     # Max turns exhausted
     log.warning("React loop exhausted after %d turns", max_turns)
     final = AIMessage(content="Достигнут лимит итераций. Вот что удалось сделать на текущий момент.")
     messages.append(final)
+    await emit_message_delta([final])
     return AgentResult(
         messages=messages,
         content=final.content,
