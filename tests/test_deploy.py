@@ -182,6 +182,14 @@ def test_deploy_rewrites_ops_after_and_skips_generic_main_on_renamed_install(tmp
     assert "After=kaos-main" in installed_health
     assert "After=kaos.service" not in installed_health
     assert f"ExecStart={remote_dir}/app/scripts/health-check.sh" in installed_health
+    expected_user = subprocess.run(
+        ["whoami"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert f"User={expected_user}" in installed_health
+    assert "User=kronos" not in installed_health
     assert "systemctl daemon-reload" in sudo_log.read_text(encoding="utf-8")
 
 

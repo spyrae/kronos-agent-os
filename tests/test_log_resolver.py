@@ -71,3 +71,31 @@ printf '%s\\n' "${{KAOS_LOG_DIRS[0]}}"
         "AGENT_NAME",
         str(app / "data" / "kronos" / "logs"),
     ]
+
+
+def test_shell_log_resolver_aggregates_existing_agent_logs(tmp_path: Path) -> None:
+    app = tmp_path / "app"
+    (app / "data" / "alpha" / "logs").mkdir(parents=True)
+    (app / "data" / "beta" / "logs").mkdir(parents=True)
+    env = os.environ.copy()
+    env.update({"KAOS_APP_DIR": str(app), "KAOS_LOG_MODE": "aggregate"})
+    for name in ("KAOS_LOG_DIR", "KAOS_AGENT_NAME", "AGENT_NAME", "DB_PATH", "DB_DIR"):
+        env.pop(name, None)
+
+    resolver = shlex.quote(str(ROOT / "scripts" / "_log_resolver.sh"))
+    script = f"""
+set -euo pipefail
+source {resolver}
+kaos_resolve_log_sources
+printf '%s\\n' "$KAOS_LOG_MODE_RESOLVED"
+for i in "${{!KAOS_LOG_DIRS[@]}}"; do
+  printf '%s=%s:%s\\n' "${{KAOS_LOG_LABELS[$i]}}" "${{KAOS_LOG_REASONS[$i]}}" "${{KAOS_LOG_DIRS[$i]}}"
+done
+"""
+    result = subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, text=True)
+
+    assert result.stdout.splitlines() == [
+        "aggregate",
+        f"alpha=aggregate:data/*/logs:{app / 'data' / 'alpha' / 'logs'}",
+        f"beta=aggregate:data/*/logs:{app / 'data' / 'beta' / 'logs'}",
+    ]

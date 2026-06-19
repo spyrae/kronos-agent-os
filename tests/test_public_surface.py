@@ -130,6 +130,44 @@ def test_systemd_public_units_are_generic():
     assert tracked_systemd.isdisjoint(old_named_units)
 
 
+def test_systemd_templates_keep_rewrite_placeholders():
+    service_units = {path.name: path.read_text(encoding="utf-8") for path in (ROOT / "systemd").glob("*.service")}
+    timer_units = {path.name: path.read_text(encoding="utf-8") for path in (ROOT / "systemd").glob("*.timer")}
+    all_units = service_units | timer_units
+
+    assert "User=kronos" in service_units["kaos.service"]
+    assert "User=kronos" in service_units["kaos@.service"]
+    assert "WorkingDirectory=/opt/kaos/app" in service_units["kaos.service"]
+    assert "WorkingDirectory=/opt/kaos/app" in service_units["kaos@.service"]
+    assert "ExecStart=/opt/kaos/app/.venv/bin/python -m kronos" in service_units["kaos.service"]
+    assert "EnvironmentFile=/opt/kaos/app/.env" in service_units["kaos@.service"]
+
+    for name, content in all_units.items():
+        assert "/opt/kronos" not in content, name
+        assert "/srv/kaos" not in content, name
+        assert "/opt/kaos" in content or name.endswith(".timer"), name
+
+
+def test_public_deploy_docs_do_not_leak_private_install_details():
+    public_text = "\n".join(
+        [
+            (ROOT / ".env.example").read_text(encoding="utf-8"),
+            (ROOT / "docs" / "DEPLOYMENT.md").read_text(encoding="utf-8"),
+            (ROOT / "scripts" / "setup-agents.sh").read_text(encoding="utf-8"),
+        ]
+    )
+
+    forbidden = [
+        "kronos-ii",
+        "/opt/kronos",
+        "deploy root: /opt/kaos",
+        "cp systemd/kaos@.service",
+        "roman@",
+    ]
+    for marker in forbidden:
+        assert marker not in public_text
+
+
 def test_issue_templates_are_valid_yaml():
     for path in (ROOT / ".github" / "ISSUE_TEMPLATE").glob("*.yml"):
         parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
