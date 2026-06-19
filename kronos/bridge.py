@@ -20,6 +20,7 @@ from telethon.tl.types import DocumentAttributeAudio
 from kronos.audit import log_request
 from kronos.config import settings
 from kronos.graph import KronosAgent
+from kronos.observer.capture import CaptureDecision, classify_capture, record_capture
 from kronos.security.cost_guardian import get_guardian
 from kronos.security.output_validator import validate_output
 from kronos.swarm_store import get_swarm
@@ -452,6 +453,86 @@ def _compose_image_agent_message(caption: str, image_analysis: str) -> str:
         "верни извлечённый текст; если это документ/скриншот/чек, кратко классифицируй "
         "и выдели важные детали/action items."
     )
+
+
+def _message_timestamp(event) -> str:
+    value = getattr(getattr(event, "message", None), "date", None)
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value or "")
+
+
+def _observer_capture_confirmation(decision: CaptureDecision, task: dict) -> str:
+    label = {
+        "telegram_voice_note": "голосовую заметку",
+        "telegram_link": "ссылку",
+        "telegram_text_capture": "заметку",
+    }.get(decision.source_kind_value, "заметку")
+    task_id = str(task.get("task_id") or "без id")
+    return f"Сохранил в inbox: {label}. ID: `{task_id}`"
+
+
+async def _send_observer_capture_reply(event, reply: str) -> None:
+    await _rate_limit_wait(event.chat_id)
+    await _client.send_message(event.chat_id, reply)
+
+
+async def _maybe_record_observer_capture(
+    event,
+    clean_text: str,
+    *,
+    is_dm: bool,
+    voice: bool,
+    image: bool,
+    user_id: int,
+) -> bool:
+    """Record explicit DM captures before invoking the agent."""
+    if not is_dm:
+        return False
+
+    decision = classify_capture(
+        clean_text,
+        is_voice=voice,
+        is_dm=is_dm,
+        has_image=image,
+    )
+    if not decision.should_capture:
+        return False
+
+    try:
+        task = record_capture(
+            clean_text,
+            is_voice=voice,
+            is_dm=is_dm,
+            has_image=image,
+            chat_id=event.chat_id,
+            user_id=user_id,
+            message_id=getattr(event.message, "id", None),
+            timestamp=_message_timestamp(event),
+        )
+    except Exception as e:
+        log.error("[ObserverCapture] Failed to record capture: %s", e)
+        await _send_observer_capture_reply(
+            event,
+            "Не удалось сохранить в inbox. Проверь логи Kronos.",
+        )
+        return True
+
+    if task is None:
+        return False
+
+    await _send_observer_capture_reply(
+        event,
+        _observer_capture_confirmation(decision, task),
+    )
+    log.info(
+        "[ObserverCapture] captured source=%s chat=%s message=%s task=%s",
+        decision.source_kind_value,
+        event.chat_id,
+        getattr(event.message, "id", None),
+        task.get("task_id"),
+    )
+    return True
 
 
 async def _transcribe_voice(file_path: str) -> str:
@@ -1308,6 +1389,16 @@ async def run_bridge(agent: KronosAgent) -> None:
                 await _client.send_read_acknowledge(event.chat_id, event.message)
             except Exception:
                 pass  # Bot API sessions can't call ReadHistoryRequest
+
+        if await _maybe_record_observer_capture(
+            event,
+            clean_text,
+            is_dm=is_dm,
+            voice=voice,
+            image=image,
+            user_id=user_id,
+        ):
+            return
 
         # /clear command — reset conversation context for this chat/topic
         if clean_text.strip().lower() in ("/clear", "/reset"):
