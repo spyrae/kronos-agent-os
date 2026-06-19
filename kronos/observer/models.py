@@ -166,6 +166,9 @@ class ReplyDebt(ObserverModel):
     last_incoming_message_id: int | None = None
     last_incoming_excerpt: str = ""
     hours_waiting: float = 0.0
+    severity: str = "medium"
+    reason: str = ""
+    suggested_action: str = ""
     confidence: float = 0.0
     metadata: dict[str, Any] = field(default_factory=dict)
 

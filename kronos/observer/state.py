@@ -28,6 +28,8 @@ class ObserverState:
     muted_peers: set[str] = field(default_factory=set)
     last_scan_at: dict[str, str] = field(default_factory=dict)
     last_digest_at: dict[str, str] = field(default_factory=dict)
+    last_reported_debts: dict[str, str] = field(default_factory=dict)
+    last_critical_alerts: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Return a deterministic JSON-serializable payload."""
@@ -41,6 +43,8 @@ class ObserverState:
             "muted_peers": sorted(self.muted_peers),
             "last_scan_at": dict(sorted(self.last_scan_at.items())),
             "last_digest_at": dict(sorted(self.last_digest_at.items())),
+            "last_reported_debts": dict(sorted(self.last_reported_debts.items())),
+            "last_critical_alerts": dict(sorted(self.last_critical_alerts.items())),
         }
 
     @classmethod
@@ -64,6 +68,12 @@ class ObserverState:
             muted_peers={str(item) for item in data.get("muted_peers") or []},
             last_scan_at={str(key): str(value) for key, value in dict(data.get("last_scan_at") or {}).items()},
             last_digest_at={str(key): str(value) for key, value in dict(data.get("last_digest_at") or {}).items()},
+            last_reported_debts={
+                str(key): str(value) for key, value in dict(data.get("last_reported_debts") or {}).items()
+            },
+            last_critical_alerts={
+                str(key): str(value) for key, value in dict(data.get("last_critical_alerts") or {}).items()
+            },
         )
 
 
@@ -148,6 +158,21 @@ class ObserverStateStore:
         """Record when an observer scanner last ran."""
         state = self.load()
         state.last_scan_at[str(scan_name)] = timestamp or utc_now_iso()
+        return self.save(state)
+
+    def mark_debt_reported(
+        self,
+        peer_id: str,
+        timestamp: str | None = None,
+        *,
+        critical: bool = False,
+    ) -> ObserverState:
+        """Record reply-debt reporting timestamps for dedupe/cooldown logic."""
+        state = self.load()
+        stamped_at = timestamp or utc_now_iso()
+        state.last_reported_debts[str(peer_id)] = stamped_at
+        if critical:
+            state.last_critical_alerts[str(peer_id)] = stamped_at
         return self.save(state)
 
     def append_run(self, result: ObserverRunResult | Mapping[str, Any]) -> Path:

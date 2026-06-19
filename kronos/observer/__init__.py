@@ -31,6 +31,7 @@ from kronos.observer.models import (
     ObserverSourceKind,
     ReplyDebt,
 )
+from kronos.observer.reply_debts import detect_reply_debts
 from kronos.observer.state import ObserverState, ObserverStateStore
 from kronos.observer.telegram_scan import scan_private_dialogs
 
@@ -51,6 +52,7 @@ __all__ = [
     "RaindropBookmarkSink",
     "ReplyDebt",
     "classify_capture",
+    "detect_reply_debts",
     "extract_urls",
     "is_forced_capture",
     "normalize_url",
