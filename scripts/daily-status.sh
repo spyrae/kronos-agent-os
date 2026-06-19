@@ -12,22 +12,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=scripts/_log_resolver.sh
 source "$SCRIPT_DIR/_log_resolver.sh"
+kaos_init_env
+APP_DIR="$KAOS_APP_DIR"
 
 # Main agent systemd unit name. Generic default; override via KAOS_MAIN_UNIT.
-MAIN_UNIT="${KAOS_MAIN_UNIT:-kaos}"
-
-# NTFY config (loaded from .env if available)
-if [ -f "$APP_DIR/.env" ]; then
-  # shellcheck disable=SC1091
-  source "$APP_DIR/.env" 2>/dev/null || true
-fi
-MAIN_UNIT="${KAOS_MAIN_UNIT:-$MAIN_UNIT}"
+MAIN_UNIT="${KAOS_MAIN_UNIT:-$KAOS_MAIN_UNIT_RESOLVED}"
 NTFY_URL="${NTFY_URL:-${NTFY_URL:-https://ntfy.sh}}"
 NTFY_TOKEN="${NTFY_TOKEN:-}"
 NTFY_TOPIC="${NTFY_TOPIC:-persona-alerts}"
 
 kaos_resolve_log_sources
-AUDIT_LOG="$(kaos_first_existing_log_file audit.jsonl || true)"
+AUDIT_ARGS=()
+for i in "${!KAOS_LOG_DIRS[@]}"; do
+  audit_path="${KAOS_LOG_DIRS[$i]}/audit.jsonl"
+  if [ -f "$audit_path" ]; then
+    AUDIT_ARGS+=("${KAOS_LOG_LABELS[$i]}=$audit_path")
+  fi
+done
 
 # --- Gather data ---
 
@@ -88,14 +89,33 @@ fi
 # Recent service restarts (last 24h)
 service_restarts=$(journalctl -u "$MAIN_UNIT" --since "24 hours ago" 2>/dev/null | grep -c "Started\|Stopped" 2>/dev/null) || service_restarts=0
 
-# Audit log stats (if available)
-audit_log="$AUDIT_LOG"
 audit_stats="missing / not configured"
-if [ -n "$audit_log" ] && [ -f "$audit_log" ]; then
-  audit_today=$(grep "$(date -u +%Y-%m-%d)" "$audit_log" 2>/dev/null | wc -l | tr -d ' ')
+audit_source="none"
+if [ "${#AUDIT_ARGS[@]}" -gt 0 ]; then
+  audit_today=$(python3 - "$(date -u +%Y-%m-%d)" "${AUDIT_ARGS[@]}" <<'PY'
+import json
+import sys
+
+today = sys.argv[1]
+count = 0
+for source in sys.argv[2:]:
+    _, path = source.split("=", 1)
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            if str(entry.get("ts", "")).startswith(today):
+                count += 1
+print(count)
+PY
+)
   audit_stats="${audit_today} requests today"
+  audit_source="${KAOS_LOG_MODE_RESOLVED}: ${#AUDIT_ARGS[@]} source(s)"
 elif [ "${#KAOS_LOG_DIRS[@]}" -gt 0 ]; then
   audit_stats="missing at ${KAOS_LOG_DIRS[0]}/audit.jsonl"
+  audit_source="${KAOS_LOG_LABELS[0]} (${KAOS_LOG_REASONS[0]})"
 fi
 
 # --- Build report ---
@@ -133,6 +153,7 @@ Service events (24h):
 
 Audit:
   $audit_stats
+  Source: $audit_source
 EOF
 )
 
