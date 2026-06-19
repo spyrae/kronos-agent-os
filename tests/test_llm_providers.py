@@ -4,12 +4,16 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+from langchain_core.messages import AIMessage, HumanMessage
+
 from kronos.config import settings
 from kronos.llm import (
     ModelTier,
     describe_provider_chain,
     get_model,
     get_orchestrator_model,
+    is_retriable_llm_error,
     is_runtime_llm_configured,
     provider_chain,
     reset_provider_state,
@@ -40,6 +44,10 @@ def _clear_llm_keys(monkeypatch):
         "KAOS_PROVIDER_CODEX_CLI_COMMAND",
         "KAOS_PROVIDER_CODEX_CLI_MODEL",
         "KAOS_PROVIDER_CODEX_CLI_TIMEOUT_SECONDS",
+        "KAOS_PROVIDER_PRIMARY_MODEL",
+        "KAOS_PROVIDER_PRIMARY_API_KEY",
+        "KAOS_PROVIDER_BACKUP_MODEL",
+        "KAOS_PROVIDER_BACKUP_API_KEY",
     ]:
         monkeypatch.delenv(name, raising=False)
 
@@ -171,6 +179,88 @@ def test_get_model_uses_openai_compatible_adapter(monkeypatch):
         "base_url": "https://llm.example.com/v1",
     }]
     reset_provider_state()
+
+
+class FakeHTTPError(Exception):
+    def __init__(self, status_code: int, message: str = ""):
+        super().__init__(message or f"HTTP {status_code}")
+        self.status_code = status_code
+
+
+@pytest.mark.asyncio
+async def test_get_model_falls_back_on_retriable_provider_error(monkeypatch):
+    _clear_llm_keys(monkeypatch)
+    reset_provider_state()
+    attempts = []
+
+    class FakeModel:
+        def __init__(self, provider_id: str):
+            self.provider_id = provider_id
+            self.bound_tools = None
+
+        def bind_tools(self, tools):
+            bound = FakeModel(self.provider_id)
+            bound.bound_tools = tools
+            return bound
+
+        async def ainvoke(self, messages):
+            attempts.append((self.provider_id, self.bound_tools))
+            if self.provider_id == "primary":
+                raise FakeHTTPError(503)
+            return AIMessage(content="backup ok")
+
+    monkeypatch.setattr(settings, "kaos_standard_provider_chain", "primary,backup")
+    monkeypatch.setenv("KAOS_PROVIDER_PRIMARY_MODEL", "primary-model")
+    monkeypatch.setenv("KAOS_PROVIDER_PRIMARY_API_KEY", "sk-primary")
+    monkeypatch.setenv("KAOS_PROVIDER_BACKUP_MODEL", "backup-model")
+    monkeypatch.setenv("KAOS_PROVIDER_BACKUP_API_KEY", "sk-backup")
+    monkeypatch.setattr("kronos.llm._create_model", lambda config: FakeModel(config.provider_id))
+
+    model = get_model(ModelTier.STANDARD).bind_tools(["tool"])
+    response = await model.ainvoke([HumanMessage(content="hi")])
+
+    assert response.content == "backup ok"
+    assert attempts == [("primary", ["tool"]), ("backup", ["tool"])]
+    reset_provider_state()
+
+
+@pytest.mark.asyncio
+async def test_get_model_does_not_retry_non_retriable_provider_error(monkeypatch):
+    _clear_llm_keys(monkeypatch)
+    reset_provider_state()
+    attempts = []
+
+    class FakeModel:
+        def __init__(self, provider_id: str):
+            self.provider_id = provider_id
+
+        async def ainvoke(self, messages):
+            attempts.append(self.provider_id)
+            if self.provider_id == "primary":
+                raise FakeHTTPError(401)
+            return AIMessage(content="should not run")
+
+    monkeypatch.setattr(settings, "kaos_standard_provider_chain", "primary,backup")
+    monkeypatch.setenv("KAOS_PROVIDER_PRIMARY_MODEL", "primary-model")
+    monkeypatch.setenv("KAOS_PROVIDER_PRIMARY_API_KEY", "sk-primary")
+    monkeypatch.setenv("KAOS_PROVIDER_BACKUP_MODEL", "backup-model")
+    monkeypatch.setenv("KAOS_PROVIDER_BACKUP_API_KEY", "sk-backup")
+    monkeypatch.setattr("kronos.llm._create_model", lambda config: FakeModel(config.provider_id))
+
+    model = get_model(ModelTier.STANDARD)
+    with pytest.raises(FakeHTTPError):
+        await model.ainvoke([HumanMessage(content="hi")])
+
+    assert attempts == ["primary"]
+    reset_provider_state()
+
+
+def test_retriable_llm_error_classification() -> None:
+    assert is_retriable_llm_error(FakeHTTPError(503)) is True
+    assert is_retriable_llm_error(FakeHTTPError(429)) is True
+    assert is_retriable_llm_error(TimeoutError("timed out")) is True
+    assert is_retriable_llm_error(FakeHTTPError(401)) is False
+    assert is_retriable_llm_error(RuntimeError("blocked by shield")) is False
 
 
 def test_provider_config_can_come_from_dotenv_without_settings_fields(tmp_path):

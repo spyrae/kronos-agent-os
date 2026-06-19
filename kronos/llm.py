@@ -30,6 +30,7 @@ from kronos.security.pii import mask_pii, mask_pii_object
 log = logging.getLogger("kronos.llm")
 
 COOLDOWN_SECONDS = 300  # 5 minutes
+RETRIABLE_STATUS_CODES = {408, 409, 425, 429}
 
 
 class ModelTier(str, Enum):
@@ -125,6 +126,146 @@ class _ProviderState:
 _state = _ProviderState()
 _callback_signature: tuple[str, bool, str] | None = None
 _callback_cache: list[BaseCallbackHandler] = []
+
+
+class FallbackChatModel:
+    """Small chat-model proxy that retries one LLM call across providers."""
+
+    def __init__(
+        self,
+        chain: list[str],
+        label: str,
+        tools: list | None = None,
+    ):
+        self._chain = chain
+        self._label = label
+        self._tools = list(tools or [])
+        self._primary_config = resolve_provider_config(chain[0]) if chain else None
+
+    @property
+    def model(self) -> str:
+        return self._primary_config.model if self._primary_config else "fallback"
+
+    @property
+    def model_name(self) -> str:
+        return self.model
+
+    @property
+    def temperature(self) -> float | None:
+        return self._primary_config.temperature if self._primary_config else None
+
+    @property
+    def max_tokens(self) -> int | None:
+        return self._primary_config.max_tokens if self._primary_config else None
+
+    def bind_tools(self, tools: list) -> FallbackChatModel:
+        return FallbackChatModel(self._chain, self._label, tools=tools)
+
+    def _configured_providers(self) -> list[str]:
+        return [provider for provider in self._chain if _has_key(provider)]
+
+    def _providers_for_attempt(self) -> list[str]:
+        configured = self._configured_providers()
+        available = [provider for provider in configured if _state.is_available(provider)]
+        return available or configured
+
+    def _prepare_model(self, provider: str) -> BaseChatModel | None:
+        model = _state.get_or_create(provider)
+        if model and self._tools:
+            return model.bind_tools(self._tools)
+        return model
+
+    async def ainvoke(self, messages: list[BaseMessage], *args: Any, **kwargs: Any):
+        return await self._invoke_with_fallback("ainvoke", messages, *args, **kwargs)
+
+    def invoke(self, messages: list[BaseMessage], *args: Any, **kwargs: Any):
+        return self._invoke_with_fallback_sync("invoke", messages, *args, **kwargs)
+
+    async def _invoke_with_fallback(self, method_name: str, messages: list[BaseMessage], *args: Any, **kwargs: Any):
+        providers = self._providers_for_attempt()
+        if not providers:
+            configured = ", ".join(self._chain) or "(empty chain)"
+            raise RuntimeError(f"No configured LLM providers for {self._label}: {configured}")
+
+        last_error: Exception | None = None
+        for index, provider in enumerate(providers):
+            model = self._prepare_model(provider)
+            if not model:
+                continue
+            try:
+                log.info(
+                    "LLM provider attempt: label=%s provider=%s fallback_index=%d",
+                    self._label,
+                    provider,
+                    index,
+                )
+                response = await getattr(model, method_name)(messages, *args, **kwargs)
+                _state.mark_success(provider)
+                log.info("LLM provider success: label=%s provider=%s", self._label, provider)
+                return response
+            except Exception as e:
+                last_error = e
+                if not is_retriable_llm_error(e):
+                    log.error(
+                        "LLM provider non-retriable failure: label=%s provider=%s error=%s",
+                        self._label,
+                        provider,
+                        mask_pii(str(e))[:300],
+                    )
+                    raise
+                _state.mark_failed(provider)
+                log.warning(
+                    "LLM provider retriable failure: label=%s provider=%s; trying fallback: %s",
+                    self._label,
+                    provider,
+                    mask_pii(str(e))[:300],
+                )
+                continue
+
+        raise RuntimeError(f"All providers failed for {self._label}. Last error: {last_error}")
+
+    def _invoke_with_fallback_sync(self, method_name: str, messages: list[BaseMessage], *args: Any, **kwargs: Any):
+        providers = self._providers_for_attempt()
+        if not providers:
+            configured = ", ".join(self._chain) or "(empty chain)"
+            raise RuntimeError(f"No configured LLM providers for {self._label}: {configured}")
+
+        last_error: Exception | None = None
+        for index, provider in enumerate(providers):
+            model = self._prepare_model(provider)
+            if not model:
+                continue
+            try:
+                log.info(
+                    "LLM provider attempt: label=%s provider=%s fallback_index=%d",
+                    self._label,
+                    provider,
+                    index,
+                )
+                response = getattr(model, method_name)(messages, *args, **kwargs)
+                _state.mark_success(provider)
+                log.info("LLM provider success: label=%s provider=%s", self._label, provider)
+                return response
+            except Exception as e:
+                last_error = e
+                if not is_retriable_llm_error(e):
+                    log.error(
+                        "LLM provider non-retriable failure: label=%s provider=%s error=%s",
+                        self._label,
+                        provider,
+                        mask_pii(str(e))[:300],
+                    )
+                    raise
+                _state.mark_failed(provider)
+                log.warning(
+                    "LLM provider retriable failure: label=%s provider=%s; trying fallback: %s",
+                    self._label,
+                    provider,
+                    mask_pii(str(e))[:300],
+                )
+                continue
+
+        raise RuntimeError(f"All providers failed for {self._label}. Last error: {last_error}")
 
 
 class _PIIMaskingCallbackHandler(BaseCallbackHandler):
@@ -273,27 +414,16 @@ def get_orchestrator_model() -> BaseChatModel:
 
 
 def _get_model_from_chain(chain: list[str], label: str) -> BaseChatModel:
-    """Get the first available chat model from an explicit provider chain."""
-    for provider in chain:
-        if not _has_key(provider):
-            continue
-        if not _state.is_available(provider):
-            continue
-        model = _state.get_or_create(provider)
+    """Get a fallback-capable chat model from an explicit provider chain."""
+    configured = [provider for provider in chain if _has_key(provider)]
+    if not configured:
+        configured_text = ", ".join(chain) or "(empty chain)"
+        raise RuntimeError(f"No configured LLM providers for {label}: {configured_text}")
+    if len(configured) == 1:
+        model = _state.get_or_create(configured[0])
         if model:
             return model
-
-    # Fallback: ignore cooldowns, try anything configured.
-    for provider in chain:
-        if not _has_key(provider):
-            continue
-        model = _state.get_or_create(provider)
-        if model:
-            log.warning("All providers in cooldown, using '%s' anyway", provider)
-            return model
-
-    configured = ", ".join(chain) or "(empty chain)"
-    raise RuntimeError(f"No configured LLM providers for {label}: {configured}")
+    return FallbackChatModel(configured, label)  # type: ignore[return-value]
 
 
 def get_fallback_model() -> BaseChatModel:
@@ -321,50 +451,10 @@ def invoke_with_fallback(
     tools: list | None = None,
 ) -> BaseMessage:
     """Invoke LLM with automatic fallback chain and cooldown tracking."""
-    chain = provider_chain(tier)
-    last_error = None
-
-    for provider in chain:
-        if not _has_key(provider):
-            continue
-        if not _state.is_available(provider):
-            log.debug("Skipping '%s' (cooldown)", provider)
-            continue
-
-        model = _state.get_or_create(provider)
-        if not model:
-            continue
-
-        try:
-            if tools:
-                model = model.bind_tools(tools)
-            response = model.invoke(messages)
-            _state.mark_success(provider)
-            return response
-        except Exception as e:
-            last_error = e
-            _state.mark_failed(provider)
-            log.error("Provider '%s' failed: %s", provider, e)
-            continue
-
-    # Last resort: retry first configured provider ignoring cooldowns.
-    for provider in chain:
-        if not _has_key(provider):
-            continue
-        model = _state.get_or_create(provider)
-        if not model:
-            continue
-        try:
-            if tools:
-                model = model.bind_tools(tools)
-            response = model.invoke(messages)
-            _state.mark_success(provider)
-            return response
-        except Exception as e:
-            last_error = e
-            continue
-
-    raise RuntimeError(f"All providers failed. Last error: {last_error}")
+    model = get_model(tier)
+    if tools:
+        model = model.bind_tools(tools)
+    return model.invoke(messages)
 
 
 def is_runtime_llm_configured() -> bool:
@@ -462,6 +552,72 @@ def reset_provider_state() -> None:
     _state.clear_cache()
     _callback_signature = None
     _callback_cache = []
+
+
+def _status_code_from_error(error: BaseException) -> int | None:
+    """Extract HTTP-ish status code from common provider exception shapes."""
+    for attr in ("status_code", "status", "code"):
+        value = getattr(error, attr, None)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+
+    response = getattr(error, "response", None)
+    if response is not None:
+        for attr in ("status_code", "status"):
+            value = getattr(response, attr, None)
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str) and value.isdigit():
+                return int(value)
+
+    match = re.search(r"\b([45]\d{2})\b", str(error))
+    return int(match.group(1)) if match else None
+
+
+def is_retriable_llm_error(error: BaseException) -> bool:
+    """Return True for provider failures that are safe to retry elsewhere."""
+    if isinstance(error, (TimeoutError, ConnectionError)):
+        return True
+
+    status_code = _status_code_from_error(error)
+    if status_code is not None:
+        if status_code >= 500:
+            return True
+        if status_code in RETRIABLE_STATUS_CODES:
+            return True
+        if 400 <= status_code < 500:
+            return False
+
+    message = str(error).lower()
+    retriable_markers = (
+        "timeout",
+        "timed out",
+        "rate limit",
+        "too many requests",
+        "temporarily unavailable",
+        "server error",
+        "overloaded",
+        "connection reset",
+        "connection aborted",
+        "service unavailable",
+        "bad gateway",
+        "gateway timeout",
+    )
+    non_retriable_markers = (
+        "unauthorized",
+        "forbidden",
+        "invalid api key",
+        "invalid_api_key",
+        "bad request",
+        "not found",
+        "blocked by shield",
+        "content policy",
+    )
+    if any(marker in message for marker in non_retriable_markers):
+        return False
+    return any(marker in message for marker in retriable_markers)
 
 
 def _has_key(provider: str) -> bool:
