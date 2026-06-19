@@ -13,7 +13,7 @@ import inspect
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -32,6 +32,10 @@ ToolCacheGetCallback = Callable[[str], Any]
 ToolCacheSaveCallback = Callable[[str, str], Any]
 ToolApprovalPredicate = Callable[[BaseTool, dict], Any]
 ToolApprovalRequestCallback = Callable[[BaseTool, dict], Any]
+
+RAW_TOOL_CONTENT_KEY = "raw_content"
+MODEL_OUTPUT_MAX_CHARS = 2400
+MODEL_OUTPUT_MAX_ITEMS = 8
 
 DEFAULT_APPROVAL_TOOL_NAMES = {
     "mcp_add_server",
@@ -75,6 +79,25 @@ DEFAULT_APPROVAL_NAME_MARKERS = (
     "write",
     "update",
 )
+DEFAULT_COMPACT_OUTPUT_NAME_MARKERS = (
+    "brave",
+    "exa",
+    "web_search",
+    "search",
+    "fetch",
+    "content",
+    "extract",
+    "reddit",
+    "transcript",
+    "tg_channel",
+    "tg_channels",
+    "channel",
+    "digest",
+    "compare",
+    "dump",
+    "query",
+    "logs",
+)
 
 
 @dataclass
@@ -114,6 +137,103 @@ def tool_requires_approval(tool: BaseTool, args: dict) -> bool:
     return any(marker in name for marker in DEFAULT_APPROVAL_NAME_MARKERS)
 
 
+def _render_tool_result(value: Any) -> str:
+    """Render a tool result to the legacy string representation."""
+    return str(value) if value is not None else "OK"
+
+
+def _jsonable(value: Any) -> Any:
+    """Best-effort conversion for compact model-facing summaries."""
+    if is_dataclass(value):
+        return asdict(value)
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "model_dump"):
+        try:
+            return value.model_dump()
+        except Exception:
+            return value
+    return value
+
+
+def _clip(text: str, limit: int) -> str:
+    compact = " ".join(str(text or "").split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _compact_item(item: Any, index: int) -> str:
+    data = _jsonable(item)
+    if isinstance(data, dict):
+        title = data.get("title") or data.get("name") or data.get("url") or f"item {index}"
+        url = data.get("url") or data.get("link") or data.get("href") or ""
+        description = (
+            data.get("description")
+            or data.get("summary")
+            or data.get("text")
+            or data.get("content")
+            or data.get("snippet")
+            or ""
+        )
+        suffix = f" — {url}" if url else ""
+        body = f": {_clip(str(description), 220)}" if description else ""
+        return f"{index}. {_clip(str(title), 140)}{suffix}{body}"
+    return f"{index}. {_clip(str(data), 260)}"
+
+
+def compact_tool_output(result: Any) -> str:
+    """Return a token-light representation of large tool results."""
+    if isinstance(result, (list, tuple)):
+        items = [_compact_item(item, idx) for idx, item in enumerate(result[:MODEL_OUTPUT_MAX_ITEMS], start=1)]
+        hidden = len(result) - len(items)
+        suffix = f"\n... {hidden} more item(s) omitted." if hidden > 0 else ""
+        return "Tool result summary for model:\n" + "\n".join(items) + suffix
+
+    raw = _render_tool_result(result)
+    if len(raw) <= MODEL_OUTPUT_MAX_CHARS:
+        return raw
+    return (
+        f"[COMPRESSED tool output: {len(raw)} chars; full output is available "
+        "in tool_result event/audit.]\n"
+        f"{raw[:MODEL_OUTPUT_MAX_CHARS].rstrip()}..."
+    )
+
+
+def _default_should_compact_tool_output(tool: BaseTool) -> bool:
+    name = tool.name.lower()
+    return any(marker in name for marker in DEFAULT_COMPACT_OUTPUT_NAME_MARKERS)
+
+
+async def _maybe_await(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def _tool_model_output(tool: BaseTool, result: Any) -> tuple[str, str]:
+    """Return (model_content, raw_content) for a successful tool result."""
+    raw_content = _render_tool_result(result)
+    metadata = getattr(tool, "metadata", None) or {}
+    converter = metadata.get("to_model_output") or getattr(tool, "to_model_output", None)
+
+    if callable(converter):
+        try:
+            model_content = await _maybe_await(converter(result))
+            return _render_tool_result(model_content), raw_content
+        except Exception as e:
+            log.warning("Tool to_model_output failed for %s: %s", tool.name, e)
+
+    if _default_should_compact_tool_output(tool):
+        return compact_tool_output(result), raw_content
+    return raw_content, raw_content
+
+
+def tool_message_raw_content(message: ToolMessage) -> str:
+    """Return full raw tool content when a ToolMessage stores compressed text."""
+    return str(message.additional_kwargs.get(RAW_TOOL_CONTENT_KEY, message.content))
+
+
 async def execute_tool(
     tool: BaseTool,
     tool_call: dict,
@@ -136,16 +256,25 @@ async def execute_tool(
         else:
             result = tool.invoke(args)
 
-        content = str(result) if result is not None else "OK"
+        content, raw_content = await _tool_model_output(tool, result)
 
     except TimeoutError:
         content = f"[ERROR] Tool '{tool.name}' timed out after {TOOL_TIMEOUT_SECONDS}s"
+        raw_content = content
         log.error("Tool timeout: %s", tool.name)
     except Exception as e:
         content = error_handler(e)
+        raw_content = content
         log.warning("Tool error %s: %s", tool.name, str(e)[:200])
 
-    return ToolMessage(content=content, tool_call_id=tool_call_id)
+    additional_kwargs = {}
+    if raw_content != content:
+        additional_kwargs[RAW_TOOL_CONTENT_KEY] = raw_content
+    return ToolMessage(
+        content=content,
+        tool_call_id=tool_call_id,
+        additional_kwargs=additional_kwargs,
+    )
 
 
 async def react_loop(
@@ -298,11 +427,17 @@ async def react_loop(
                     tool_call_id=tool_call_id,
                 )
                 await write_tool_result(tool_call_id, str(tm.content))
+                raw_content = tool_message_raw_content(tm)
+                model_content = str(tm.content)
                 emit_tool_event("tool_result", {
                     "name": tool_name,
                     "call_id": tool_call_id,
                     "ok": False,
-                    "content": tm.content,
+                    "content": raw_content,
+                    "model_content": model_content,
+                    "compressed": raw_content != model_content,
+                    "raw_content_chars": len(raw_content),
+                    "model_content_chars": len(model_content),
                     "turn": turn + 1,
                     "duration_ms": round((time.perf_counter() - tool_started) * 1000),
                 })
@@ -351,11 +486,17 @@ async def react_loop(
                         tm = await execute_tool(tool, tc, error_handler)
                         await write_tool_result(tool_call_id, str(tm.content))
                         log.info("Tool result: %s → %s", tool_name, str(tm.content)[:200])
+                raw_content = tool_message_raw_content(tm)
+                model_content = str(tm.content)
                 emit_tool_event("tool_result", {
                     "name": tool_name,
                     "call_id": tool_call_id,
-                    "ok": not str(tm.content).startswith("[ERROR]"),
-                    "content": tm.content,
+                    "ok": not raw_content.startswith("[ERROR]"),
+                    "content": raw_content,
+                    "model_content": model_content,
+                    "compressed": raw_content != model_content,
+                    "raw_content_chars": len(raw_content),
+                    "model_content_chars": len(model_content),
                     "cached": cached_content is not None,
                     "turn": turn + 1,
                     "duration_ms": round((time.perf_counter() - tool_started) * 1000),

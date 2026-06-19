@@ -156,6 +156,14 @@ def log_tool_event(event: str, payload: dict[str, Any]) -> None:
             "source_kind": context.get("source_kind", ""),
             "args_summary": _summarize_payload(payload.get("args", {})),
             "result_summary": _summarize_payload(payload.get("content", "")) if event == "tool_result" else "",
+            "model_result_summary": (
+                _summarize_payload(payload.get("model_content", ""))
+                if event == "tool_result" and "model_content" in payload
+                else ""
+            ),
+            "compressed": bool(payload.get("compressed", False)),
+            "raw_content_chars": payload.get("raw_content_chars"),
+            "model_content_chars": payload.get("model_content_chars"),
             "error": status in {"error", "blocked"},
             "duration_ms": payload.get("duration_ms"),
             "cost_usd": payload.get("cost_usd"),

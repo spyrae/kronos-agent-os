@@ -11,6 +11,7 @@ from kronos.engine import (
     create_agent,
     execute_tool,
     react_loop,
+    tool_message_raw_content,
     tool_requires_approval,
 )
 
@@ -98,6 +99,57 @@ class TestExecuteTool:
         msg = await execute_tool(tool, tc)
         assert msg.content == "OK"
 
+    @pytest.mark.asyncio
+    async def test_to_model_output_keeps_raw_content_for_audit(self):
+        async def _fn() -> list[dict]:
+            return [
+                {"title": "Full result", "url": "https://example.com", "text": "long raw text"},
+            ]
+
+        tool = StructuredTool.from_function(
+            coroutine=_fn,
+            name="heavy_tool",
+            description="large output",
+            metadata={"to_model_output": lambda result: f"{len(result)} result(s)"},
+        )
+        tc = {"name": "heavy_tool", "args": {}, "id": "call_4"}
+
+        msg = await execute_tool(tool, tc)
+
+        assert msg.content == "1 result(s)"
+        assert tool_message_raw_content(msg) == (
+            "[{'title': 'Full result', 'url': 'https://example.com', 'text': 'long raw text'}]"
+        )
+
+    @pytest.mark.asyncio
+    async def test_default_heavy_tool_output_is_compacted(self):
+        async def _fn() -> list[dict]:
+            return [
+                {
+                    "title": "Result A",
+                    "url": "https://example.com/a",
+                    "description": "Useful details",
+                },
+                {
+                    "title": "Result B",
+                    "url": "https://example.com/b",
+                    "description": "More details",
+                },
+            ]
+
+        tool = StructuredTool.from_function(
+            coroutine=_fn,
+            name="brave_search",
+            description="web search",
+        )
+        tc = {"name": "brave_search", "args": {}, "id": "call_5"}
+
+        msg = await execute_tool(tool, tc)
+
+        assert msg.content.startswith("Tool result summary for model:")
+        assert "Result A — https://example.com/a" in msg.content
+        assert tool_message_raw_content(msg).startswith("[{'title': 'Result A'")
+
 
 class TestReactLoop:
     """Tests for react_loop()."""
@@ -156,6 +208,40 @@ class TestReactLoop:
         assert events[1][1]["ok"] is True
         assert events[1][1]["call_id"] == "call_search_1"
         assert isinstance(events[1][1]["duration_ms"], int)
+
+    @pytest.mark.asyncio
+    async def test_tool_result_event_contains_raw_and_model_outputs(self):
+        async def _fn() -> list[dict]:
+            return [{"title": "Raw", "url": "https://example.com", "description": "full"}]
+
+        tool = StructuredTool.from_function(
+            coroutine=_fn,
+            name="heavy_tool",
+            description="large output",
+            metadata={"to_model_output": lambda result: "compressed for model"},
+        )
+        model = _make_model([
+            _ai_with_tool_call("heavy_tool"),
+            AIMessage(content="done"),
+        ])
+        events = []
+
+        result = await react_loop(
+            model,
+            [HumanMessage(content="run heavy")],
+            tools=[tool],
+            on_tool_event=lambda event, payload: events.append((event, payload)),
+        )
+
+        assert result.content == "done"
+        tool_messages = [m for m in result.messages if isinstance(m, ToolMessage)]
+        assert tool_messages[0].content == "compressed for model"
+        result_event = events[1][1]
+        assert result_event["content"] == (
+            "[{'title': 'Raw', 'url': 'https://example.com', 'description': 'full'}]"
+        )
+        assert result_event["model_content"] == "compressed for model"
+        assert result_event["compressed"] is True
 
     @pytest.mark.asyncio
     async def test_unknown_tool(self):
