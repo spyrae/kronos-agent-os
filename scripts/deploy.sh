@@ -141,14 +141,19 @@ PY
 
     # Install systemd units: rewrite the generic /opt/kaos placeholder to this
     # install's KAOS_REMOTE_DIR and the User=kronos placeholder to the remote user.
-    REMOTE_USER=$(whoami)
-    for f in app/systemd/*.service app/systemd/*.timer; do
-      sudo sed \
-        -e "s/User=kronos/User=$REMOTE_USER/" \
-        -e "s|/opt/kaos|$KAOS_REMOTE_DIR|g" \
-        "$f" | sudo tee "/etc/systemd/system/$(basename "$f")" >/dev/null
-    done
-    sudo systemctl daemon-reload
+    # Skipped when KAOS_MANAGE_SYSTEMD=false, matching the update deploy branch.
+    if [ "${KAOS_MANAGE_SYSTEMD:-true}" = "true" ]; then
+      REMOTE_USER=$(whoami)
+      for f in app/systemd/*.service app/systemd/*.timer; do
+        [ -f "$f" ] && sudo sed \
+          -e "s/User=kronos/User=$REMOTE_USER/" \
+          -e "s|/opt/kaos|$KAOS_REMOTE_DIR|g" \
+          "$f" | sudo tee "/etc/systemd/system/$(basename "$f")" >/dev/null
+      done
+      sudo systemctl daemon-reload
+    else
+      echo "Skipping systemd unit install (KAOS_MANAGE_SYSTEMD=false)."
+    fi
 
     echo "First run setup complete."
     echo "Next steps:"
