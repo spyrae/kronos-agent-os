@@ -6,6 +6,7 @@ Supports search with optional LLM summarization via DeepSeek API.
 
 Usage:
     recall.py index              — rebuild FTS5 index from audit log
+    recall.py index --force-empty — intentionally clear/rebuild an empty index
     recall.py search "query"     — search and print results
     recall.py search "query" -n 5 — limit to 5 results
     recall.py search "query" --summarize — search + LLM summarize
@@ -43,6 +44,10 @@ DEEPSEEK_MODEL = "deepseek-chat"
 
 log = logging.getLogger("recall")
 _LOGGING_CONFIGURED = False
+
+
+class RecallIndexError(RuntimeError):
+    """Raised when rebuilding the recall index would be unsafe."""
 
 
 def _as_app_relative(path: Path) -> Path:
@@ -196,45 +201,77 @@ def extract_messages_from_audit(filepath: Path) -> list[dict]:
     return messages
 
 
-def build_index() -> None:
-    """Build/rebuild FTS5 index from audit log."""
+def load_audit_messages(*, force_empty: bool = False) -> list[dict]:
+    """Load indexable messages from AUDIT_LOG before touching the database."""
+    if not AUDIT_LOG.exists():
+        if force_empty:
+            log.warning("Audit log not found; --force-empty requested: %s", AUDIT_LOG)
+            return []
+        raise RecallIndexError(
+            f"Audit log not found: {AUDIT_LOG}. "
+            "Set AUDIT_LOG to an existing audit.jsonl or rerun with --force-empty "
+            "to intentionally clear the index."
+        )
+
+    if not AUDIT_LOG.is_file():
+        raise RecallIndexError(f"Audit log is not a file: {AUDIT_LOG}")
+
+    try:
+        audit_msgs = extract_messages_from_audit(AUDIT_LOG)
+    except OSError as exc:
+        raise RecallIndexError(f"Cannot read audit log {AUDIT_LOG}: {exc}") from exc
+
+    if not audit_msgs and not force_empty:
+        raise RecallIndexError(
+            f"Audit log contains no indexable records: {AUDIT_LOG}. "
+            "Check input_preview/output_preview records or rerun with --force-empty "
+            "to intentionally clear the index."
+        )
+
+    return audit_msgs
+
+
+def build_index(*, force_empty: bool = False) -> int:
+    """Build/rebuild FTS5 index from audit log atomically."""
+    audit_msgs = load_audit_messages(force_empty=force_empty)
     conn = init_db()
 
-    # Clear existing data
-    conn.execute("DELETE FROM messages")
-    conn.execute("DELETE FROM messages_fts")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
 
-    total = 0
+        # Clear existing data only after the new source has passed preflight.
+        conn.execute("DELETE FROM messages_fts")
+        conn.execute("DELETE FROM messages")
 
-    # Index audit log
-    if AUDIT_LOG.exists():
-        audit_msgs = extract_messages_from_audit(AUDIT_LOG)
         for msg in audit_msgs:
             conn.execute(
                 "INSERT INTO messages (session_id, source, role, content, timestamp, metadata)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
                 ("audit", "audit", msg["role"], msg["content"], msg["timestamp"], msg.get("metadata", "")),
             )
-        total += len(audit_msgs)
-        log.info("Indexed audit: %d messages", len(audit_msgs))
-    else:
-        log.warning("Audit log not found: %s", AUDIT_LOG)
 
-    # Rebuild FTS5
-    conn.execute("""
-        INSERT INTO messages_fts (rowid, content, role, source)
-        SELECT id, content, role, source FROM messages
-    """)
+        # Rebuild FTS5.
+        conn.execute("""
+            INSERT INTO messages_fts (rowid, content, role, source)
+            SELECT id, content, role, source FROM messages
+        """)
 
-    conn.execute(
-        "INSERT OR REPLACE INTO index_state (source, last_file, last_offset, updated_at) VALUES (?, ?, ?, ?)",
-        ("full", "rebuild", total, datetime.now(UTC).isoformat()),
-    )
+        total = len(audit_msgs)
+        conn.execute(
+            "INSERT OR REPLACE INTO index_state (source, last_file, last_offset, updated_at) VALUES (?, ?, ?, ?)",
+            ("full", "rebuild", total, datetime.now(UTC).isoformat()),
+        )
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
+    log.info("Indexed audit: %d messages", total)
     log.info("Index built: %d total messages", total)
+    return total
 
 
 # --- Search ---
@@ -363,7 +400,7 @@ def show_stats() -> None:
 def main() -> None:
     if len(sys.argv) < 2:
         print("Usage:")
-        print("  recall.py index                    — rebuild FTS5 index")
+        print("  recall.py index [--force-empty]    — rebuild FTS5 index")
         print("  recall.py search 'query' [-n N]    — search")
         print("  recall.py search 'query' --summarize — search + LLM summary")
         print("  recall.py stats                    — show index info")
@@ -373,7 +410,17 @@ def main() -> None:
 
     if cmd == "index":
         setup_logging()
-        build_index()
+        index_args = set(sys.argv[2:])
+        unknown_args = index_args - {"--force-empty"}
+        if unknown_args:
+            print(f"Unknown index option(s): {', '.join(sorted(unknown_args))}", file=sys.stderr)
+            print("Usage: recall.py index [--force-empty]", file=sys.stderr)
+            sys.exit(1)
+        try:
+            build_index(force_empty="--force-empty" in index_args)
+        except RecallIndexError as exc:
+            log.error("%s", exc)
+            sys.exit(2)
 
     elif cmd == "search":
         if len(sys.argv) < 3:
