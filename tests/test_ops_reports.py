@@ -19,10 +19,12 @@ def _clean_env(app_dir: Path) -> dict[str, str]:
         "KAOS_LOG_DIR",
         "KAOS_LOG_MODE",
         "KAOS_AGENT_NAME",
+        "KAOS_WORKSPACE_SRC",
         "AGENT_NAME",
         "DB_PATH",
         "DB_DIR",
         "NTFY_TOKEN",
+        "WORKSPACE_PATH",
     ):
         env.pop(name, None)
     env["KAOS_APP_DIR"] = str(app_dir)
@@ -208,3 +210,48 @@ def test_security_audit_marks_dead_logs_as_not_implemented(tmp_path: Path) -> No
     assert "audit.jsonl missing / not configured" in result.stdout
     assert "router-cost.jsonl: not implemented/configured" in result.stdout
     assert "Exposed secrets in workspace: not checked (missing directory:" in result.stdout
+
+
+def test_security_audit_uses_runtime_workspace_path_not_backup_source(tmp_path: Path) -> None:
+    app = tmp_path / "app"
+    runtime_workspace = app / "workspaces" / "kronos"
+    backup_source = tmp_path / "backup-source"
+    runtime_workspace.mkdir(parents=True)
+    backup_source.mkdir(parents=True)
+    (backup_source / "secret.md").write_text("fake sk-proj test token", encoding="utf-8")
+
+    env = _clean_env(app)
+    env["AGENT_NAME"] = "kronos"
+    env["WORKSPACE_PATH"] = "workspaces/kronos"
+    env["KAOS_WORKSPACE_SRC"] = str(backup_source)
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "security-audit.sh"), "today"],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "Exposed secrets in workspace: OK (none found)" in result.stdout
+
+
+def test_security_audit_resolves_relative_runtime_workspace_path(tmp_path: Path) -> None:
+    app = tmp_path / "app"
+    runtime_workspace = app / "workspaces" / "kronos"
+    runtime_workspace.mkdir(parents=True)
+    (runtime_workspace / "secret.md").write_text("fake sk-proj test token", encoding="utf-8")
+
+    env = _clean_env(app)
+    env["AGENT_NAME"] = "kronos"
+    env["WORKSPACE_PATH"] = "workspaces/kronos"
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "security-audit.sh"), "today"],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "Exposed secrets in workspace: WARNING: 1 files contain API keys!" in result.stdout

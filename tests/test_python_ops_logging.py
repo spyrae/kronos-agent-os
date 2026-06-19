@@ -16,7 +16,7 @@ def _base_env(tmp_path: Path) -> dict[str, str]:
         "AUDIT_LOG",
         "DB_PATH",
         "KAOS_ENV_FILE",
-        "KAOS_WORKSPACE_PATH",
+        "KAOS_WORKSPACE_SRC",
         "KRONOS_ENV_FILE",
         "PROFILER_LOG",
         "RECALL_LOG",

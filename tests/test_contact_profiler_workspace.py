@@ -15,7 +15,7 @@ def _base_env(tmp_path: Path) -> dict[str, str]:
         "CONTACTS_DIR",
         "DB_DIR",
         "DB_PATH",
-        "KAOS_WORKSPACE_PATH",
+        "KAOS_WORKSPACE_SRC",
         "KRONOS_ENV_FILE",
         "WORKSPACE",
         "WORKSPACE_PATH",
@@ -76,21 +76,6 @@ def test_workspace_path_override_writes_to_runtime_contacts(tmp_path: Path):
     assert filepath.read_text(encoding="utf-8") == "hello"
 
 
-def test_kaos_workspace_path_override_wins(tmp_path: Path):
-    workspace = tmp_path / "kaos-runtime"
-    result = _run_profiler_snippet(
-        tmp_path,
-        "print(module.CONTACTS_DIR)",
-        {
-            "KAOS_WORKSPACE_PATH": str(workspace),
-            "WORKSPACE_PATH": str(tmp_path / "ignored-runtime"),
-        },
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert Path(result.stdout.strip()) == workspace / CONTACTS_SUFFIX
-
-
 def test_legacy_workspace_env_is_ignored(tmp_path: Path):
     legacy_workspace = tmp_path / "legacy-workspace"
     result = _run_profiler_snippet(
@@ -113,3 +98,19 @@ def test_rejects_legacy_app_workspace_target(tmp_path: Path):
 
     assert result.returncode != 0
     assert "legacy app/workspace" in result.stderr
+
+
+def test_help_documents_workspace_env_roles(tmp_path: Path):
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--help"],
+        cwd=ROOT,
+        env=_base_env(tmp_path),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "WORKSPACE_PATH is the runtime workspace root" in result.stdout
+    assert "WORKSPACE is deprecated and ignored" in result.stdout
+    assert "KAOS_WORKSPACE_SRC is backup-only" in result.stdout

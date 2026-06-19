@@ -10,7 +10,8 @@ Usage:
 
 Environment:
     WORKSPACE_PATH      Runtime workspace root (default: workspaces/<agent>)
-    KAOS_WORKSPACE_PATH Runtime workspace root override (wins over WORKSPACE_PATH)
+    WORKSPACE           Deprecated legacy env; ignored, use WORKSPACE_PATH
+    KAOS_WORKSPACE_SRC  Backup-only source for workspace-backup.sh; ignored here
     BRIDGE_URL          Bridge HTTP URL (default: http://127.0.0.1:8788)
     WEBHOOK_SECRET      Auth secret for bridge
     DEEPSEEK_API_KEY    DeepSeek API key
@@ -41,7 +42,7 @@ from kronos.workspace import ws
 
 def _configured_workspace_path() -> Path | None:
     """Return an explicit runtime workspace override, if configured."""
-    raw_path = os.environ.get("KAOS_WORKSPACE_PATH") or os.environ.get("WORKSPACE_PATH")
+    raw_path = os.environ.get("WORKSPACE_PATH")
     if not raw_path:
         return None
     return Path(raw_path).expanduser()
@@ -69,8 +70,7 @@ def _reject_legacy_backup_target(contacts_dir: Path) -> None:
     if resolved_contacts_dir == legacy_workspace or _is_relative_to(resolved_contacts_dir, legacy_workspace):
         raise RuntimeError(
             "Refusing to write contact dossiers under legacy app/workspace. "
-            "Set WORKSPACE_PATH or KAOS_WORKSPACE_PATH to a runtime workspace, "
-            "for example ./workspaces/kronos."
+            "Set WORKSPACE_PATH to a runtime workspace, for example ./workspaces/kronos."
         )
 
 
@@ -135,6 +135,15 @@ def setup_logging(*, enable_file: bool = True) -> None:
         force=True,
     )
     _LOGGING_CONFIGURED = True
+
+
+def warn_deprecated_workspace_env() -> None:
+    """Warn when the removed WORKSPACE env is present during an actual run."""
+    if os.environ.get("WORKSPACE"):
+        log.warning(
+            "Ignoring deprecated WORKSPACE env. Use WORKSPACE_PATH for the "
+            "runtime workspace; KAOS_WORKSPACE_SRC is backup-only."
+        )
 
 
 # --- LLM ---
@@ -439,13 +448,21 @@ def run_profiler(chat: str, limit: int, dry_run: bool, no_notify: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Contact Profiler — Telegram chat analysis")
+    parser = argparse.ArgumentParser(
+        description="Contact Profiler — Telegram chat analysis",
+        epilog=(
+            "Workspace env: WORKSPACE_PATH is the runtime workspace root "
+            "(default: workspaces/<AGENT_NAME>). WORKSPACE is deprecated and "
+            "ignored. KAOS_WORKSPACE_SRC is backup-only for workspace-backup.sh."
+        ),
+    )
     parser.add_argument("--chat", required=True, help="Telegram username or ID (e.g. @ivan)")
     parser.add_argument("--limit", type=int, default=300, help="Max messages to fetch (default: 300)")
     parser.add_argument("--dry-run", action="store_true", help="Build prompt but don't call LLM")
     parser.add_argument("--no-notify", action="store_true", help="Skip Telegram notification")
     args = parser.parse_args()
     setup_logging(enable_file=not args.dry_run)
+    warn_deprecated_workspace_env()
 
     try:
         run_profiler(

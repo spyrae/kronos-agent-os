@@ -26,7 +26,8 @@ example:
   KAOS_BACKUP_BRANCH=main
 
 The backup target must be a private Git repository. The public app repository
-keeps workspace/ ignored as a safety guard.
+keeps workspace/ ignored as a safety guard. Runtime agents use WORKSPACE_PATH;
+KAOS_WORKSPACE_SRC is backup-only and must point at one explicit workspace.
 EOF
   exit 1
 }
@@ -75,7 +76,9 @@ for arg in "$@"; do
 Usage: workspace-backup.sh [--dry-run]
 
 Required configuration:
-  KAOS_WORKSPACE_SRC      Explicit Kronos workspace source.
+  KAOS_WORKSPACE_SRC      Explicit backup source for one Kronos workspace.
+                          Runtime uses WORKSPACE_PATH; this backup-only value
+                          is intentionally separate and fail-closed.
   KAOS_BACKUP_REPO_DIR   Explicit private Git repository for backup storage.
 
 Optional configuration:

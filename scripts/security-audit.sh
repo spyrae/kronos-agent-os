@@ -10,6 +10,13 @@ kaos_init_env
 APP_DIR="$KAOS_APP_DIR"
 MAIN_UNIT="${KAOS_MAIN_UNIT:-kaos}"
 kaos_resolve_log_sources
+resolve_app_relative_path() {
+  case "$1" in
+    /*) printf '%s\n' "$1" ;;
+    *) printf '%s\n' "$APP_DIR/$1" ;;
+  esac
+}
+
 SECURITY_ARGS=()
 AUDIT_ARGS=()
 for i in "${!KAOS_LOG_DIRS[@]}"; do
@@ -22,7 +29,11 @@ for i in "${!KAOS_LOG_DIRS[@]}"; do
     AUDIT_ARGS+=("${KAOS_LOG_LABELS[$i]}=$audit_path")
   fi
 done
-WORKSPACE_PATH="${KAOS_WORKSPACE_SRC:-$APP_DIR/workspaces}"
+if [ -n "${WORKSPACE_PATH:-}" ]; then
+  WORKSPACE_AUDIT_PATH="$(resolve_app_relative_path "$WORKSPACE_PATH")"
+else
+  WORKSPACE_AUDIT_PATH="$APP_DIR/workspaces"
+fi
 
 PERIOD="${1:-today}"
 TODAY=$(date -u +%Y-%m-%d)
@@ -169,10 +180,10 @@ systemctl is-active kronos-health.timer 2>/dev/null || echo "UNKNOWN"
 # Check API keys exposed in workspace
 echo ""
 echo -n "  Exposed secrets in workspace: "
-if [ ! -d "$WORKSPACE_PATH" ]; then
-  echo "not checked (missing directory: $WORKSPACE_PATH)"
+if [ ! -d "$WORKSPACE_AUDIT_PATH" ]; then
+  echo "not checked (missing directory: $WORKSPACE_AUDIT_PATH)"
 else
-  EXPOSED=$(grep -rl 'sk-ant\|sk-proj\|ntn_\|AIzaSy' "$WORKSPACE_PATH" 2>/dev/null | wc -l)
+  EXPOSED=$(grep -rl 'sk-ant\|sk-proj\|ntn_\|AIzaSy' "$WORKSPACE_AUDIT_PATH" 2>/dev/null | wc -l | tr -d '[:space:]')
   if [ "$EXPOSED" -gt 0 ]; then
     echo "WARNING: $EXPOSED files contain API keys!"
   else

@@ -39,6 +39,22 @@ def test_private_runtime_files_are_ignored():
     assert "dashboard-ui/dist/" in gitignore
 
 
+def test_workspace_env_roles_are_documented():
+    env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+    backup_script = (ROOT / "scripts" / "workspace-backup.sh").read_text(encoding="utf-8")
+    profiler_script = (ROOT / "scripts" / "contact-profiler.py").read_text(encoding="utf-8")
+    security_audit = (ROOT / "scripts" / "security-audit.sh").read_text(encoding="utf-8")
+
+    assert "WORKSPACE_PATH=" in env_example
+    assert "authoritative runtime workspace" in env_example
+    assert "KAOS_WORKSPACE_SRC=" in env_example
+    assert "backup-only source" in env_example
+    assert "Runtime uses WORKSPACE_PATH" in backup_script
+    assert "KAOS_WORKSPACE_SRC is backup-only" in profiler_script
+    assert "KAOS_" + "WORKSPACE_PATH" not in profiler_script
+    assert "KAOS_WORKSPACE_SRC:-" not in security_audit
+
+
 def test_legacy_workspace_backup_target_is_ignored():
     result = subprocess.run(
         ["git", "check-ignore", "workspace/test.md"],
