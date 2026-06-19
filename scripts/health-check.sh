@@ -9,13 +9,32 @@
 
 set -uo pipefail
 
-VERBOSE="${1:-}"
-ALERT="${2:-}"
+VERBOSE_MODE=false
+ALERT_ENABLED=false
+for arg in "$@"; do
+  case "$arg" in
+    --verbose|-v)
+      VERBOSE_MODE=true
+      ;;
+    --alert)
+      ALERT_ENABLED=true
+      ;;
+    -h|--help)
+      echo "Usage: health-check.sh [--verbose|-v] [--alert]"
+      exit 0
+      ;;
+    *)
+      echo "Usage: health-check.sh [--verbose|-v] [--alert]" >&2
+      echo "ERROR: unknown argument: $arg" >&2
+      exit 2
+      ;;
+  esac
+done
 
 # Resolve the install dir relative to this script so the checks work on any
 # deployment path without hardcoding it.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+APP_DIR="${KAOS_APP_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 # Main agent systemd unit name. Generic default; override via KAOS_MAIN_UNIT in
 # the environment / .env (e.g. KAOS_MAIN_UNIT=kronos-ii) when the unit is named
@@ -46,7 +65,7 @@ errors=()
 warnings=()
 
 log() {
-  if [ "$VERBOSE" = "--verbose" ] || [ "$VERBOSE" = "-v" ]; then
+  if [ "$VERBOSE_MODE" = true ]; then
     echo "[$(date '+%H:%M:%S')] $*"
   fi
 }
@@ -65,24 +84,59 @@ check_warn() {
   warnings+=("$1")
 }
 
+send_notification() {
+  local title="$1"
+  local priority="$2"
+  local tags="$3"
+  local text="$4"
+
+  # Send to Telegram bridge webhook.
+  if [ -n "$WEBHOOK_SECRET" ]; then
+    json=$(python3 -c "import json,sys; print(json.dumps({'text': sys.argv[1]}))" "$text" 2>/dev/null)
+    curl -s -X POST "$WEBHOOK_URL" \
+      -H "Content-Type: application/json" \
+      -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
+      -d "$json" > /dev/null 2>&1
+  fi
+
+  # Send to NTFY (phone push notification).
+  if [ -n "$NTFY_TOKEN" ]; then
+    curl -s -d "$text" \
+      -H "Title: $title" \
+      -H "Priority: $priority" \
+      -H "Tags: $tags" \
+      -H "Authorization: Bearer $NTFY_TOKEN" \
+      "$NTFY_URL/$NTFY_TOPIC" > /dev/null 2>&1
+  fi
+}
+
+bridge_response=$(curl -sf --max-time 5 "$BRIDGE_HEALTH" 2>/dev/null || true)
+bridge_healthy=false
+if echo "$bridge_response" | grep -q '"status".*"ok"'; then
+  bridge_healthy=true
+fi
+
 # --- Check 1: main agent systemd service ---
-service_active=$(systemctl is-active "$MAIN_UNIT" 2>/dev/null)
+service_active=$(systemctl is-active "$MAIN_UNIT" 2>/dev/null || true)
+unit_load_state=$(systemctl show "$MAIN_UNIT" --property=LoadState --value 2>/dev/null | head -n1 || true)
 if [ "$service_active" = "active" ]; then
   check_pass "$MAIN_UNIT service active"
 else
-  # The configured unit name may differ from this install's actual unit. The
-  # bridge /health endpoint is the authoritative liveness signal, so treat a
-  # name mismatch with a healthy bridge as a warning, not a failure.
-  if curl -sf --max-time 5 "$BRIDGE_HEALTH" 2>/dev/null | grep -q '"status".*"ok"'; then
-    check_warn "$MAIN_UNIT service not active, but bridge is healthy (set KAOS_MAIN_UNIT to this install's unit name)"
+  if [ "$unit_load_state" = "not-found" ] || { [ -z "$unit_load_state" ] && [ "$service_active" = "unknown" ]; }; then
+    if [ "$bridge_healthy" = true ]; then
+      check_warn "$MAIN_UNIT service not found/misconfigured, but bridge is healthy (set KAOS_MAIN_UNIT to this install's unit name)"
+    else
+      check_fail "$MAIN_UNIT service not found/misconfigured and bridge is not healthy"
+    fi
+  elif [ "$bridge_healthy" = true ]; then
+    check_fail "$MAIN_UNIT service ${service_active:-unknown} while bridge is healthy (orphan bridge process or stale endpoint)"
   else
     check_fail "$MAIN_UNIT service: ${service_active:-unknown}"
   fi
 fi
 
 # --- Check 2: Bridge health endpoint (port 8788) ---
-bridge_response=$(curl -sf --max-time 5 "$BRIDGE_HEALTH" 2>/dev/null)
-if echo "$bridge_response" | grep -q '"status".*"ok"'; then
+if [ "$bridge_healthy" = true ]; then
   check_pass "Bridge /health: OK"
 else
   check_fail "Bridge /health not responding (port 8788)"
@@ -136,9 +190,9 @@ fi
 total_checks=6
 failed=${#errors[@]}
 warned=${#warnings[@]}
-passed=$((total_checks - failed))
+passed=$((total_checks - failed - warned))
 
-if [ "$VERBOSE" = "--verbose" ] || [ "$VERBOSE" = "-v" ]; then
+if [ "$VERBOSE_MODE" = true ]; then
   echo ""
   echo "=== Health Summary ==="
   echo "Passed: $passed/$total_checks"
@@ -148,35 +202,31 @@ if [ "$VERBOSE" = "--verbose" ] || [ "$VERBOSE" = "-v" ]; then
 fi
 
 # --- Alert if requested ---
+if [ "$ALERT_ENABLED" = true ] && [ "$warned" -gt 0 ]; then
+  warning_text=$(printf '⚠️ Kronos Agent OS Health Warning\n\nWarnings (%d/%d):\n' "$warned" "$total_checks")
+  for warn in "${warnings[@]}"; do
+    warning_text+="- $warn"$'\n'
+  done
+  send_notification "Kronos Agent OS Health Warning" "low" "warning" "$warning_text"
+fi
+
+if [ "$VERBOSE_MODE" != true ] && [ "$warned" -gt 0 ]; then
+  for warn in "${warnings[@]}"; do
+    echo "WARN: $warn"
+  done
+fi
+
 if [ "$failed" -gt 0 ]; then
-  if [ "$ALERT" = "--alert" ] || [ "$VERBOSE" = "--alert" ]; then
+  if [ "$ALERT_ENABLED" = true ]; then
     alert_text=$(printf '🚨 Kronos Agent OS Health Alert\n\nFailed checks (%d/%d):\n' "$failed" "$total_checks")
     for err in "${errors[@]}"; do
       alert_text+="- $err"$'\n'
     done
-
-    # Send to Telegram
-    if [ -n "$WEBHOOK_SECRET" ]; then
-      json=$(python3 -c "import json,sys; print(json.dumps({'text': sys.argv[1]}))" "$alert_text" 2>/dev/null)
-      curl -s -X POST "$WEBHOOK_URL" \
-        -H "Content-Type: application/json" \
-        -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
-        -d "$json" > /dev/null 2>&1
-    fi
-
-    # Send to NTFY (phone push notification)
-    if [ -n "$NTFY_TOKEN" ]; then
-      curl -s -d "$alert_text" \
-        -H "Title: Kronos Agent OS Health Alert" \
-        -H "Priority: urgent" \
-        -H "Tags: rotating_light,skull" \
-        -H "Authorization: Bearer $NTFY_TOKEN" \
-        "$NTFY_URL/$NTFY_TOPIC" > /dev/null 2>&1
-    fi
+    send_notification "Kronos Agent OS Health Alert" "urgent" "rotating_light,skull" "$alert_text"
   fi
 
   # Print errors for non-verbose mode too
-  if [ "$VERBOSE" != "--verbose" ] && [ "$VERBOSE" != "-v" ]; then
+  if [ "$VERBOSE_MODE" != true ]; then
     for err in "${errors[@]}"; do
       echo "FAIL: $err"
     done
@@ -185,7 +235,7 @@ if [ "$failed" -gt 0 ]; then
   exit 1
 fi
 
-if [ "$VERBOSE" = "--verbose" ] || [ "$VERBOSE" = "-v" ]; then
+if [ "$VERBOSE_MODE" = true ]; then
   echo "All checks passed."
 fi
 
