@@ -47,6 +47,9 @@ class Workspace:
         self.sessions_dir = self.ops_dir / "sessions"
         self.handoff = self.sessions_dir / "handoff.md"
         self.queue_dir = self.ops_dir / "queue"
+        self.observer_dir = self.ops_dir / "observer"
+        self.observer_state = self.observer_dir / "state.json"
+        self.observer_runs = self.observer_dir / "runs.jsonl"
         self.dynamic_tools_dir = self.ops_dir / "dynamic_tools"
         self.self_improve_dir = self.ops_dir / "self-improve"
 
@@ -63,7 +66,7 @@ class Workspace:
         for d in [
             self.self_dir, self.skills_dir,
             self.user_dir, self.inbox_dir, self.world_dir, self.contacts_dir,
-            self.ops_dir, self.sessions_dir, self.queue_dir,
+            self.ops_dir, self.sessions_dir, self.queue_dir, self.observer_dir,
         ]:
             d.mkdir(parents=True, exist_ok=True)
 
