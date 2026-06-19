@@ -9,7 +9,6 @@ set -uo pipefail
 
 # Resolve the install dir relative to this script (works on any deploy path).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=scripts/_log_resolver.sh
 source "$SCRIPT_DIR/_log_resolver.sh"
 kaos_init_env

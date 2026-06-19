@@ -9,21 +9,11 @@
 
 set -euo pipefail
 
-# Load env vars from .env if present (for KAOS_REMOTE etc.)
+# Load env vars from .env if present (for KAOS_REMOTE etc.).
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ENV_FILE="$SCRIPT_DIR/../.env"
-if [ -f "$ENV_FILE" ]; then
-    while IFS='=' read -r key value || [ -n "$key" ]; do
-        key="${key#"${key%%[![:space:]]*}"}"
-        key="${key%"${key##*[![:space:]]}"}"
-        case "$key" in
-          ''|\#*) continue ;;
-        esac
-        if [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && [ -z "${!key+x}" ]; then
-            export "$key=$value"
-        fi
-    done < "$ENV_FILE"
-fi
+# shellcheck source=scripts/_common.sh
+source "$SCRIPT_DIR/_common.sh"
+kaos_common_init
 
 DEPLOY_MODE="${KAOS_DEPLOY_MODE:-remote}"
 REMOTE_DIR="${KAOS_REMOTE_DIR:-/opt/kaos}"
@@ -40,7 +30,7 @@ MAIN_UNIT="${KAOS_MAIN_UNIT:-${SERVICES%% *}}"
 # install dir (incl. /opt/kronos-ii). Set false only when units are fully
 # provisioned outside the deploy (e.g. hand-managed per-agent named units).
 MANAGE_SYSTEMD="${KAOS_MANAGE_SYSTEMD:-true}"
-SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SOURCE_DIR="$KAOS_APP_DIR"
 
 fail() {
   echo "FATAL: $*" >&2

@@ -1,4 +1,5 @@
 import os
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -75,6 +76,15 @@ exit 0
 """,
     )
     return bin_dir
+
+
+def _copy_deploy_script_app(tmp_path: Path) -> Path:
+    app = tmp_path / "app"
+    scripts = app / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(ROOT / "scripts" / "deploy.sh", scripts / "deploy.sh")
+    shutil.copy2(ROOT / "scripts" / "_common.sh", scripts / "_common.sh")
+    return app
 
 
 def test_deploy_first_run_skips_systemd_when_manage_systemd_false(tmp_path: Path) -> None:
@@ -205,6 +215,54 @@ def test_deploy_rejects_unsafe_remote_dir_before_sync_or_systemd(tmp_path: Path)
     assert "Allowed: [A-Za-z0-9/_.-], example: /opt/kronos-ii" in result.stderr
     assert not sudo_log.exists()
     assert not rsync_log.exists()
+
+
+def test_deploy_uses_common_env_precedence_before_resolving(tmp_path: Path) -> None:
+    app = _copy_deploy_script_app(tmp_path)
+    remote_dir = tmp_path / "remote"
+    remote_dir.mkdir()
+    sudo_log = tmp_path / "sudo.log"
+    rsync_log = tmp_path / "rsync.log"
+    app.joinpath(".env").write_text(
+        "\n".join(
+            [
+                "KAOS_DEPLOY_MODE=remote",
+                "KAOS_REMOTE=missing@example.invalid",
+                "KAOS_REMOTE_DIR=/opt/bad&unsafe",
+                "KAOS_MANAGE_SYSTEMD=true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{_fake_bin(tmp_path)}:{env['PATH']}",
+            "KAOS_DEPLOY_MODE": "local",
+            "KAOS_REMOTE_DIR": str(remote_dir),
+            "KAOS_MANAGE_SYSTEMD": "false",
+            "FAKE_SUDO_LOG": str(sudo_log),
+            "FAKE_RSYNC_LOG": str(rsync_log),
+            "FAKE_PIP_LOG": str(tmp_path / "pip.log"),
+            "FAKE_SYSTEMD_DIR": str(tmp_path / "systemd-out"),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(app / "scripts" / "deploy.sh"), "--first-run"],
+        cwd=app,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"Target dir: {remote_dir}" in result.stdout
+    assert "Manage systemd: false" in result.stdout
+    assert "Skipping systemd unit install (KAOS_MANAGE_SYSTEMD=false)." in result.stdout
+    assert "systemctl" not in sudo_log.read_text(encoding="utf-8")
+    assert "--exclude=.env" in rsync_log.read_text(encoding="utf-8")
 
 
 def test_deploy_docs_document_renamed_install_contract() -> None:

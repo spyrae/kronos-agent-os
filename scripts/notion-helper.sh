@@ -6,24 +6,32 @@
 #   personal — Personal Notion workspace (default)
 #   team     — Team workspace
 #
-# Tokens are loaded from env vars: NOTION_TOKEN_PERSONAL, NOTION_TOKEN_TEAM
-# Fallback: load from the app's .env (resolved relative to this script).
+# Tokens are loaded from env vars: NOTION_TOKEN_PERSONAL, NOTION_TOKEN_TEAM.
+# Fallback: load from the app's .env through the shared safe loader.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=scripts/_common.sh
+source "$SCRIPT_DIR/_common.sh"
+kaos_common_init
+APP_DIR="$KAOS_APP_DIR"
 
-# Load .env if tokens not already in environment
-if [ -z "${NOTION_TOKEN_PERSONAL:-}" ] || [ -z "${NOTION_TOKEN_TEAM:-}" ]; then
-  if [ -f "$APP_DIR/.env" ]; then
-    # shellcheck disable=SC1091
-    source "$APP_DIR/.env" 2>/dev/null || true
-  fi
-fi
+AVAILABLE_WORKSPACES="personal team"
 
-# Workspace tokens (from env vars)
-declare -A WORKSPACES
-WORKSPACES[personal]="${NOTION_TOKEN_PERSONAL:-}"
-WORKSPACES[team]="${NOTION_TOKEN_TEAM:-}"
+workspace_token() {
+  case "$1" in
+    personal) printf '%s' "${NOTION_TOKEN_PERSONAL:-}" ;;
+    team) printf '%s' "${NOTION_TOKEN_TEAM:-}" ;;
+    *) return 1 ;;
+  esac
+}
+
+workspace_token_env_name() {
+  case "$1" in
+    personal) printf '%s\n' "NOTION_TOKEN_PERSONAL" ;;
+    team) printf '%s\n' "NOTION_TOKEN_TEAM" ;;
+    *) printf '%s\n' "NOTION_TOKEN_<WORKSPACE>" ;;
+  esac
+}
 
 # Parse -w flag
 WORKSPACE="personal"
@@ -32,13 +40,13 @@ if [ "$1" = "-w" ] || [ "$1" = "--workspace" ]; then
   shift 2
 fi
 
-NOTION_KEY="${WORKSPACES[$WORKSPACE]:-}"
+if ! NOTION_KEY="$(workspace_token "$WORKSPACE")"; then
+  echo "ERROR: Unknown workspace '$WORKSPACE'. Available: $AVAILABLE_WORKSPACES"
+  exit 1
+fi
 if [ -z "$NOTION_KEY" ]; then
-  if [ -z "${WORKSPACES[$WORKSPACE]+x}" ]; then
-    echo "ERROR: Unknown workspace '$WORKSPACE'. Available: ${!WORKSPACES[*]}"
-  else
-    echo "ERROR: Token for workspace '$WORKSPACE' is not set. Set NOTION_TOKEN_${WORKSPACE^^} env var or add it to $APP_DIR/.env"
-  fi
+  token_env_name="$(workspace_token_env_name "$WORKSPACE")"
+  echo "ERROR: Token for workspace '$WORKSPACE' is not set. Set $token_env_name env var or add it to $APP_DIR/.env"
   exit 1
 fi
 
@@ -132,9 +140,10 @@ case "$1" in
 
   workspaces)
     echo "Available workspaces:"
-    for ws in "${!WORKSPACES[@]}"; do
+    for ws in $AVAILABLE_WORKSPACES; do
+      token="$(workspace_token "$ws")"
       token_status="(token set)"
-      [ -z "${WORKSPACES[$ws]}" ] && token_status="(token NOT set)"
+      [ -z "$token" ] && token_status="(token NOT set)"
       if [ "$ws" = "$WORKSPACE" ]; then
         echo "  * $ws (active) $token_status"
       else
@@ -146,7 +155,7 @@ case "$1" in
   *)
     echo "Usage: notion-helper [-w workspace] <command> [args]"
     echo ""
-    echo "Workspaces: ${!WORKSPACES[*]} (default: personal)"
+    echo "Workspaces: $AVAILABLE_WORKSPACES (default: personal)"
     echo "  -w personal   Personal Notion workspace"
     echo "  -w team       Team workspace"
     echo ""

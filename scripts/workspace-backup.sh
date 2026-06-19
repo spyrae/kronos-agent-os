@@ -95,14 +95,10 @@ done
 
 # Resolve the install dir relative to this script (works on any deploy path).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-
-# Load optional local config before resolving backup settings. The follow-up
-# ops cleanup will centralize this, but backup safety must not wait for it.
-if [ -f "$APP_DIR/.env" ]; then
-  # shellcheck disable=SC1091
-  source "$APP_DIR/.env" 2>/dev/null || true
-fi
+# shellcheck source=scripts/_common.sh
+source "$SCRIPT_DIR/_common.sh"
+kaos_common_init
+APP_DIR="$KAOS_APP_DIR"
 
 [ -n "${KAOS_WORKSPACE_SRC:-}" ] || require_explicit_source
 [ -n "${KAOS_BACKUP_REPO_DIR:-}" ] || require_explicit_destination
@@ -166,11 +162,6 @@ fi
 if git check-ignore -q "workspace/test.md"; then
   fail "backup target workspace/ is ignored in KAOS_BACKUP_REPO_DIR; use a private repo where workspace/ is intentionally trackable"
 fi
-
-# NTFY config
-NTFY_URL="${NTFY_URL:-${NTFY_URL:-https://ntfy.sh}}"
-NTFY_TOKEN="${NTFY_TOKEN:-}"
-NTFY_TOPIC="${NTFY_TOPIC:-persona-alerts}"
 
 # --- Safety: verify source is populated (Three-Space: self/, notes/, ops/) ---
 md_count=$(find "$WORKSPACE_SRC_RESOLVED" -name "*.md" -type f 2>/dev/null | wc -l)

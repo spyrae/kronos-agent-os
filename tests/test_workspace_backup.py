@@ -11,6 +11,7 @@ def _copy_backup_script_app(tmp_path: Path) -> Path:
     scripts = app / "scripts"
     scripts.mkdir(parents=True)
     shutil.copy2(ROOT / "scripts" / "workspace-backup.sh", scripts / "workspace-backup.sh")
+    shutil.copy2(ROOT / "scripts" / "_common.sh", scripts / "_common.sh")
     shutil.copy2(ROOT / ".gitignore", app / ".gitignore")
     subprocess.run(["git", "init"], cwd=app, check=True, capture_output=True, text=True)
     return app
@@ -35,6 +36,9 @@ def _init_bare_remote(path: Path) -> None:
 def _clean_backup_env() -> dict[str, str]:
     env = os.environ.copy()
     for name in (
+        "KAOS_APP_DIR",
+        "KAOS_SCRIPT_DIR",
+        "KAOS_COMMON_INITIALIZED",
         "KAOS_WORKSPACE_SRC",
         "KAOS_REPO_DIR",
         "KAOS_BACKUP_REPO_DIR",
@@ -261,3 +265,83 @@ def test_workspace_backup_dry_run_prints_plan_without_writing(tmp_path: Path) ->
     assert staged.stdout == ""
     assert refs.returncode == 1
     assert refs.stdout == ""
+
+
+def test_workspace_backup_loads_env_before_resolving_paths(tmp_path: Path) -> None:
+    app = _copy_backup_script_app(tmp_path)
+    workspace = tmp_path / "private-workspace"
+    backup_repo = tmp_path / "backup"
+    remote_repo = tmp_path / "remote.git"
+    _create_workspace(workspace)
+    _init_bare_remote(remote_repo)
+    _init_git_repo(backup_repo, remote_url=str(remote_repo))
+    (app / ".env").write_text(
+        "\n".join(
+            [
+                f"KAOS_WORKSPACE_SRC={workspace}",
+                f"KAOS_BACKUP_REPO_DIR={backup_repo}",
+                "KAOS_BACKUP_REMOTE=origin",
+                "KAOS_BACKUP_BRANCH=vault",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env = _clean_backup_env()
+
+    result = subprocess.run(
+        ["bash", str(app / "scripts" / "workspace-backup.sh"), "--dry-run"],
+        cwd=app,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"source: {workspace.resolve()}" in result.stdout
+    assert f"backup_repo: {backup_repo.resolve()}" in result.stdout
+    assert "branch: vault" in result.stdout
+
+
+def test_workspace_backup_process_env_overrides_env_file(tmp_path: Path) -> None:
+    app = _copy_backup_script_app(tmp_path)
+    workspace_from_env = tmp_path / "workspace-from-env"
+    workspace_from_file = tmp_path / "workspace-from-file"
+    backup_repo = tmp_path / "backup"
+    bad_backup_repo = tmp_path / "missing-backup"
+    remote_repo = tmp_path / "remote.git"
+    _create_workspace(workspace_from_env)
+    _create_workspace(workspace_from_file)
+    _init_bare_remote(remote_repo)
+    _init_git_repo(backup_repo, remote_url=str(remote_repo))
+    (app / ".env").write_text(
+        "\n".join(
+            [
+                f"KAOS_WORKSPACE_SRC={workspace_from_file}",
+                f"KAOS_BACKUP_REPO_DIR={bad_backup_repo}",
+                "KAOS_BACKUP_BRANCH=file-branch",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env = _clean_backup_env()
+    env.update(
+        {
+            "KAOS_WORKSPACE_SRC": str(workspace_from_env),
+            "KAOS_BACKUP_REPO_DIR": str(backup_repo),
+            "KAOS_BACKUP_BRANCH": "process-branch",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(app / "scripts" / "workspace-backup.sh"), "--dry-run"],
+        cwd=app,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"source: {workspace_from_env.resolve()}" in result.stdout
+    assert f"backup_repo: {backup_repo.resolve()}" in result.stdout
+    assert "branch: process-branch" in result.stdout
+    assert str(bad_backup_repo) not in result.stdout + result.stderr

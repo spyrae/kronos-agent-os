@@ -3,7 +3,6 @@
 # Usage: cost-stats.sh [today|week|all]
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=scripts/_log_resolver.sh
 source "$SCRIPT_DIR/_log_resolver.sh"
 kaos_resolve_log_sources
