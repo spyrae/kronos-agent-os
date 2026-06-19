@@ -67,6 +67,13 @@ esac
 exit 0
 """,
     )
+    _write_executable(
+        bin_dir / "rsync",
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_RSYNC_LOG"
+exit 0
+""",
+    )
     return bin_dir
 
 
@@ -88,6 +95,7 @@ def test_deploy_first_run_skips_systemd_when_manage_systemd_false(tmp_path: Path
             "FAKE_SUDO_LOG": str(sudo_log),
             "FAKE_PIP_LOG": str(pip_log),
             "FAKE_SYSTEMD_DIR": str(tmp_path / "systemd-out"),
+            "FAKE_RSYNC_LOG": str(tmp_path / "rsync.log"),
         }
     )
 
@@ -143,6 +151,7 @@ def test_deploy_rewrites_ops_after_and_skips_generic_main_on_renamed_install(tmp
             "FAKE_SUDO_LOG": str(sudo_log),
             "FAKE_PIP_LOG": str(tmp_path / "pip.log"),
             "FAKE_SYSTEMD_DIR": str(systemd_out),
+            "FAKE_RSYNC_LOG": str(tmp_path / "rsync.log"),
         }
     )
 
@@ -166,6 +175,38 @@ def test_deploy_rewrites_ops_after_and_skips_generic_main_on_renamed_install(tmp
     assert "systemctl daemon-reload" in sudo_log.read_text(encoding="utf-8")
 
 
+def test_deploy_rejects_unsafe_remote_dir_before_sync_or_systemd(tmp_path: Path) -> None:
+    sudo_log = tmp_path / "sudo.log"
+    rsync_log = tmp_path / "rsync.log"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{_fake_bin(tmp_path)}:{env['PATH']}",
+            "KAOS_DEPLOY_MODE": "local",
+            "KAOS_REMOTE_DIR": "/opt/foo&bar",
+            "FAKE_SUDO_LOG": str(sudo_log),
+            "FAKE_RSYNC_LOG": str(rsync_log),
+            "FAKE_PIP_LOG": str(tmp_path / "pip.log"),
+            "FAKE_SYSTEMD_DIR": str(tmp_path / "systemd-out"),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(DEPLOY), "--first-run"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "KAOS_REMOTE_DIR contains unsafe characters" in result.stderr
+    assert "Allowed: [A-Za-z0-9/_.-], example: /opt/kronos-ii" in result.stderr
+    assert not sudo_log.exists()
+    assert not rsync_log.exists()
+
+
 def test_deploy_docs_document_renamed_install_contract() -> None:
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
     deployment = (ROOT / "docs" / "DEPLOYMENT.md").read_text(encoding="utf-8")
@@ -175,3 +216,5 @@ def test_deploy_docs_document_renamed_install_contract() -> None:
     assert "After=$KAOS_MAIN_UNIT" in deployment
     assert "kaos.service` template is installed only" in deployment
     assert "KAOS_MANAGE_SYSTEMD=false" in deployment
+    assert "`KAOS_REMOTE_DIR` must be an absolute path" in deployment
+    assert "[A-Za-z0-9/_.-]" in deployment

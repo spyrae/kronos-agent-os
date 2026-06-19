@@ -90,6 +90,10 @@ when `KAOS_SERVICES` contains `kaos`; otherwise hand-managed/renamed main units
 are left untouched. Set `KAOS_MANAGE_SYSTEMD=false` to skip all systemd unit
 installation.
 
+`KAOS_REMOTE_DIR` must be an absolute path using only `[A-Za-z0-9/_.-]`
+(for example `/opt/kronos-ii`) because deploy rewrites systemd templates with
+that path before installation.
+
 After every deploy, the workflow checks service state. If deploy fails, it prints
 `systemctl status`, recent `journalctl` logs, disk, and memory diagnostics in the
 GitHub Actions run.

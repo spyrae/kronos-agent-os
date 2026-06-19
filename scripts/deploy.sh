@@ -42,10 +42,28 @@ MAIN_UNIT="${KAOS_MAIN_UNIT:-${SERVICES%% *}}"
 MANAGE_SYSTEMD="${KAOS_MANAGE_SYSTEMD:-true}"
 SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [ "$DEPLOY_MODE" != "local" ] && [ "$DEPLOY_MODE" != "remote" ]; then
-  echo "FATAL: KAOS_DEPLOY_MODE must be 'local' or 'remote'."
+fail() {
+  echo "FATAL: $*" >&2
   exit 1
+}
+
+validate_remote_dir() {
+  if [ -z "$REMOTE_DIR" ]; then
+    fail "KAOS_REMOTE_DIR must not be empty. Example: /opt/kronos-ii"
+  fi
+  if [[ "$REMOTE_DIR" != /* ]]; then
+    fail "KAOS_REMOTE_DIR must be an absolute path. Example: /opt/kronos-ii"
+  fi
+  if [[ ! "$REMOTE_DIR" =~ ^/[A-Za-z0-9/_.-]+$ ]]; then
+    fail "KAOS_REMOTE_DIR contains unsafe characters for systemd template rewrite: '$REMOTE_DIR'. Allowed: [A-Za-z0-9/_.-], example: /opt/kronos-ii"
+  fi
+}
+
+if [ "$DEPLOY_MODE" != "local" ] && [ "$DEPLOY_MODE" != "remote" ]; then
+  fail "KAOS_DEPLOY_MODE must be 'local' or 'remote'."
 fi
+
+validate_remote_dir
 
 if [ "$DEPLOY_MODE" = "remote" ]; then
   REMOTE="${KAOS_REMOTE:?Set KAOS_REMOTE=user@host in .env or environment}"
