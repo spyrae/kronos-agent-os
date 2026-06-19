@@ -129,7 +129,7 @@ def test_daily_status_reports_resolved_audit_source(tmp_path: Path) -> None:
     _fake_command(fake_bin, "uptime", 'echo "up 1 day"\n')
     _fake_command(fake_bin, "df", 'printf "Filesystem Size Used Avail Use%% Mounted\\n/dev/disk 10G 1G 9G 10%% /\\n"\n')
     _fake_command(fake_bin, "free", 'printf "      total used free\\nMem:  10G  2G   8G\\n"\n')
-    _fake_command(fake_bin, "journalctl", "exit 0\n")
+    _fake_command(fake_bin, "journalctl", 'printf "Jun 19 All checks passed.\\nJun 19 FAIL: Bridge /health not responding\\n"\n')
     env = _clean_env(app)
     env["AGENT_NAME"] = "kronos"
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
@@ -144,6 +144,9 @@ def test_daily_status_reports_resolved_audit_source(tmp_path: Path) -> None:
 
     assert "1 requests today" in result.stdout
     assert "Source: single: 1 source(s)" in result.stdout
+    assert "Unit: kronos-health.service" in result.stdout
+    assert "Runs: 2" in result.stdout
+    assert "Failures: 1" in result.stdout
 
 
 def test_security_audit_uses_snake_case_fields_and_period_filter(tmp_path: Path) -> None:

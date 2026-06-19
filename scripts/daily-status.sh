@@ -17,6 +17,7 @@ APP_DIR="$KAOS_APP_DIR"
 
 # Main agent systemd unit name. Generic default; override via KAOS_MAIN_UNIT.
 MAIN_UNIT="${KAOS_MAIN_UNIT:-$KAOS_MAIN_UNIT_RESOLVED}"
+HEALTH_UNIT="${KAOS_HEALTH_UNIT:-kronos-health.service}"
 NTFY_URL="${NTFY_URL:-${NTFY_URL:-https://ntfy.sh}}"
 NTFY_TOKEN="${NTFY_TOKEN:-}"
 NTFY_TOPIC="${NTFY_TOPIC:-persona-alerts}"
@@ -75,14 +76,20 @@ disk_usage=$(df -h / 2>/dev/null | awk 'NR==2 {print $5 " (" $3 "/" $2 ")"}')
 # Memory usage
 mem_info=$(free -h 2>/dev/null | awk 'NR==2 {print $3 "/" $2}')
 
-# Today's health check results (from cron log)
-health_log="/var/log/kronos-health.log"
-today=$(date '+%Y-%m-%d')
-if [ -f "$health_log" ]; then
-  health_runs=$(grep -c "$today" "$health_log" 2>/dev/null) || health_runs=0
-  health_fails=$(grep "$today" "$health_log" 2>/dev/null | grep -c "FAIL" 2>/dev/null) || health_fails=0
+# Health check results from systemd journal.
+health_journal=$(journalctl -u "$HEALTH_UNIT" --since "24 hours ago" --no-pager 2>/dev/null || true)
+if [ -n "$health_journal" ]; then
+  health_runs=$(printf '%s\n' "$health_journal" | grep -Eci 'Started|Finished|Health Summary|All checks passed|FAIL:')
+  health_fails=$(printf '%s\n' "$health_journal" | grep -Eci 'FAIL:|Failed|Health Alert|not responding|critical')
+  if [ "$health_runs" -eq 0 ] 2>/dev/null; then
+    health_runs=$(printf '%s\n' "$health_journal" | wc -l | tr -d ' ')
+  fi
 else
-  health_runs="no log"
+  if command -v journalctl >/dev/null 2>&1; then
+    health_runs="no journal entries"
+  else
+    health_runs="journal unavailable"
+  fi
   health_fails="N/A"
 fi
 
@@ -145,6 +152,7 @@ Resources:
   Memory: $mem_info
 
 Health checks (24h):
+  Unit: $HEALTH_UNIT
   Runs: $health_runs
   Failures: $health_fails
 
