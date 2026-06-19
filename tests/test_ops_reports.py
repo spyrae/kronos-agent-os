@@ -145,3 +145,63 @@ def test_daily_status_reports_resolved_audit_source(tmp_path: Path) -> None:
     assert "1 requests today" in result.stdout
     assert "Source: single: 1 source(s)" in result.stdout
 
+
+def test_security_audit_uses_snake_case_fields_and_period_filter(tmp_path: Path) -> None:
+    app = tmp_path / "app"
+    logs = app / "data" / "kronos" / "logs"
+    today = datetime.now(UTC).date().isoformat()
+    old = (datetime.now(UTC).date() - timedelta(days=8)).isoformat()
+    _write_jsonl(
+        logs / "audit.jsonl",
+        [
+            {
+                "ts": f"{today}T01:00:00+0000",
+                "blocked": True,
+                "tier": "lite",
+                "approx_cost_usd": 0.01,
+                "duration_ms": 2000,
+            },
+            {
+                "ts": f"{old}T01:00:00+0000",
+                "blocked": False,
+                "tier": "standard",
+                "approx_cost_usd": 0.99,
+                "duration_ms": 9000,
+            },
+        ],
+    )
+    env = _clean_env(app)
+    env["AGENT_NAME"] = "kronos"
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "security-audit.sh"), "today"],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "Total requests: 1" in result.stdout
+    assert "Blocked: 1 (100.0%)" in result.stdout
+    assert "Total cost: $0.0100" in result.stdout
+    assert "Avg response time: 2.0s" in result.stdout
+    assert "standard" not in result.stdout
+
+
+def test_security_audit_marks_dead_logs_as_not_implemented(tmp_path: Path) -> None:
+    app = tmp_path / "app"
+    env = _clean_env(app)
+    env["AGENT_NAME"] = "kronos"
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "security-audit.sh"), "today"],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "security.jsonl not implemented/configured" in result.stdout
+    assert "audit.jsonl missing / not configured" in result.stdout
+    assert "router-cost.jsonl: not implemented/configured" in result.stdout
+    assert "Exposed secrets in workspace: not checked (missing directory:" in result.stdout
