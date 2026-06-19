@@ -8,20 +8,21 @@ All core cron jobs are registered in `kronos/cron/setup.py` and run by the built
 |---|------|----------|------|--------|
 | 1 | heartbeat | Every 30 min | Periodic | `heartbeat.py` |
 | 2 | news-monitor | Daily 00:00 UTC (08:00 UTC+8) | Daily | `news_monitor.py` |
-| 3 | group-digest | Daily 01:00 UTC (09:00 UTC+8) | Daily | `group_digest.py` |
-| 4 | signal-jobs | Daily 02:00 UTC (10:00 UTC+8) | Daily | `signal_jobs.py` |
-| 5 | signal-ideas | Daily 04:00 UTC (12:00 UTC+8) | Daily | `signal_ideas.py` |
-| 6 | signal-travel-insights | Daily 05:00 UTC (13:00 UTC+8) | Daily | `signal_travel.py` |
-| 7 | email-expenses | Daily 00:00 UTC (08:00 UTC+8) | Daily | `email_expenses.py` |
-| 8 | sleep-compute | Daily 03:00 UTC (11:00 UTC+8) | Daily | `sleep_compute.py` |
-| 9 | self-improve | Daily 22:00 UTC (06:00 UTC+8) | Daily | `self_improve.py` |
-| 10 | expense-digest | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `expense_digest.py` |
-| 11 | people-scout | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `people_scout.py` |
-| 12 | skill-improve | Weekly Sun 20:00 UTC (04:00 UTC+8) | Weekly | `skill_improve.py` |
-| 13 | user-model | Weekly Wed 20:00 UTC (04:00 UTC+8) | Weekly | `user_model.py` |
-| 14 | market-review | Weekly Fri 10:00 UTC (18:00 UTC+8) | Weekly | `market_review.py` |
-| 15 | source-quality-audit | Weekly Sun 04:00 UTC with 13-day guard | Weekly | `source_quality_audit.py` |
-| 16 | swarm-retention | Weekly Sun 03:00 UTC (11:00 UTC+8) | Weekly | `swarm_retention.py` |
+| 3 | personal-observer | Daily 23:00 UTC (07:00 UTC+8) | Daily | `personal_observer.py` |
+| 4 | group-digest | Daily 01:00 UTC (09:00 UTC+8) | Daily | `group_digest.py` |
+| 5 | signal-jobs | Daily 02:00 UTC (10:00 UTC+8) | Daily | `signal_jobs.py` |
+| 6 | signal-ideas | Daily 04:00 UTC (12:00 UTC+8) | Daily | `signal_ideas.py` |
+| 7 | signal-travel-insights | Daily 05:00 UTC (13:00 UTC+8) | Daily | `signal_travel.py` |
+| 8 | email-expenses | Daily 00:00 UTC (08:00 UTC+8) | Daily | `email_expenses.py` |
+| 9 | sleep-compute | Daily 03:00 UTC (11:00 UTC+8) | Daily | `sleep_compute.py` |
+| 10 | self-improve | Daily 22:00 UTC (06:00 UTC+8) | Daily | `self_improve.py` |
+| 11 | expense-digest | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `expense_digest.py` |
+| 12 | people-scout | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `people_scout.py` |
+| 13 | skill-improve | Weekly Sun 20:00 UTC (04:00 UTC+8) | Weekly | `skill_improve.py` |
+| 14 | user-model | Weekly Wed 20:00 UTC (04:00 UTC+8) | Weekly | `user_model.py` |
+| 15 | market-review | Weekly Fri 10:00 UTC (18:00 UTC+8) | Weekly | `market_review.py` |
+| 16 | source-quality-audit | Weekly Sun 04:00 UTC with 13-day guard | Weekly | `source_quality_audit.py` |
+| 17 | swarm-retention | Weekly Sun 03:00 UTC (11:00 UTC+8) | Weekly | `swarm_retention.py` |
 
 ## Job Details
 
@@ -62,6 +63,23 @@ Daily Telegram group digest:
 
 **Dependencies:** Telethon client (shared), GROUPS.md
 **Notification:** Bot API → Telegram `Digest: News` topic
+
+### personal-observer
+**Schedule:** Daily 23:00 UTC (07:00 UTC+8)
+**Module:** `kronos/cron/personal_observer.py`
+
+Morning Observer digest for private Telegram dialogs:
+1. Connect to the Telethon userbot session.
+2. Read unread private dialogs via the read-only Observer scanner.
+3. Detect reply debts deterministically without LLM calls.
+4. Render a compact Telegram HTML digest.
+5. Send via Bot API / default notification destination.
+
+Scheduled at 23:00 UTC to avoid existing 00:00 UTC news/email jobs and the
+01:00 UTC group digest. Runs only on the `kronos` agent.
+
+**Dependencies:** Telethon userbot session
+**Notification:** Bot API → default notification chat
 
 ### 4. signal-jobs
 **Schedule:** Daily 02:00 UTC
