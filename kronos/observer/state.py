@@ -26,6 +26,7 @@ class ObserverState:
     last_seen_message_ids: dict[str, int] = field(default_factory=dict)
     ignored_peers: set[str] = field(default_factory=set)
     muted_peers: set[str] = field(default_factory=set)
+    last_scan_at: dict[str, str] = field(default_factory=dict)
     last_digest_at: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -38,6 +39,7 @@ class ObserverState:
             "last_seen_message_ids": dict(sorted(self.last_seen_message_ids.items())),
             "ignored_peers": sorted(self.ignored_peers),
             "muted_peers": sorted(self.muted_peers),
+            "last_scan_at": dict(sorted(self.last_scan_at.items())),
             "last_digest_at": dict(sorted(self.last_digest_at.items())),
         }
 
@@ -60,6 +62,7 @@ class ObserverState:
             },
             ignored_peers={str(item) for item in data.get("ignored_peers") or []},
             muted_peers={str(item) for item in data.get("muted_peers") or []},
+            last_scan_at={str(key): str(value) for key, value in dict(data.get("last_scan_at") or {}).items()},
             last_digest_at={str(key): str(value) for key, value in dict(data.get("last_digest_at") or {}).items()},
         )
 
@@ -139,6 +142,12 @@ class ObserverStateStore:
         """Record when an observer digest/scope was last generated or sent."""
         state = self.load()
         state.last_digest_at[str(digest_name)] = timestamp or utc_now_iso()
+        return self.save(state)
+
+    def mark_scan(self, scan_name: str, timestamp: str | None = None) -> ObserverState:
+        """Record when an observer scanner last ran."""
+        state = self.load()
+        state.last_scan_at[str(scan_name)] = timestamp or utc_now_iso()
         return self.save(state)
 
     def append_run(self, result: ObserverRunResult | Mapping[str, Any]) -> Path:

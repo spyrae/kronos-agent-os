@@ -32,6 +32,7 @@ from kronos.observer.models import (
     ReplyDebt,
 )
 from kronos.observer.state import ObserverState, ObserverStateStore
+from kronos.observer.telegram_scan import scan_private_dialogs
 
 __all__ = [
     "BookmarkCandidate",
@@ -54,6 +55,7 @@ __all__ = [
     "is_forced_capture",
     "normalize_url",
     "record_capture",
+    "scan_private_dialogs",
     "save_bookmarks",
     "strip_forced_capture_prefix",
 ]
