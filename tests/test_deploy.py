@@ -75,6 +75,13 @@ printf '%s\\n' "$*" >> "$FAKE_RSYNC_LOG"
 exit 0
 """,
     )
+    _write_executable(
+        bin_dir / "uv",
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "${FAKE_UV_LOG:-/dev/null}"
+exit "${FAKE_UV_EXIT_CODE:-0}"
+""",
+    )
     return bin_dir
 
 
@@ -225,6 +232,49 @@ def test_deploy_rejects_unsafe_remote_dir_before_sync_or_systemd(tmp_path: Path)
     assert not rsync_log.exists()
 
 
+def test_deploy_runs_eval_gate_before_sync() -> None:
+    text = DEPLOY.read_text(encoding="utf-8")
+
+    assert "run_eval_gate()" in text
+    assert "pytest -q -m eval" in text
+    assert text.index("run_eval_gate\nsync_files") < text.index("if [ \"${1:-}\" = \"--first-run\" ]; then")
+
+
+def test_deploy_aborts_when_eval_gate_fails_before_sync(tmp_path: Path) -> None:
+    remote_dir = tmp_path / "remote"
+    remote_dir.mkdir()
+    rsync_log = tmp_path / "rsync.log"
+    uv_log = tmp_path / "uv.log"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{_fake_bin(tmp_path)}:{env['PATH']}",
+            "KAOS_DEPLOY_MODE": "local",
+            "KAOS_REMOTE_DIR": str(remote_dir),
+            "FAKE_RSYNC_LOG": str(rsync_log),
+            "FAKE_UV_LOG": str(uv_log),
+            "FAKE_UV_EXIT_CODE": "7",
+            "FAKE_SUDO_LOG": str(tmp_path / "sudo.log"),
+            "FAKE_PIP_LOG": str(tmp_path / "pip.log"),
+            "FAKE_SYSTEMD_DIR": str(tmp_path / "systemd-out"),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(DEPLOY)],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 7
+    assert "Running deploy eval gate: pytest -m eval" in result.stdout
+    assert "run pytest -q -m eval" in uv_log.read_text(encoding="utf-8")
+    assert not rsync_log.exists()
+
+
 def test_deploy_uses_common_env_precedence_before_resolving(tmp_path: Path) -> None:
     app = _copy_deploy_script_app(tmp_path)
     remote_dir = tmp_path / "remote"
@@ -251,6 +301,7 @@ def test_deploy_uses_common_env_precedence_before_resolving(tmp_path: Path) -> N
             "KAOS_MANAGE_SYSTEMD": "false",
             "FAKE_SUDO_LOG": str(sudo_log),
             "FAKE_RSYNC_LOG": str(rsync_log),
+            "FAKE_UV_LOG": str(tmp_path / "uv.log"),
             "FAKE_PIP_LOG": str(tmp_path / "pip.log"),
             "FAKE_SYSTEMD_DIR": str(tmp_path / "systemd-out"),
         }

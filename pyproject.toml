@@ -143,4 +143,5 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "integration: requires external services (API keys, MCP servers)",
+    "eval: deterministic deploy-gate behavior checks",
 ]

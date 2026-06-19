@@ -69,6 +69,22 @@ echo "Services: $SERVICES"
 echo "Main unit: $MAIN_UNIT"
 echo "Manage systemd: $MANAGE_SYSTEMD"
 
+run_eval_gate() {
+  if [ "${KAOS_DEPLOY_EVALS:-true}" != "true" ]; then
+    echo "Skipping deploy eval gate (KAOS_DEPLOY_EVALS=false)."
+    return 0
+  fi
+
+  echo "Running deploy eval gate: pytest -m eval"
+  if command -v uv >/dev/null 2>&1; then
+    (cd "$SOURCE_DIR" && uv run pytest -q -m eval)
+  elif [ -x "$SOURCE_DIR/.venv/bin/python" ]; then
+    (cd "$SOURCE_DIR" && .venv/bin/python -m pytest -q -m eval)
+  else
+    (cd "$SOURCE_DIR" && python3 -m pytest -q -m eval)
+  fi
+}
+
 sync_files() {
   local target
 
@@ -119,6 +135,7 @@ target_bash() {
   fi
 }
 
+run_eval_gate
 sync_files
 
 if [ "${1:-}" = "--first-run" ]; then
