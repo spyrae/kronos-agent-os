@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from kronos.agents.knowledge_pipeline.queue import KnowledgeQueue
+from kronos.observer.bookmarks import BookmarkSink, save_bookmarks
 from kronos.observer.models import ObserverSourceKind
 from kronos.workspace import Workspace
 
@@ -152,6 +153,7 @@ def record_capture(
     timestamp: str = "",
     workspace: Workspace | None = None,
     queue: KnowledgeQueue | None = None,
+    bookmark_sink: BookmarkSink | None = None,
     extra_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Record a classified capture via ``KnowledgeQueue``.
@@ -175,6 +177,18 @@ def record_capture(
         timestamp=timestamp,
         extra_metadata=extra_metadata,
     )
+    bookmark_results = save_bookmarks(
+        list(decision.urls),
+        sink=bookmark_sink,
+        metadata={
+            "source_kind": decision.source_kind_value,
+            "message_id": message_id,
+            "timestamp": timestamp,
+        },
+    )
+    if bookmark_results:
+        metadata["bookmarks"] = [result.to_dict() for result in bookmark_results]
+
     knowledge_queue = queue or KnowledgeQueue(workspace)
     return knowledge_queue.record_source(decision.source_kind.value, decision.content, metadata=metadata)
 
@@ -190,9 +204,7 @@ def _modality(*, is_voice: bool, has_image: bool, urls: tuple[str, ...]) -> str:
 
 
 def _is_standalone_url_text(text: str, urls: tuple[str, ...]) -> bool:
-    remainder = text
-    for url in urls:
-        remainder = remainder.replace(url, " ")
+    remainder = URL_RE.sub(" ", text)
     return re.sub(r"[\s,.;:!?()[\]{}<>«»\"'`~*_—–-]+", "", remainder) == ""
 
 

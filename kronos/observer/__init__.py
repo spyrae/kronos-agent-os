@@ -5,6 +5,15 @@ model/state layer. Telegram scanning, capture hooks, and scheduled digests build
 on top of these contracts in later tasks.
 """
 
+from kronos.observer.bookmarks import (
+    BookmarkResult,
+    BookmarkSink,
+    BookmarkStatus,
+    NoopBookmarkSink,
+    RaindropBookmarkSink,
+    normalize_url,
+    save_bookmarks,
+)
 from kronos.observer.capture import (
     CaptureDecision,
     classify_capture,
@@ -26,6 +35,9 @@ from kronos.observer.state import ObserverState, ObserverStateStore
 
 __all__ = [
     "BookmarkCandidate",
+    "BookmarkResult",
+    "BookmarkSink",
+    "BookmarkStatus",
     "CaptureDecision",
     "CapturedItem",
     "DailyScopeEntry",
@@ -34,10 +46,14 @@ __all__ = [
     "ObserverSourceKind",
     "ObserverState",
     "ObserverStateStore",
+    "NoopBookmarkSink",
+    "RaindropBookmarkSink",
     "ReplyDebt",
     "classify_capture",
     "extract_urls",
     "is_forced_capture",
+    "normalize_url",
     "record_capture",
+    "save_bookmarks",
     "strip_forced_capture_prefix",
 ]
