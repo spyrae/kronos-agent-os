@@ -22,6 +22,7 @@ from kronos.observer.capture import (
     record_capture,
     strip_forced_capture_prefix,
 )
+from kronos.observer.daily_scope import build_daily_scope, save_daily_scope
 from kronos.observer.models import (
     BookmarkCandidate,
     CapturedItem,
@@ -52,6 +53,7 @@ __all__ = [
     "RaindropBookmarkSink",
     "ReplyDebt",
     "classify_capture",
+    "build_daily_scope",
     "detect_reply_debts",
     "extract_urls",
     "is_forced_capture",
@@ -59,5 +61,6 @@ __all__ = [
     "record_capture",
     "scan_private_dialogs",
     "save_bookmarks",
+    "save_daily_scope",
     "strip_forced_capture_prefix",
 ]

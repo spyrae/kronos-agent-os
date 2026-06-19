@@ -35,6 +35,7 @@ class Workspace:
         self.memory = self.user_dir / "MEMORY.md"
         self.user_model = self.user_dir / "USER-MODEL.md"
         self.user_patterns = self.user_dir / "USER-PATTERNS.md"
+        self.daily_scope_dir = self.user_dir / "daily-scope"
         self.inbox_dir = self.notes_dir / "inbox"
         self.world_dir = self.notes_dir / "world"
         self.contacts_dir = self.world_dir / "contacts"
@@ -65,7 +66,7 @@ class Workspace:
         """Create all workspace directories (idempotent)."""
         for d in [
             self.self_dir, self.skills_dir,
-            self.user_dir, self.inbox_dir, self.world_dir, self.contacts_dir,
+            self.user_dir, self.daily_scope_dir, self.inbox_dir, self.world_dir, self.contacts_dir,
             self.ops_dir, self.sessions_dir, self.queue_dir, self.observer_dir,
         ]:
             d.mkdir(parents=True, exist_ok=True)

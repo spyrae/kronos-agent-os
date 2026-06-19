@@ -9,7 +9,9 @@ from datetime import UTC, datetime
 
 from kronos.config import settings
 from kronos.cron.notify import send_bot_api
+from kronos.observer.daily_scope import build_daily_scope, local_day_window, save_daily_scope
 from kronos.observer.render import render_morning_observer_digest
+from kronos.observer.render import render_daily_scope
 from kronos.observer.reply_debts import detect_reply_debts
 from kronos.observer.state import ObserverStateStore
 from kronos.observer.telegram_scan import scan_private_dialogs
@@ -62,4 +64,44 @@ async def run_personal_observer(
         len(debts),
         sent,
     )
+    return bool(sent)
+
+
+async def run_daily_scope(
+    *,
+    client=None,
+    state_store: ObserverStateStore | None = None,
+    scanner=scan_private_dialogs,
+    builder=build_daily_scope,
+    renderer=render_daily_scope,
+    saver=save_daily_scope,
+    sender: Callable[..., bool] = send_bot_api,
+    now: datetime | None = None,
+    limit_dialogs: int = DEFAULT_LIMIT_DIALOGS,
+    limit_messages_per_dialog: int = DEFAULT_LIMIT_MESSAGES,
+) -> bool:
+    """Run the evening Daily Scope digest."""
+    if settings.agent_name != "kronos":
+        return False
+    active_client = client or await get_userbot()
+    if active_client is None:
+        log.warning("Userbot unavailable; skipping daily scope")
+        return False
+
+    store = state_store or ObserverStateStore()
+    current_time = now or datetime.now(UTC)
+    start, _end = local_day_window(current_time)
+    snapshots = await scanner(
+        active_client,
+        store,
+        limit_dialogs=limit_dialogs,
+        limit_messages_per_dialog=limit_messages_per_dialog,
+        since=start,
+        unread_only=False,
+    )
+    entries = builder(snapshots, current_time)
+    digest = renderer(entries, generated_at=current_time)
+    saver(entries, workspace=store.workspace, day=current_time, body=digest)
+    sent = sender(digest, parse_mode="HTML")
+    log.info("Daily scope: entries=%d sent=%s", len(entries), sent)
     return bool(sent)

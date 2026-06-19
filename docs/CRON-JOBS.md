@@ -13,16 +13,17 @@ All core cron jobs are registered in `kronos/cron/setup.py` and run by the built
 | 5 | signal-jobs | Daily 02:00 UTC (10:00 UTC+8) | Daily | `signal_jobs.py` |
 | 6 | signal-ideas | Daily 04:00 UTC (12:00 UTC+8) | Daily | `signal_ideas.py` |
 | 7 | signal-travel-insights | Daily 05:00 UTC (13:00 UTC+8) | Daily | `signal_travel.py` |
-| 8 | email-expenses | Daily 00:00 UTC (08:00 UTC+8) | Daily | `email_expenses.py` |
-| 9 | sleep-compute | Daily 03:00 UTC (11:00 UTC+8) | Daily | `sleep_compute.py` |
-| 10 | self-improve | Daily 22:00 UTC (06:00 UTC+8) | Daily | `self_improve.py` |
-| 11 | expense-digest | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `expense_digest.py` |
-| 12 | people-scout | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `people_scout.py` |
-| 13 | skill-improve | Weekly Sun 20:00 UTC (04:00 UTC+8) | Weekly | `skill_improve.py` |
-| 14 | user-model | Weekly Wed 20:00 UTC (04:00 UTC+8) | Weekly | `user_model.py` |
-| 15 | market-review | Weekly Fri 10:00 UTC (18:00 UTC+8) | Weekly | `market_review.py` |
-| 16 | source-quality-audit | Weekly Sun 04:00 UTC with 13-day guard | Weekly | `source_quality_audit.py` |
-| 17 | swarm-retention | Weekly Sun 03:00 UTC (11:00 UTC+8) | Weekly | `swarm_retention.py` |
+| 8 | daily-scope | Daily 14:00 UTC (22:00 UTC+8) | Daily | `personal_observer.py` |
+| 9 | email-expenses | Daily 00:00 UTC (08:00 UTC+8) | Daily | `email_expenses.py` |
+| 10 | sleep-compute | Daily 03:00 UTC (11:00 UTC+8) | Daily | `sleep_compute.py` |
+| 11 | self-improve | Daily 22:00 UTC (06:00 UTC+8) | Daily | `self_improve.py` |
+| 12 | expense-digest | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `expense_digest.py` |
+| 13 | people-scout | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `people_scout.py` |
+| 14 | skill-improve | Weekly Sun 20:00 UTC (04:00 UTC+8) | Weekly | `skill_improve.py` |
+| 15 | user-model | Weekly Wed 20:00 UTC (04:00 UTC+8) | Weekly | `user_model.py` |
+| 16 | market-review | Weekly Fri 10:00 UTC (18:00 UTC+8) | Weekly | `market_review.py` |
+| 17 | source-quality-audit | Weekly Sun 04:00 UTC with 13-day guard | Weekly | `source_quality_audit.py` |
+| 18 | swarm-retention | Weekly Sun 03:00 UTC (11:00 UTC+8) | Weekly | `swarm_retention.py` |
 
 ## Job Details
 
@@ -77,6 +78,20 @@ Morning Observer digest for private Telegram dialogs:
 
 Scheduled at 23:00 UTC to avoid existing 00:00 UTC news/email jobs and the
 01:00 UTC group digest. Runs only on the `kronos` agent.
+
+**Dependencies:** Telethon userbot session
+**Notification:** Bot API → default notification chat
+
+### daily-scope
+**Schedule:** Daily 14:00 UTC (22:00 UTC+8)
+**Module:** `kronos/cron/personal_observer.py`
+
+Evening private-dialog map for the current local day:
+1. Read private dialog snapshots without read acknowledgements.
+2. Build deterministic per-contact summaries from limited excerpts.
+3. Detect agreement markers (`договорились`, `жду`, `скинь`, `напомни`, `давай`, `сделаю`).
+4. Flag risk when the last message is incoming.
+5. Save `workspace/notes/user/daily-scope/YYYY-MM-DD.md` and send Telegram HTML.
 
 **Dependencies:** Telethon userbot session
 **Notification:** Bot API → default notification chat

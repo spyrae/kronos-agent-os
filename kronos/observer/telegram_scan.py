@@ -21,6 +21,7 @@ async def scan_private_dialogs(
     limit_messages_per_dialog: int,
     since: datetime | None = None,
     dry_run: bool = False,
+    unread_only: bool = True,
 ) -> list[DialogSnapshot]:
     """Collect safe snapshots for unread private Telegram dialogs.
 
@@ -45,7 +46,7 @@ async def scan_private_dialogs(
             continue
 
         unread_count = int(getattr(dialog, "unread_count", 0) or 0)
-        if unread_count <= 0:
+        if unread_only and unread_count <= 0:
             skipped_count += 1
             continue
 

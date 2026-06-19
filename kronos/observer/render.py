@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from html import escape
 
-from kronos.observer.models import DialogSnapshot, ReplyDebt
+from kronos.observer.models import DailyScopeEntry, DialogSnapshot, ReplyDebt
 
 
 def render_morning_observer_digest(
@@ -62,3 +62,35 @@ def _age_label(hours: float) -> str:
     if hours >= 24:
         return "1д"
     return f"{round(hours)}ч"
+
+
+def render_daily_scope(
+    entries: list[DailyScopeEntry] | tuple[DailyScopeEntry, ...],
+    *,
+    generated_at: datetime | None = None,
+) -> str:
+    """Render evening Daily Scope as Telegram HTML."""
+    generated = generated_at or datetime.now(UTC)
+    lines = [
+        "<b>🌙 Карта дня</b>",
+        f"<i>{escape(generated.strftime('%Y-%m-%d %H:%M UTC'))}</i>",
+        "",
+    ]
+    if not entries:
+        lines.append("Новых обсуждений в личке нет.")
+        return "\n".join(lines)
+
+    for entry in entries:
+        title = escape(entry.peer_title or entry.peer_id)
+        agreements = entry.metadata.get("agreements") or []
+        risk = bool(entry.metadata.get("risk"))
+        lines.extend(
+            [
+                f"<b>{title}</b>",
+                f"— Обсуждали: {escape(_compact(entry.summary))}",
+                f"— Договорённости: {escape('; '.join(agreements) if agreements else 'нет явных маркеров')}",
+                f"— Риск: {'нет ответа на последнее входящее' if risk else 'без действий'}",
+                "",
+            ]
+        )
+    return "\n".join(lines).strip()
