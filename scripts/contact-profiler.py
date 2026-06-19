@@ -2,13 +2,15 @@
 """Contact Profiler — builds dossiers from personal Telegram chat history.
 
 Fetches message history via bridge, analyzes with DeepSeek API,
-saves structured dossier to workspace/contacts/<handle>.md.
+saves structured dossier to the runtime workspace:
+notes/world/contacts/<handle>.md.
 
 Usage:
     contact-profiler.py --chat @username [--limit 300] [--dry-run] [--no-notify]
 
 Environment:
-    WORKSPACE           Workspace dir (default: <app>/workspace)
+    WORKSPACE_PATH      Runtime workspace root (default: workspaces/<agent>)
+    KAOS_WORKSPACE_PATH Runtime workspace root override (wins over WORKSPACE_PATH)
     BRIDGE_URL          Bridge HTTP URL (default: http://127.0.0.1:8788)
     WEBHOOK_SECRET      Auth secret for bridge
     DEEPSEEK_API_KEY    DeepSeek API key
@@ -26,17 +28,67 @@ import re
 import sys
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
+_APP_DIR = Path(__file__).resolve().parent.parent
+
 # Make kronos package importable from the app root
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from kronos.security.sanitize import sanitize_text, detect_injection, wrap_untrusted
+sys.path.insert(0, str(_APP_DIR))
+from kronos.security.sanitize import detect_injection, sanitize_text, wrap_untrusted
+from kronos.workspace import ws
+
+
+def _configured_workspace_path() -> Path | None:
+    """Return an explicit runtime workspace override, if configured."""
+    raw_path = os.environ.get("KAOS_WORKSPACE_PATH") or os.environ.get("WORKSPACE_PATH")
+    if not raw_path:
+        return None
+    return Path(raw_path).expanduser()
+
+
+def _as_app_relative(path: Path) -> Path:
+    """Resolve relative runtime paths the same way systemd runs KAOS: from app/."""
+    if path.is_absolute():
+        return path
+    return _APP_DIR / path
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def _reject_legacy_backup_target(contacts_dir: Path) -> None:
+    """Avoid silently writing dossiers into the old app/workspace backup target."""
+    legacy_workspace = (_APP_DIR / "workspace").resolve(strict=False)
+    resolved_contacts_dir = contacts_dir.resolve(strict=False)
+    if resolved_contacts_dir == legacy_workspace or _is_relative_to(resolved_contacts_dir, legacy_workspace):
+        raise RuntimeError(
+            "Refusing to write contact dossiers under legacy app/workspace. "
+            "Set WORKSPACE_PATH or KAOS_WORKSPACE_PATH to a runtime workspace, "
+            "for example ./workspaces/kronos."
+        )
+
+
+def resolve_contacts_dir() -> Path:
+    """Resolve the dossier directory from KAOS runtime workspace settings."""
+    workspace_root = _configured_workspace_path()
+    contacts_dir = (
+        _as_app_relative(workspace_root) / "notes" / "world" / "contacts"
+        if workspace_root is not None
+        else _as_app_relative(ws.contacts_dir)
+    )
+    _reject_legacy_backup_target(contacts_dir)
+    return contacts_dir
+
 
 # --- Config ---
 
-WORKSPACE = Path(os.environ.get("WORKSPACE", str(Path(__file__).resolve().parent.parent / "workspace")))
-CONTACTS_DIR = WORKSPACE / "notes" / "world" / "contacts"
+CONTACTS_DIR = resolve_contacts_dir()
 BRIDGE_URL = os.environ.get("BRIDGE_URL", "http://127.0.0.1:8788")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
@@ -193,7 +245,7 @@ Username: @{username}
 ### Формат ответа (строго markdown):
 
 # Досье: {full_name} (@{username})
-*Дата: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}*
+*Дата: {datetime.now(UTC).strftime('%Y-%m-%d')}*
 *Сообщений проанализировано: {len(messages)}*
 
 ## 1. Кто этот человек
@@ -234,7 +286,7 @@ Username: @{username}
 # --- Save ---
 
 def save_dossier(handle: str, content: str) -> Path:
-    """Save dossier to workspace/contacts/<handle>.md."""
+    """Save dossier to the runtime workspace contacts directory."""
     CONTACTS_DIR.mkdir(parents=True, exist_ok=True)
 
     # Normalize handle: remove @ prefix for filename
