@@ -4,10 +4,12 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=scripts/_log_resolver.sh
+source "$SCRIPT_DIR/_log_resolver.sh"
 MAIN_UNIT="${KAOS_MAIN_UNIT:-kaos}"
-LOG_DIR="${KAOS_LOG_DIR:-$APP_DIR/data/logs}"
-SECURITY_LOG="$LOG_DIR/security.jsonl"
-AUDIT_LOG="$LOG_DIR/audit.jsonl"
+kaos_resolve_log_sources
+SECURITY_LOG="$(kaos_first_existing_log_file security.jsonl || true)"
+AUDIT_LOG="$(kaos_first_existing_log_file audit.jsonl || true)"
 WORKSPACE_PATH="${KAOS_WORKSPACE_SRC:-$APP_DIR/workspaces}"
 
 PERIOD="${1:-today}"
@@ -27,7 +29,7 @@ echo ""
 
 # --- Security events ---
 echo "▸ Security Events"
-if [ -f "$SECURITY_LOG" ]; then
+if [ -n "$SECURITY_LOG" ] && [ -f "$SECURITY_LOG" ]; then
   python3 -c "
 import json, sys
 from collections import defaultdict
@@ -57,14 +59,14 @@ else:
         print(f'    [{ts}] {event}: {preview}')
 "
 else
-  echo "  No security log found."
+  echo "  No security log found for resolved sources."
 fi
 
 echo ""
 
 # --- Audit summary ---
 echo "▸ Audit Summary"
-if [ -f "$AUDIT_LOG" ]; then
+if [ -n "$AUDIT_LOG" ] && [ -f "$AUDIT_LOG" ]; then
   python3 -c "
 import json, sys
 from collections import defaultdict
@@ -99,7 +101,7 @@ for tier in sorted(tiers):
     print(f'    {tier:10s}: {tiers[tier]:4d} ({pct:.1f}%)')
 "
 else
-  echo "  No audit log found."
+  echo "  No audit log found for resolved sources."
 fi
 
 echo ""
@@ -124,11 +126,19 @@ fi
 # Check log sizes
 echo ""
 echo "▸ Log Sizes"
-for logfile in "$SECURITY_LOG" "$AUDIT_LOG" "$LOG_DIR/router-cost.jsonl"; do
+for logfile in "$SECURITY_LOG" "$AUDIT_LOG"; do
   if [ -f "$logfile" ]; then
     SIZE=$(du -h "$logfile" | cut -f1)
     LINES=$(wc -l < "$logfile")
     echo "  $(basename $logfile): $SIZE ($LINES entries)"
+  fi
+done
+for dir in "${KAOS_LOG_DIRS[@]}"; do
+  logfile="$dir/router-cost.jsonl"
+  if [ -f "$logfile" ]; then
+    SIZE=$(du -h "$logfile" | cut -f1)
+    LINES=$(wc -l < "$logfile")
+    echo "  $(basename "$logfile"): $SIZE ($LINES entries)"
   fi
 done
 

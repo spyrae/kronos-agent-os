@@ -10,6 +10,8 @@ set -uo pipefail
 # Resolve the install dir relative to this script (works on any deploy path).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=scripts/_log_resolver.sh
+source "$SCRIPT_DIR/_log_resolver.sh"
 
 # Main agent systemd unit name. Generic default; override via KAOS_MAIN_UNIT.
 MAIN_UNIT="${KAOS_MAIN_UNIT:-kaos}"
@@ -24,8 +26,8 @@ NTFY_URL="${NTFY_URL:-${NTFY_URL:-https://ntfy.sh}}"
 NTFY_TOKEN="${NTFY_TOKEN:-}"
 NTFY_TOPIC="${NTFY_TOPIC:-persona-alerts}"
 
-# Audit log path — matches kronos.audit (Path(db_path).parent/logs); override via env.
-AUDIT_LOG="${KAOS_AUDIT_LOG:-$APP_DIR/data/logs/audit.jsonl}"
+kaos_resolve_log_sources
+AUDIT_LOG="$(kaos_first_existing_log_file audit.jsonl || true)"
 
 # --- Gather data ---
 
@@ -88,10 +90,12 @@ service_restarts=$(journalctl -u "$MAIN_UNIT" --since "24 hours ago" 2>/dev/null
 
 # Audit log stats (if available)
 audit_log="$AUDIT_LOG"
-audit_stats="N/A"
-if [ -f "$audit_log" ]; then
+audit_stats="missing / not configured"
+if [ -n "$audit_log" ] && [ -f "$audit_log" ]; then
   audit_today=$(grep "$(date -u +%Y-%m-%d)" "$audit_log" 2>/dev/null | wc -l | tr -d ' ')
   audit_stats="${audit_today} requests today"
+elif [ "${#KAOS_LOG_DIRS[@]}" -gt 0 ]; then
+  audit_stats="missing at ${KAOS_LOG_DIRS[0]}/audit.jsonl"
 fi
 
 # --- Build report ---

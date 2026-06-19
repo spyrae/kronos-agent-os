@@ -4,12 +4,20 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-LOG_DIR="${KAOS_LOG_DIR:-$APP_DIR/data/logs}"
-COST_LOG="$LOG_DIR/cost.jsonl"
-AUDIT_LOG="$LOG_DIR/audit.jsonl"
+# shellcheck source=scripts/_log_resolver.sh
+source "$SCRIPT_DIR/_log_resolver.sh"
+kaos_resolve_log_sources
+COST_LOG="$(kaos_first_existing_log_file cost.jsonl || true)"
+AUDIT_LOG="$(kaos_first_existing_log_file audit.jsonl || true)"
 
-if [ ! -f "$COST_LOG" ]; then
-  echo "No cost log found at $COST_LOG"
+if [ -z "$COST_LOG" ]; then
+  echo "No cost log found for resolved sources:"
+  for i in "${!KAOS_LOG_DIRS[@]}"; do
+    echo "  ${KAOS_LOG_LABELS[$i]} (${KAOS_LOG_REASONS[$i]}): ${KAOS_LOG_DIRS[$i]}/cost.jsonl"
+  done
+  for warning in "${KAOS_LOG_WARNINGS[@]}"; do
+    echo "  warning: $warning"
+  done
   exit 0
 fi
 
@@ -96,7 +104,7 @@ if sonnet_cost > total_cost:
 "
 
 # Blocked requests from audit log
-if [ -f "$AUDIT_LOG" ]; then
+if [ -n "$AUDIT_LOG" ] && [ -f "$AUDIT_LOG" ]; then
   echo ""
   blocked=$(python3 -c "
 import json
