@@ -19,6 +19,7 @@ agents.yaml
 
 # Data
 data/
+workspace/
 *.db
 *.sqlite
 *.log

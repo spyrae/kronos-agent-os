@@ -31,11 +31,24 @@ def test_only_workspace_template_is_tracked():
 def test_private_runtime_files_are_ignored():
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
 
+    assert "workspace/" in gitignore
     assert "workspaces/*" in gitignore
     assert "!workspaces/_template/**" in gitignore
     assert "agents.yaml" in gitignore
     assert "servers.yaml" in gitignore
     assert "dashboard-ui/dist/" in gitignore
+
+
+def test_legacy_workspace_backup_target_is_ignored():
+    result = subprocess.run(
+        ["git", "check-ignore", "workspace/test.md"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.strip() == "workspace/test.md"
 
 
 def test_dashboard_build_output_is_not_tracked():
