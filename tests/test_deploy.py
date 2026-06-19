@@ -49,6 +49,21 @@ exit 0
         bin_dir / "sudo",
         """#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_SUDO_LOG"
+case "${1:-}" in
+  sed)
+    shift
+    command sed "$@"
+    ;;
+  tee)
+    shift
+    target="$1"
+    mkdir -p "$FAKE_SYSTEMD_DIR"
+    cat > "$FAKE_SYSTEMD_DIR/$(basename "$target")"
+    ;;
+  systemctl)
+    exit 0
+    ;;
+esac
 exit 0
 """,
     )
@@ -72,6 +87,7 @@ def test_deploy_first_run_skips_systemd_when_manage_systemd_false(tmp_path: Path
             "KAOS_MANAGE_SYSTEMD": "false",
             "FAKE_SUDO_LOG": str(sudo_log),
             "FAKE_PIP_LOG": str(pip_log),
+            "FAKE_SYSTEMD_DIR": str(tmp_path / "systemd-out"),
         }
     )
 
@@ -98,4 +114,64 @@ def test_deploy_first_run_and_update_share_systemd_management_contract() -> None
 
     assert text.count('if [ "${KAOS_MANAGE_SYSTEMD:-true}" = "true" ]; then') == 2
     assert text.count("Skipping systemd unit install (KAOS_MANAGE_SYSTEMD=false).") == 2
-    assert '[ -f "$f" ] && sudo sed' in first_run_script
+    assert '[ -f "$f" ] || continue' in first_run_script
+
+
+def test_deploy_rewrites_ops_after_and_skips_generic_main_on_renamed_install(tmp_path: Path) -> None:
+    remote_dir = tmp_path / "remote"
+    systemd_dir = remote_dir / "app" / "systemd"
+    systemd_dir.mkdir(parents=True)
+    (systemd_dir / "kaos.service").write_text(
+        "[Unit]\nDescription=Generic main\n[Service]\nUser=kronos\nExecStart=/opt/kaos/app/.venv/bin/python -m kronos\n",
+        encoding="utf-8",
+    )
+    (systemd_dir / "kronos-health.service").write_text(
+        "[Unit]\nAfter=kaos.service\n[Service]\nUser=kronos\nExecStart=/opt/kaos/app/scripts/health-check.sh\n",
+        encoding="utf-8",
+    )
+    sudo_log = tmp_path / "sudo.log"
+    systemd_out = tmp_path / "systemd-out"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{_fake_bin(tmp_path)}:{env['PATH']}",
+            "KAOS_REMOTE_DIR": str(remote_dir),
+            "KAOS_AGENTS": "kronos",
+            "KAOS_SERVICES": "kronos-ii impulse",
+            "KAOS_MAIN_UNIT": "kronos-ii",
+            "KAOS_MANAGE_SYSTEMD": "true",
+            "FAKE_SUDO_LOG": str(sudo_log),
+            "FAKE_PIP_LOG": str(tmp_path / "pip.log"),
+            "FAKE_SYSTEMD_DIR": str(systemd_out),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash"],
+        input=_first_run_target_script(),
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Skipping kaos.service install (KAOS_SERVICES does not include kaos; main unit: kronos-ii)." in result.stdout
+    assert not (systemd_out / "kaos.service").exists()
+    installed_health = (systemd_out / "kronos-health.service").read_text(encoding="utf-8")
+    assert "After=kronos-ii" in installed_health
+    assert "After=kaos.service" not in installed_health
+    assert f"ExecStart={remote_dir}/app/scripts/health-check.sh" in installed_health
+    assert "systemctl daemon-reload" in sudo_log.read_text(encoding="utf-8")
+
+
+def test_deploy_docs_document_renamed_install_contract() -> None:
+    env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+    deployment = (ROOT / "docs" / "DEPLOYMENT.md").read_text(encoding="utf-8")
+
+    assert "KAOS_MAIN_UNIT=kronos-ii" in env_example
+    assert "defaults to first KAOS_SERVICES item" in env_example
+    assert "After=$KAOS_MAIN_UNIT" in deployment
+    assert "kaos.service` template is installed only" in deployment
+    assert "KAOS_MANAGE_SYSTEMD=false" in deployment

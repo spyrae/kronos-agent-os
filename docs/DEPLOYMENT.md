@@ -70,7 +70,8 @@ Use **Actions -> Deploy -> Run workflow**.
 
 Inputs:
 
-- `first_run=true`: create `/opt/kaos/app`, Python venv, and systemd units.
+- `first_run=true`: create the target `app` dir, Python venv, and systemd
+  units when `KAOS_MANAGE_SYSTEMD=true`.
 - `first_run=false`: sync code, reinstall package, restart services, and verify
   `systemctl is-active`.
 - `agents`: space-separated systemd services to restart and check, default
@@ -80,6 +81,14 @@ Inputs:
 The workflow runs `scripts/deploy.sh` with `KAOS_DEPLOY_MODE=local`, so no SSH
 private key is needed in GitHub. Runtime state is preserved: `.env`, `.env.*`,
 `data/`, `workspaces/`, `.venv/`, and `*.session` are excluded from rsync.
+
+For renamed installs, set `KAOS_SERVICES` to the real systemd unit names and
+`KAOS_MAIN_UNIT` to the main agent service. Deploy rewrites ops unit
+dependencies from the public template `After=kaos.service` to
+`After=$KAOS_MAIN_UNIT`. The generic `kaos.service` template is installed only
+when `KAOS_SERVICES` contains `kaos`; otherwise hand-managed/renamed main units
+are left untouched. Set `KAOS_MANAGE_SYSTEMD=false` to skip all systemd unit
+installation.
 
 After every deploy, the workflow checks service state. If deploy fails, it prints
 `systemctl status`, recent `journalctl` logs, disk, and memory diagnostics in the

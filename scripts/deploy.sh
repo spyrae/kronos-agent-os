@@ -32,6 +32,7 @@ AGENTS="${KAOS_AGENTS:-kaos}"
 # agent_name list in KAOS_AGENTS (e.g. the main kronos agent runs as the
 # `kronos-ii` unit). Defaults to KAOS_AGENTS when not set.
 SERVICES="${KAOS_SERVICES:-$AGENTS}"
+MAIN_UNIT="${KAOS_MAIN_UNIT:-${SERVICES%% *}}"
 # Whether deploy installs app/systemd/* units into /etc/systemd/system. The
 # units in app/systemd/ are generic: they use the /opt/kaos placeholder path
 # and User=kronos. On install the deploy rewrites /opt/kaos -> KAOS_REMOTE_DIR
@@ -57,6 +58,7 @@ echo "Mode: $DEPLOY_MODE"
 echo "Target dir: $REMOTE_DIR"
 echo "Agents: $AGENTS"
 echo "Services: $SERVICES"
+echo "Main unit: $MAIN_UNIT"
 echo "Manage systemd: $MANAGE_SYSTEMD"
 
 sync_files() {
@@ -99,12 +101,13 @@ target_bash() {
     KAOS_REMOTE_DIR="$REMOTE_DIR" \
     KAOS_AGENTS="$AGENTS" \
     KAOS_SERVICES="$SERVICES" \
+    KAOS_MAIN_UNIT="$MAIN_UNIT" \
     KAOS_MANAGE_SYSTEMD="$MANAGE_SYSTEMD" \
     KAOS_HEALTH_URL="${KAOS_HEALTH_URL:-}" \
     KAOS_HEALTH_REQUIRED="${KAOS_HEALTH_REQUIRED:-true}" \
     bash -s
   else
-    ssh "$REMOTE" "KAOS_REMOTE_DIR='$REMOTE_DIR' KAOS_AGENTS='$AGENTS' KAOS_SERVICES='$SERVICES' KAOS_MANAGE_SYSTEMD='$MANAGE_SYSTEMD' KAOS_HEALTH_URL='${KAOS_HEALTH_URL:-}' KAOS_HEALTH_REQUIRED='${KAOS_HEALTH_REQUIRED:-true}' bash -s"
+    ssh "$REMOTE" "KAOS_REMOTE_DIR='$REMOTE_DIR' KAOS_AGENTS='$AGENTS' KAOS_SERVICES='$SERVICES' KAOS_MAIN_UNIT='$MAIN_UNIT' KAOS_MANAGE_SYSTEMD='$MANAGE_SYSTEMD' KAOS_HEALTH_URL='${KAOS_HEALTH_URL:-}' KAOS_HEALTH_REQUIRED='${KAOS_HEALTH_REQUIRED:-true}' bash -s"
   fi
 }
 
@@ -141,14 +144,34 @@ PY
 
     # Install systemd units: rewrite the generic /opt/kaos placeholder to this
     # install's KAOS_REMOTE_DIR and the User=kronos placeholder to the remote user.
+    # Also rewrite ops dependencies from the public default kaos.service to the
+    # real main unit for renamed installs.
     # Skipped when KAOS_MANAGE_SYSTEMD=false, matching the update deploy branch.
     if [ "${KAOS_MANAGE_SYSTEMD:-true}" = "true" ]; then
+      should_install_systemd_unit() {
+        local unit_name="$1"
+        if [ "$unit_name" != "kaos.service" ]; then
+          return 0
+        fi
+        for svc in ${KAOS_SERVICES:-$KAOS_AGENTS}; do
+          if [ "$svc" = "kaos" ]; then
+            return 0
+          fi
+        done
+        echo "Skipping kaos.service install (KAOS_SERVICES does not include kaos; main unit: $KAOS_MAIN_UNIT)."
+        return 1
+      }
+
       REMOTE_USER=$(whoami)
       for f in app/systemd/*.service app/systemd/*.timer; do
-        [ -f "$f" ] && sudo sed \
+        [ -f "$f" ] || continue
+        unit_name="$(basename "$f")"
+        should_install_systemd_unit "$unit_name" || continue
+        sudo sed \
           -e "s/User=kronos/User=$REMOTE_USER/" \
           -e "s|/opt/kaos|$KAOS_REMOTE_DIR|g" \
-          "$f" | sudo tee "/etc/systemd/system/$(basename "$f")" >/dev/null
+          -e "s/After=kaos.service/After=$KAOS_MAIN_UNIT/g" \
+          "$f" | sudo tee "/etc/systemd/system/$unit_name" >/dev/null
       done
       sudo systemctl daemon-reload
     else
@@ -200,14 +223,36 @@ else
     # remote user. The generic public units (kaos.service, ops .service/.timer)
     # thus land with correct absolute paths on any install dir. Hand-managed
     # per-agent named units (not in the repo) are left untouched.
+    # Ops service dependencies are rewritten from After=kaos.service to the
+    # install's real KAOS_MAIN_UNIT, so timers are ordered correctly on renamed
+    # installs.
+    # Generic kaos.service is installed only when KAOS_SERVICES includes kaos.
     # Skipped when KAOS_MANAGE_SYSTEMD=false.
     if [ "${KAOS_MANAGE_SYSTEMD:-true}" = "true" ]; then
+      should_install_systemd_unit() {
+        local unit_name="$1"
+        if [ "$unit_name" != "kaos.service" ]; then
+          return 0
+        fi
+        for svc in ${KAOS_SERVICES:-$KAOS_AGENTS}; do
+          if [ "$svc" = "kaos" ]; then
+            return 0
+          fi
+        done
+        echo "Skipping kaos.service install (KAOS_SERVICES does not include kaos; main unit: $KAOS_MAIN_UNIT)."
+        return 1
+      }
+
       REMOTE_USER=$(whoami)
       for f in app/systemd/*.service app/systemd/*.timer; do
-        [ -f "$f" ] && sudo sed \
+        [ -f "$f" ] || continue
+        unit_name="$(basename "$f")"
+        should_install_systemd_unit "$unit_name" || continue
+        sudo sed \
           -e "s/User=kronos/User=$REMOTE_USER/" \
           -e "s|/opt/kaos|$KAOS_REMOTE_DIR|g" \
-          "$f" | sudo tee "/etc/systemd/system/$(basename "$f")" >/dev/null
+          -e "s/After=kaos.service/After=$KAOS_MAIN_UNIT/g" \
+          "$f" | sudo tee "/etc/systemd/system/$unit_name" >/dev/null
       done
       sudo systemctl daemon-reload
     else
