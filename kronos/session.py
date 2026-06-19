@@ -146,6 +146,30 @@ class SessionStore:
                     PRIMARY KEY (turn_id, tool_call_id)
                 )
             """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS pending_approvals (
+                    approval_id TEXT PRIMARY KEY,
+                    turn_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    tool_call_id TEXT NOT NULL,
+                    tool_name TEXT NOT NULL,
+                    args_json TEXT NOT NULL DEFAULT '{}',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    decided_at TIMESTAMP,
+                    decided_by TEXT,
+                    decision TEXT
+                )
+            """)
+            await db.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_approvals_turn_call
+                    ON pending_approvals(turn_id, tool_call_id)
+                    WHERE status = 'pending'
+            """)
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_pending_approvals_status
+                    ON pending_approvals(status, requested_at)
+            """)
             await db.commit()
             self._initialized = True
 
@@ -237,6 +261,209 @@ class SessionStore:
                 (turn_id, tool_call_id, content),
             )
             await db.commit()
+
+    def _pending_approval_from_row(self, row) -> dict | None:
+        """Convert a pending_approvals row into a JSON-safe dict."""
+        if not row:
+            return None
+        try:
+            args = json.loads(row[5] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            args = {}
+        return {
+            "approval_id": row[0],
+            "turn_id": row[1],
+            "thread_id": row[2],
+            "tool_call_id": row[3],
+            "tool_name": row[4],
+            "args": args,
+            "status": row[6],
+            "requested_at": row[7],
+            "decided_at": row[8],
+            "decided_by": row[9],
+            "decision": row[10],
+            "input_message": row[11],
+        }
+
+    async def create_pending_approval(
+        self,
+        *,
+        turn_id: str,
+        thread_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        args: dict,
+    ) -> str:
+        """Create or reuse a pending approval for a durable tool call."""
+        approval_id = str(uuid.uuid4())
+        args_json = json.dumps(args or {}, ensure_ascii=False, default=str)
+
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                """
+                SELECT approval_id FROM pending_approvals
+                WHERE turn_id = ? AND tool_call_id = ? AND status = 'pending'
+                """,
+                (turn_id, tool_call_id),
+            )
+            row = await cursor.fetchone()
+            if row:
+                await db.execute(
+                    "UPDATE active_turns SET status = 'waiting_approval' WHERE turn_id = ?",
+                    (turn_id,),
+                )
+                await db.commit()
+                return str(row[0])
+
+            await db.execute(
+                """
+                INSERT OR IGNORE INTO pending_approvals
+                    (approval_id, turn_id, thread_id, tool_call_id, tool_name, args_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (approval_id, turn_id, thread_id, tool_call_id, tool_name, args_json),
+            )
+            cursor = await db.execute(
+                """
+                SELECT approval_id FROM pending_approvals
+                WHERE turn_id = ? AND tool_call_id = ? AND status = 'pending'
+                ORDER BY requested_at DESC
+                LIMIT 1
+                """,
+                (turn_id, tool_call_id),
+            )
+            inserted = await cursor.fetchone()
+            await db.execute(
+                "UPDATE active_turns SET status = 'waiting_approval' WHERE turn_id = ?",
+                (turn_id,),
+            )
+            await db.commit()
+
+        return str(inserted[0]) if inserted else approval_id
+
+    async def get_pending_approval(self, approval_id: str) -> dict | None:
+        """Return an approval request with its durable turn input."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                """
+                SELECT
+                    p.approval_id,
+                    p.turn_id,
+                    p.thread_id,
+                    p.tool_call_id,
+                    p.tool_name,
+                    p.args_json,
+                    p.status,
+                    p.requested_at,
+                    p.decided_at,
+                    p.decided_by,
+                    p.decision,
+                    t.input_message
+                FROM pending_approvals p
+                JOIN active_turns t ON t.turn_id = p.turn_id
+                WHERE p.approval_id = ?
+                """,
+                (approval_id,),
+            )
+            row = await cursor.fetchone()
+        return self._pending_approval_from_row(row)
+
+    async def claim_pending_approval(
+        self,
+        *,
+        approval_id: str,
+        decision: str,
+        decided_by: str = "",
+    ) -> dict | None:
+        """Atomically claim a pending approval and return its payload."""
+        normalized_decision = "approved" if decision == "approved" else "rejected"
+
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                """
+                SELECT
+                    p.approval_id,
+                    p.turn_id,
+                    p.thread_id,
+                    p.tool_call_id,
+                    p.tool_name,
+                    p.args_json,
+                    p.status,
+                    p.requested_at,
+                    p.decided_at,
+                    p.decided_by,
+                    p.decision,
+                    t.input_message
+                FROM pending_approvals p
+                JOIN active_turns t ON t.turn_id = p.turn_id
+                WHERE p.approval_id = ? AND p.status = 'pending'
+                """,
+                (approval_id,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                await db.commit()
+                return None
+
+            await db.execute(
+                """
+                UPDATE pending_approvals
+                SET status = ?,
+                    decision = ?,
+                    decided_by = ?,
+                    decided_at = CURRENT_TIMESTAMP
+                WHERE approval_id = ? AND status = 'pending'
+                """,
+                (normalized_decision, normalized_decision, decided_by, approval_id),
+            )
+            await db.execute(
+                "UPDATE active_turns SET status = 'running' WHERE turn_id = ?",
+                (row[1],),
+            )
+            await db.commit()
+
+        claimed = self._pending_approval_from_row(row)
+        if claimed is not None:
+            claimed["status"] = normalized_decision
+            claimed["decision"] = normalized_decision
+            claimed["decided_by"] = decided_by
+        return claimed
+
+    async def load_turn_messages(self, thread_id: str, turn_id: str) -> list[BaseMessage]:
+        """Rebuild persisted history + current durable turn journal."""
+        messages = await self.load(thread_id)
+
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                "SELECT input_message FROM active_turns WHERE turn_id = ?",
+                (turn_id,),
+            )
+            turn_row = await cursor.fetchone()
+            if not turn_row:
+                return messages
+
+            messages.append(HumanMessage(content=str(turn_row[0])))
+            journal_cursor = await db.execute(
+                """
+                SELECT message_json FROM turn_journal
+                WHERE turn_id = ?
+                ORDER BY seq ASC
+                """,
+                (turn_id,),
+            )
+            journal_rows = await journal_cursor.fetchall()
+
+        for (raw_message,) in journal_rows:
+            try:
+                messages.append(_deserialize_message(json.loads(raw_message)))
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                log.warning("Skipping malformed journal message for turn %s: %s", turn_id, e)
+        return messages
 
     async def finish_turn(self, turn_id: str) -> None:
         """Mark a turn done and remove its ephemeral journal/cache rows."""

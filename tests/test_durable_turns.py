@@ -38,6 +38,7 @@ def _minimal_agent(session_store: SessionStore) -> KronosAgent:
     agent._skill_store = None
     agent._external_tool_event_callback = None
     agent._durable_recovery_checked = False
+    agent._last_pending_approval_id = None
     return agent
 
 
@@ -180,3 +181,150 @@ async def test_ephemeral_peer_reaction_does_not_open_durable_turn(tmp_path: Path
 
     assert reply == "delta"
     assert await store.load("thread") == []
+
+
+@pytest.mark.asyncio
+async def test_pending_approval_claims_exactly_once(tmp_path: Path) -> None:
+    db_path = tmp_path / "session.db"
+    store = SessionStore(str(db_path))
+    turn_id = await store.begin_turn("thread", "mutate")
+
+    approval_id = await store.create_pending_approval(
+        turn_id=turn_id,
+        thread_id="thread",
+        tool_call_id="call_1",
+        tool_name="mcp_add_server",
+        args={"name": "demo"},
+    )
+
+    pending = await store.get_pending_approval(approval_id)
+    assert pending is not None
+    assert pending["status"] == "pending"
+    assert pending["args"] == {"name": "demo"}
+    assert _active_turn_statuses(db_path) == ["waiting_approval"]
+
+    claimed = await store.claim_pending_approval(
+        approval_id=approval_id,
+        decision="approved",
+        decided_by="42",
+    )
+    second_claim = await store.claim_pending_approval(
+        approval_id=approval_id,
+        decision="approved",
+        decided_by="42",
+    )
+
+    assert claimed is not None
+    assert claimed["tool_name"] == "mcp_add_server"
+    assert claimed["status"] == "approved"
+    assert second_claim is None
+    assert _active_turn_statuses(db_path) == ["running"]
+
+
+@pytest.mark.asyncio
+async def test_agent_approval_approve_executes_once_after_restart(tmp_path: Path) -> None:
+    db_path = tmp_path / "session.db"
+    store = SessionStore(str(db_path))
+    calls = 0
+
+    async def risky_tool() -> str:
+        nonlocal calls
+        calls += 1
+        return "executed once"
+
+    tool = StructuredTool.from_function(
+        coroutine=risky_tool,
+        name="mcp_add_server",
+        description="mutates MCP servers",
+    )
+    model = _make_model([
+        _ai_with_tool_call("mcp_add_server", tool_call_id="call_approve"),
+        AIMessage(content="done after approve"),
+    ])
+    agent = _minimal_agent(store)
+    agent._tools = [tool]
+
+    with patch("kronos.graph.get_model", return_value=model):
+        waiting_reply = await agent.ainvoke(
+            message="add mcp server",
+            thread_id="thread",
+            user_id="u",
+            session_id="s",
+        )
+        approval_id = agent.last_pending_approval_id
+        assert approval_id is not None
+
+        restarted_agent = _minimal_agent(store)
+        restarted_agent._tools = [tool]
+        final_reply = await restarted_agent.resolve_tool_approval(
+            approval_id,
+            approved=True,
+            decided_by="u",
+        )
+        duplicate_reply = await restarted_agent.resolve_tool_approval(
+            approval_id,
+            approved=True,
+            decided_by="u",
+        )
+
+    assert "Approval ID" in waiting_reply
+    assert calls == 1
+    assert final_reply == "done after approve"
+    assert "уже обработан" in duplicate_reply
+    saved = await store.load("thread")
+    assert [message.content for message in saved] == [
+        "add mcp server",
+        "",
+        "executed once",
+        "done after approve",
+    ]
+    assert _active_turn_statuses(db_path) == ["done"]
+
+
+@pytest.mark.asyncio
+async def test_agent_approval_reject_does_not_execute_tool(tmp_path: Path) -> None:
+    store = SessionStore(str(tmp_path / "session.db"))
+    calls = 0
+
+    async def risky_tool() -> str:
+        nonlocal calls
+        calls += 1
+        return "should not happen"
+
+    tool = StructuredTool.from_function(
+        coroutine=risky_tool,
+        name="mcp_remove_server",
+        description="mutates MCP servers",
+    )
+    model = _make_model([
+        _ai_with_tool_call("mcp_remove_server", tool_call_id="call_reject"),
+        AIMessage(content="continued without tool"),
+    ])
+    agent = _minimal_agent(store)
+    agent._tools = [tool]
+
+    with patch("kronos.graph.get_model", return_value=model):
+        waiting_reply = await agent.ainvoke(
+            message="remove server",
+            thread_id="thread",
+            user_id="u",
+            session_id="s",
+        )
+        approval_id = agent.last_pending_approval_id
+        assert approval_id is not None
+        final_reply = await agent.resolve_tool_approval(
+            approval_id,
+            approved=False,
+            decided_by="u",
+        )
+
+    assert "Approval ID" in waiting_reply
+    assert calls == 0
+    assert final_reply == "continued without tool"
+    saved = await store.load("thread")
+    assert [message.content for message in saved] == [
+        "remove server",
+        "",
+        "[REJECTED by user]",
+        "continued without tool",
+    ]

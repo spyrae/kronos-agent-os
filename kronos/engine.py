@@ -30,6 +30,51 @@ ToolEventCallback = Callable[[str, dict[str, Any]], None]
 MessageDeltaCallback = Callable[[list[BaseMessage]], Any]
 ToolCacheGetCallback = Callable[[str], Any]
 ToolCacheSaveCallback = Callable[[str, str], Any]
+ToolApprovalPredicate = Callable[[BaseTool, dict], Any]
+ToolApprovalRequestCallback = Callable[[BaseTool, dict], Any]
+
+DEFAULT_APPROVAL_TOOL_NAMES = {
+    "mcp_add_server",
+    "mcp_remove_server",
+    "mcp_reload",
+    "create_new_tool",
+    "approve_skill",
+    "import_skill_from_source",
+    "add_expense",
+    "add_tranche",
+    "replace_tranche",
+}
+READ_ONLY_TOOL_PREFIXES = (
+    "get_",
+    "list_",
+    "read_",
+    "search_",
+    "fetch_",
+    "inspect_",
+    "describe_",
+)
+DEFAULT_APPROVAL_ACTION_PREFIXES = (
+    "deploy",
+    "restart",
+    "send",
+    "post",
+    "publish",
+    "delete",
+    "remove",
+    "write",
+    "update",
+)
+DEFAULT_APPROVAL_NAME_MARKERS = (
+    "deploy",
+    "restart",
+    "send_",
+    "post_",
+    "publish",
+    "delete",
+    "remove",
+    "write",
+    "update",
+)
 
 
 @dataclass
@@ -39,6 +84,34 @@ class AgentResult:
     messages: list[BaseMessage]
     content: str  # final text response
     tool_calls_count: int = 0
+    waiting_approval: bool = False
+    approval_id: str | None = None
+    approval_tool_name: str | None = None
+
+
+def tool_requires_approval(tool: BaseTool, args: dict) -> bool:
+    """Return whether a tool call should pause for human approval."""
+    metadata = getattr(tool, "metadata", None) or {}
+    declared = metadata.get("needs_approval")
+    if callable(declared):
+        return bool(declared(args))
+    if declared is not None:
+        return bool(declared)
+
+    declared_attr = getattr(tool, "needs_approval", None)
+    if callable(declared_attr):
+        return bool(declared_attr(args))
+    if declared_attr is not None:
+        return bool(declared_attr)
+
+    name = tool.name.lower()
+    if name in DEFAULT_APPROVAL_TOOL_NAMES:
+        return True
+    if name.startswith(READ_ONLY_TOOL_PREFIXES):
+        return False
+    if name.startswith(DEFAULT_APPROVAL_ACTION_PREFIXES):
+        return True
+    return any(marker in name for marker in DEFAULT_APPROVAL_NAME_MARKERS)
 
 
 async def execute_tool(
@@ -86,6 +159,8 @@ async def react_loop(
     on_message_delta: MessageDeltaCallback | None = None,
     get_cached_tool_result: ToolCacheGetCallback | None = None,
     save_tool_result: ToolCacheSaveCallback | None = None,
+    needs_tool_approval: ToolApprovalPredicate | None = None,
+    request_tool_approval: ToolApprovalRequestCallback | None = None,
 ) -> AgentResult:
     """Run the ReAct loop: LLM → tool_calls → execute → LLM → ...
 
@@ -155,6 +230,24 @@ async def react_loop(
         except Exception as e:
             log.warning("Tool result cache write failed (non-fatal): %s", e)
 
+    async def requires_approval(tool: BaseTool, tool_call: dict) -> bool:
+        predicate = needs_tool_approval or tool_requires_approval
+        try:
+            return bool(await maybe_await(predicate(tool, tool_call.get("args", {}) or {})))
+        except Exception as e:
+            log.warning("Tool approval predicate failed for %s: %s", tool.name, e)
+            return True
+
+    async def create_pending_approval(tool: BaseTool, tool_call: dict) -> str | None:
+        if not request_tool_approval:
+            return None
+        try:
+            approval_id = await maybe_await(request_tool_approval(tool, tool_call))
+            return str(approval_id) if approval_id else None
+        except Exception as e:
+            log.warning("Tool approval request failed for %s: %s", tool.name, e)
+            return None
+
     for turn in range(max_turns):
         # Call LLM
         try:
@@ -219,10 +312,45 @@ async def react_loop(
                     tm = ToolMessage(content=cached_content, tool_call_id=tool_call_id)
                     log.info("Tool result cache hit: %s (%s)", tool_name, tool_call_id)
                 else:
-                    log.info("Executing tool: %s (args: %s)", tool_name, str(tc.get("args", {}))[:200])
-                    tm = await execute_tool(tool, tc, error_handler)
-                    await write_tool_result(tool_call_id, str(tm.content))
-                    log.info("Tool result: %s → %s", tool_name, str(tm.content)[:200])
+                    if await requires_approval(tool, tc):
+                        approval_id = await create_pending_approval(tool, tc)
+                        if approval_id:
+                            if tool_messages:
+                                messages.extend(tool_messages)
+                                call_messages.extend(tool_messages)
+                                await emit_message_delta(tool_messages)
+                            content = (
+                                "⚠️ Нужно подтверждение перед выполнением tool-call.\n"
+                                f"Tool: `{tool_name}`\n"
+                                f"Approval ID: `{approval_id}`\n\n"
+                                "Нажми Approve/Reject в Telegram или обработай approval вручную."
+                            )
+                            emit_tool_event("tool_approval_required", {
+                                "name": tool_name,
+                                "call_id": tool_call_id,
+                                "approval_id": approval_id,
+                                "turn": turn + 1,
+                            })
+                            return AgentResult(
+                                messages=messages,
+                                content=content,
+                                tool_calls_count=total_tool_calls,
+                                waiting_approval=True,
+                                approval_id=approval_id,
+                                approval_tool_name=tool_name,
+                            )
+
+                        content = (
+                            f"[ERROR] Tool '{tool_name}' requires approval, "
+                            "but no approval handler is available."
+                        )
+                        tm = ToolMessage(content=content, tool_call_id=tool_call_id)
+                        await write_tool_result(tool_call_id, str(tm.content))
+                    else:
+                        log.info("Executing tool: %s (args: %s)", tool_name, str(tc.get("args", {}))[:200])
+                        tm = await execute_tool(tool, tc, error_handler)
+                        await write_tool_result(tool_call_id, str(tm.content))
+                        log.info("Tool result: %s → %s", tool_name, str(tm.content)[:200])
                 emit_tool_event("tool_result", {
                     "name": tool_name,
                     "call_id": tool_call_id,

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import aiohttp
 from aiohttp import web
-from telethon import TelegramClient, events
+from telethon import Button, TelegramClient, events
 from telethon.tl.types import DocumentAttributeAudio
 
 from kronos.audit import log_request
@@ -59,6 +59,8 @@ _my_username: str | None = None
 
 # Group routing (initialized in run_bridge after login)
 _group_router = None  # GroupRouter | None
+
+APPROVAL_CALLBACK_PREFIX = "kaos:approval:"
 
 
 @dataclass(frozen=True)
@@ -131,6 +133,63 @@ def _topic_owner_agents(owner_agent: str) -> set[str]:
         for agent in (owner_agent or "").replace(";", ",").split(",")
         if agent.strip()
     }
+
+
+def _approval_callback_data(action: str, approval_id: str) -> bytes:
+    """Build compact callback payload for Telegram inline buttons."""
+    return f"{APPROVAL_CALLBACK_PREFIX}{action}:{approval_id}".encode()
+
+
+def _parse_approval_callback_data(data: bytes | str) -> tuple[str, str] | None:
+    """Parse approval callback payload into (action, approval_id)."""
+    text = data.decode("utf-8") if isinstance(data, bytes) else str(data)
+    if not text.startswith(APPROVAL_CALLBACK_PREFIX):
+        return None
+    remainder = text[len(APPROVAL_CALLBACK_PREFIX):]
+    try:
+        action, approval_id = remainder.split(":", 1)
+    except ValueError:
+        return None
+    if action not in {"approve", "reject"} or not approval_id:
+        return None
+    return action, approval_id
+
+
+def _approval_buttons(approval_id: str):
+    """Return Telethon inline buttons for a pending approval."""
+    return [[
+        Button.inline("✅ Approve", _approval_callback_data("approve", approval_id)),
+        Button.inline("❌ Reject", _approval_callback_data("reject", approval_id)),
+    ]]
+
+
+def _approval_bot_reply_markup(approval_id: str) -> dict:
+    """Return Bot API inline_keyboard markup for topic sends."""
+    return {
+        "inline_keyboard": [[
+            {
+                "text": "✅ Approve",
+                "callback_data": _approval_callback_data(
+                    "approve",
+                    approval_id,
+                ).decode("utf-8"),
+            },
+            {
+                "text": "❌ Reject",
+                "callback_data": _approval_callback_data(
+                    "reject",
+                    approval_id,
+                ).decode("utf-8"),
+            },
+        ]],
+    }
+
+
+def _last_pending_approval_id() -> str | None:
+    """Return latest pending approval from the active agent, if any."""
+    if _agent is None:
+        return None
+    return getattr(_agent, "last_pending_approval_id", None)
 
 
 def _resolve_topic_route(chat_id: int, topic_id: int | None) -> TopicRoute:
@@ -570,7 +629,12 @@ async def _typing_loop(chat_id: int, stop_event: asyncio.Event) -> None:
         pass  # typing indicator is best-effort
 
 
-async def _send_bot_api_message(chat_id: int, text: str, topic_id: int) -> int | None:
+async def _send_bot_api_message(
+    chat_id: int,
+    text: str,
+    topic_id: int,
+    reply_markup: dict | None = None,
+) -> int | None:
     """Send message via Bot API with message_thread_id and return first msg id."""
     url = f"https://api.telegram.org/bot{settings.tg_bot_token}/sendMessage"
 
@@ -585,6 +649,8 @@ async def _send_bot_api_message(chat_id: int, text: str, topic_id: int) -> int |
                 "message_thread_id": topic_id,
                 "parse_mode": "Markdown",
             }
+            if reply_markup and first_msg_id is None:
+                body["reply_markup"] = reply_markup
             try:
                 msg_id = await _post_bot_api_message(session, url, body)
                 if first_msg_id is None:
@@ -891,6 +957,44 @@ async def run_bridge(agent: KronosAgent) -> None:
     is_bot = bool(settings.tg_bot_token)
     log.info("Starting %s bridge (mode: %s)", settings.agent_name, "bot" if is_bot else "userbot")
     log.info("Allowed users: %s", settings.telegram_access_description)
+
+    @_client.on(events.CallbackQuery(pattern=APPROVAL_CALLBACK_PREFIX.encode("utf-8")))
+    async def handle_approval_callback(event):
+        parsed = _parse_approval_callback_data(getattr(event, "data", b""))
+        if parsed is None:
+            await event.answer("Unknown approval action", alert=True)
+            return
+
+        action, approval_id = parsed
+        sender_id = int(getattr(event, "sender_id", 0) or 0)
+        if not settings.is_telegram_user_allowed(sender_id):
+            log.info("Ignoring approval callback from unauthorized user %s", sender_id)
+            await event.answer("Not allowed", alert=True)
+            return
+        if _agent is None:
+            await event.answer("Agent is not ready", alert=True)
+            return
+
+        approved = action == "approve"
+        await event.answer("Approved" if approved else "Rejected")
+        try:
+            async with _agent_lock:
+                reply = await _agent.resolve_tool_approval(
+                    approval_id,
+                    approved=approved,
+                    decided_by=str(sender_id),
+                )
+        except Exception as e:
+            log.error("Approval callback failed: %s", e)
+            reply = "Не удалось обработать approval callback. Проверь логи."
+
+        validation = validate_output(reply)
+        if not validation.is_clean:
+            reply = validation.redacted_text
+
+        next_approval_id = _last_pending_approval_id()
+        buttons = _approval_buttons(next_approval_id) if next_approval_id else None
+        await event.respond(reply, buttons=buttons)
 
     @_client.on(events.NewMessage(incoming=True))
     async def handle_message(event):
@@ -1270,6 +1374,10 @@ async def run_bridge(agent: KronosAgent) -> None:
         if not validation.is_clean:
             reply = validation.redacted_text
 
+        approval_id = _last_pending_approval_id()
+        approval_buttons = _approval_buttons(approval_id) if approval_id else None
+        approval_bot_markup = _approval_bot_reply_markup(approval_id) if approval_id else None
+
         await _rate_limit_wait(event.chat_id)
 
         # Topic messages: reply_to = topic root so message lands in correct topic
@@ -1285,7 +1393,7 @@ async def run_bridge(agent: KronosAgent) -> None:
         # TTS: voice mode always, or mirror user's voice message
         voice_sent = False
         vm = get_voice_mode(event.chat_id)
-        if should_synthesize(reply, user_sent_voice=voice, voice_mode=vm):
+        if not approval_id and should_synthesize(reply, user_sent_voice=voice, voice_mode=vm):
             voice_path = await synthesize(reply)
             if voice_path:
                 try:
@@ -1307,22 +1415,38 @@ async def run_bridge(agent: KronosAgent) -> None:
         if not voice_sent:
             if topic_id and settings.tg_bot_token:
                 # Use Bot API with message_thread_id when a bot token is configured.
-                sent_msg_id = await _send_bot_api_message(event.chat_id, reply, topic_id)
+                sent_msg_id = await _send_bot_api_message(
+                    event.chat_id,
+                    reply,
+                    topic_id,
+                    reply_markup=approval_bot_markup,
+                )
             elif topic_id:
-                sent_msg = await _client.send_message(event.chat_id, reply, reply_to=topic_id)
+                sent_msg = await _client.send_message(
+                    event.chat_id,
+                    reply,
+                    reply_to=topic_id,
+                    buttons=approval_buttons,
+                )
             elif len(reply) > 4000:
                 chunks = [reply[i:i + 4000] for i in range(0, len(reply), 4000)]
                 for i, chunk in enumerate(chunks):
                     sent = await _client.send_message(
                         event.chat_id, chunk,
                         reply_to=event.message.id if i == 0 and not is_dm else None,
+                        buttons=approval_buttons if i == 0 else None,
                     )
                     if i == 0:
                         sent_msg = sent
                     await asyncio.sleep(0.5)
             else:
                 reply_to_msg = event.message.id if not is_dm else None
-                sent_msg = await _client.send_message(event.chat_id, reply, reply_to=reply_to_msg)
+                sent_msg = await _client.send_message(
+                    event.chat_id,
+                    reply,
+                    reply_to=reply_to_msg,
+                    buttons=approval_buttons,
+                )
 
         # Swarm ledger: mark claim as sent, record outbound message. DMs
         # and fallback-router paths (no decision) skip this.

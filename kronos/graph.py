@@ -15,12 +15,18 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.tools import BaseTool
 
 from kronos.audit import log_tool_event, reset_tool_audit_context, set_tool_audit_context
 from kronos.config import settings
-from kronos.engine import react_loop
+from kronos.engine import AgentResult, execute_tool, react_loop
 from kronos.llm import get_model
 from kronos.memory.context_engine import get_context_engine
 from kronos.memory.nodes import retrieve_memories, store_memories_background
@@ -63,6 +69,7 @@ class KronosAgent:
         self._session_store = session_store
         self._external_tool_event_callback = tool_event_callback
         self._durable_recovery_checked = False
+        self._last_pending_approval_id: str | None = None
 
         self._init_tools()
         self._init_memory(enable_memory)
@@ -150,6 +157,188 @@ class KronosAgent:
             log.info("System prompt: %d chars, skills: %d chars", len(self._system_prompt), len(catalog))
         return self._system_prompt
 
+    @property
+    def last_pending_approval_id(self) -> str | None:
+        """Most recent approval id returned to the transport layer."""
+        return self._last_pending_approval_id
+
+    def _approval_tool_map(self) -> dict[str, BaseTool]:
+        """Return tools eligible for approval resume by name."""
+        tool_map = {tool.name: tool for tool in self._tools}
+        if self._supervisor:
+            for tool in getattr(self._supervisor, "_approval_tools", []):
+                tool_map[tool.name] = tool
+        return tool_map
+
+    def _build_durable_react_loop_kwargs(
+        self,
+        *,
+        turn_id: str,
+        thread_id: str,
+    ) -> dict[str, Any]:
+        """Build journal/cache/approval callbacks for a durable turn."""
+        if not self._session_store:
+            return {}
+
+        async def journal_delta(delta: list[BaseMessage]) -> None:
+            await self._session_store.append_turn_messages(
+                turn_id=turn_id,
+                thread_id=thread_id,
+                messages=delta,
+            )
+
+        async def get_cached_tool_result(tool_call_id: str) -> str | None:
+            return await self._session_store.get_tool_result(turn_id, tool_call_id)
+
+        async def save_tool_result(tool_call_id: str, content: str) -> None:
+            await self._session_store.save_tool_result(
+                turn_id=turn_id,
+                tool_call_id=tool_call_id,
+                content=content,
+            )
+
+        async def request_tool_approval(tool: BaseTool, tool_call: dict) -> str:
+            return await self._session_store.create_pending_approval(
+                turn_id=turn_id,
+                thread_id=thread_id,
+                tool_call_id=str(tool_call.get("id", "")),
+                tool_name=tool.name,
+                args=tool_call.get("args", {}) or {},
+            )
+
+        return {
+            "on_message_delta": journal_delta,
+            "get_cached_tool_result": get_cached_tool_result,
+            "save_tool_result": save_tool_result,
+            "request_tool_approval": request_tool_approval,
+        }
+
+    async def _run_model_loop(
+        self,
+        *,
+        messages: list[BaseMessage],
+        source_message: str,
+        react_loop_kwargs: dict[str, Any],
+    ) -> AgentResult:
+        """Run either the supervisor or direct model loop."""
+        if self._supervisor:
+            return await self._supervisor(messages, **react_loop_kwargs)
+
+        tier = classify_tier(source_message)
+        model = get_model(tier)
+        return await react_loop(
+            model=model,
+            messages=messages,
+            tools=self._tools,
+            system_prompt=self._get_system_prompt(),
+            on_tool_event=self._emit_tool_event,
+            **react_loop_kwargs,
+        )
+
+    async def resolve_tool_approval(
+        self,
+        approval_id: str,
+        approved: bool,
+        decided_by: str = "",
+    ) -> str:
+        """Resolve a pending tool approval and resume the durable turn."""
+        self._last_pending_approval_id = None
+        if not self._session_store:
+            return "Approval state недоступен: session store не настроен."
+
+        pending = await self._session_store.claim_pending_approval(
+            approval_id=approval_id,
+            decision="approved" if approved else "rejected",
+            decided_by=decided_by,
+        )
+        if not pending:
+            return "Этот approval уже обработан или не найден."
+
+        turn_id = str(pending["turn_id"])
+        thread_id = str(pending["thread_id"])
+        tool_call_id = str(pending["tool_call_id"])
+        tool_name = str(pending["tool_name"])
+        messages = await self._session_store.load_turn_messages(thread_id, turn_id)
+
+        if approved:
+            tool = self._approval_tool_map().get(tool_name)
+            cached = await self._session_store.get_tool_result(turn_id, tool_call_id)
+            if cached is not None:
+                tool_message = ToolMessage(content=cached, tool_call_id=tool_call_id)
+            elif tool is None:
+                tool_message = ToolMessage(
+                    content=(
+                        f"[ERROR] Approved tool '{tool_name}' is no longer available "
+                        "after restart."
+                    ),
+                    tool_call_id=tool_call_id,
+                )
+            else:
+                tool_message = await execute_tool(
+                    tool,
+                    {
+                        "name": tool_name,
+                        "id": tool_call_id,
+                        "args": pending.get("args", {}) or {},
+                    },
+                )
+                await self._session_store.save_tool_result(
+                    turn_id=turn_id,
+                    tool_call_id=tool_call_id,
+                    content=str(tool_message.content),
+                )
+        else:
+            tool_message = ToolMessage(
+                content="[REJECTED by user]",
+                tool_call_id=tool_call_id,
+            )
+
+        await self._session_store.append_turn_messages(
+            turn_id=turn_id,
+            thread_id=thread_id,
+            messages=[tool_message],
+        )
+        messages.append(tool_message)
+
+        react_loop_kwargs = self._build_durable_react_loop_kwargs(
+            turn_id=turn_id,
+            thread_id=thread_id,
+        )
+        audit_token = set_tool_audit_context(
+            agent=settings.agent_name,
+            thread_id=thread_id,
+            user_id=decided_by,
+            session_id=thread_id,
+            source_kind="approval_callback",
+        )
+        try:
+            try:
+                result = await self._run_model_loop(
+                    messages=messages,
+                    source_message=str(pending.get("input_message", "")),
+                    react_loop_kwargs=react_loop_kwargs,
+                )
+            except Exception as e:
+                await self._session_store.fail_turn(turn_id, str(e))
+                raise
+        finally:
+            reset_tool_audit_context(audit_token)
+
+        if getattr(result, "waiting_approval", False):
+            self._last_pending_approval_id = result.approval_id
+            return result.content
+
+        save_messages = [
+            message for message in result.messages
+            if not isinstance(message, SystemMessage)
+        ]
+        await self._session_store.finalize_turn(
+            thread_id=thread_id,
+            messages=save_messages,
+            turn_id=turn_id,
+        )
+        return result.content
+
     async def ainvoke(
         self,
         message: str,
@@ -187,6 +376,7 @@ class KronosAgent:
         route → store memory → compact → save history.
         """
         is_ephemeral = not persist_user_turn
+        self._last_pending_approval_id = None
 
         if (
             self._session_store
@@ -251,32 +441,10 @@ class KronosAgent:
         react_loop_kwargs: dict[str, Any] = {}
         if self._session_store and not is_ephemeral:
             turn_id = await self._session_store.begin_turn(thread_id, message)
-
-            async def journal_delta(delta: list[BaseMessage]) -> None:
-                assert turn_id is not None
-                await self._session_store.append_turn_messages(
-                    turn_id=turn_id,
-                    thread_id=thread_id,
-                    messages=delta,
-                )
-
-            async def get_cached_tool_result(tool_call_id: str) -> str | None:
-                assert turn_id is not None
-                return await self._session_store.get_tool_result(turn_id, tool_call_id)
-
-            async def save_tool_result(tool_call_id: str, content: str) -> None:
-                assert turn_id is not None
-                await self._session_store.save_tool_result(
-                    turn_id=turn_id,
-                    tool_call_id=tool_call_id,
-                    content=content,
-                )
-
-            react_loop_kwargs = {
-                "on_message_delta": journal_delta,
-                "get_cached_tool_result": get_cached_tool_result,
-                "save_tool_result": save_tool_result,
-            }
+            react_loop_kwargs = self._build_durable_react_loop_kwargs(
+                turn_id=turn_id,
+                thread_id=thread_id,
+            )
 
         audit_token = set_tool_audit_context(
             agent=settings.agent_name,
@@ -287,28 +455,22 @@ class KronosAgent:
         )
         try:
             try:
-                if self._supervisor:
-                    result = await self._supervisor(working_history, **react_loop_kwargs)
-                    response_text = result.content
-                else:
-                    # Direct LLM call with tools (single-agent mode)
-                    tier = classify_tier(message)
-                    model = get_model(tier)
-                    result = await react_loop(
-                        model=model,
-                        messages=working_history,
-                        tools=self._tools,
-                        system_prompt=self._get_system_prompt(),
-                        on_tool_event=self._emit_tool_event,
-                        **react_loop_kwargs,
-                    )
-                    response_text = result.content
+                result = await self._run_model_loop(
+                    messages=working_history,
+                    source_message=message,
+                    react_loop_kwargs=react_loop_kwargs,
+                )
+                response_text = result.content
             except Exception as e:
                 if self._session_store and turn_id:
                     await self._session_store.fail_turn(turn_id, str(e))
                 raise
         finally:
             reset_tool_audit_context(audit_token)
+
+        if getattr(result, "waiting_approval", False):
+            self._last_pending_approval_id = result.approval_id
+            return response_text
 
         if not is_ephemeral:
             persisted_history.append(AIMessage(content=response_text))

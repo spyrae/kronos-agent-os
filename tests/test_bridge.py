@@ -197,3 +197,21 @@ def test_owner_topic_rejects_peer_sender(monkeypatch):
 
     assert bridge._owner_topic_accepts_sender(42) is True
     assert bridge._owner_topic_accepts_sender(2001) is False
+
+
+def test_approval_callback_helpers_roundtrip():
+    data = bridge._approval_callback_data("approve", "approval-123")
+
+    assert data == b"kaos:approval:approve:approval-123"
+    assert bridge._parse_approval_callback_data(data) == ("approve", "approval-123")
+    assert bridge._parse_approval_callback_data("kaos:approval:reject:approval-123") == (
+        "reject",
+        "approval-123",
+    )
+    assert bridge._parse_approval_callback_data("kaos:approval:later:approval-123") is None
+
+    markup = bridge._approval_bot_reply_markup("approval-123")
+    buttons = markup["inline_keyboard"][0]
+    assert buttons[0]["text"] == "✅ Approve"
+    assert buttons[0]["callback_data"] == "kaos:approval:approve:approval-123"
+    assert buttons[1]["callback_data"] == "kaos:approval:reject:approval-123"

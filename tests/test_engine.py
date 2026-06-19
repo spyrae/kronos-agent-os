@@ -6,7 +6,13 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
-from kronos.engine import AgentResult, create_agent, execute_tool, react_loop
+from kronos.engine import (
+    AgentResult,
+    create_agent,
+    execute_tool,
+    react_loop,
+    tool_requires_approval,
+)
 
 # --- Helpers ---
 
@@ -215,6 +221,101 @@ class TestReactLoop:
         result = await react_loop(model, messages, tools=[])
 
         assert "ошибка" in result.content.lower()
+
+    @pytest.mark.asyncio
+    async def test_tool_call_waits_for_approval_before_execution(self):
+        """Risky tools return a pending approval instead of executing."""
+        calls = 0
+
+        async def risky_tool() -> str:
+            nonlocal calls
+            calls += 1
+            return "executed"
+
+        tool = StructuredTool.from_function(
+            coroutine=risky_tool,
+            name="mcp_add_server",
+            description="mutates MCP servers",
+        )
+        model = _make_model([_ai_with_tool_call("mcp_add_server")])
+        events = []
+
+        result = await react_loop(
+            model,
+            [HumanMessage(content="add server")],
+            tools=[tool],
+            request_tool_approval=lambda tool, tool_call: "apr_1",
+            on_tool_event=lambda event, payload: events.append((event, payload)),
+        )
+
+        assert calls == 0
+        assert result.waiting_approval is True
+        assert result.approval_id == "apr_1"
+        assert result.approval_tool_name == "mcp_add_server"
+        assert "Approval ID" in result.content
+        assert [event for event, _ in events] == ["tool_call", "tool_approval_required"]
+        assert not [m for m in result.messages if isinstance(m, ToolMessage)]
+
+    @pytest.mark.asyncio
+    async def test_prior_tool_results_are_journaled_before_approval_wait(self):
+        read_calls = 0
+        risky_calls = 0
+
+        async def read_tool() -> str:
+            nonlocal read_calls
+            read_calls += 1
+            return "read ok"
+
+        async def risky_tool() -> str:
+            nonlocal risky_calls
+            risky_calls += 1
+            return "should wait"
+
+        read = StructuredTool.from_function(
+            coroutine=read_tool,
+            name="get_status",
+            description="read status",
+        )
+        risky = StructuredTool.from_function(
+            coroutine=risky_tool,
+            name="mcp_remove_server",
+            description="mutates MCP servers",
+        )
+        model = _make_model([
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "get_status", "args": {}, "id": "call_read"},
+                    {"name": "mcp_remove_server", "args": {}, "id": "call_risky"},
+                ],
+            ),
+        ])
+        journaled = []
+
+        result = await react_loop(
+            model,
+            [HumanMessage(content="check then mutate")],
+            tools=[read, risky],
+            request_tool_approval=lambda tool, tool_call: "apr_multi",
+            on_message_delta=lambda delta: journaled.extend(delta),
+        )
+
+        assert result.waiting_approval is True
+        assert read_calls == 1
+        assert risky_calls == 0
+        tool_messages = [m for m in result.messages if isinstance(m, ToolMessage)]
+        assert [(m.tool_call_id, m.content) for m in tool_messages] == [
+            ("call_read", "read ok"),
+        ]
+        journaled_tool_messages = [m for m in journaled if isinstance(m, ToolMessage)]
+        assert [m.tool_call_id for m in journaled_tool_messages] == ["call_read"]
+
+    def test_default_approval_policy_gates_writes_not_reads(self):
+        risky = _make_tool("send_telegram_message")
+        read_only = _make_tool("list_status_updates")
+
+        assert tool_requires_approval(risky, {}) is True
+        assert tool_requires_approval(read_only, {}) is False
 
 
 class TestCreateAgent:

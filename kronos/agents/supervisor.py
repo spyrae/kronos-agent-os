@@ -340,6 +340,7 @@ def build_supervisor(
 
     run.__name__ = "supervisor"
     run.__qualname__ = "supervisor"
+    run._approval_tools = all_tools
 
     log.info(
         "Supervisor created with %d delegation + %d supervisor + %d direct tools (total: %d)",
