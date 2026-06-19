@@ -15,7 +15,7 @@ Environment:
     AUDIT_LOG           Audit log path (default: <app>/data/logs/audit.jsonl)
     DB_PATH             SQLite database path (default: <app>/data/recall.db)
     DEEPSEEK_API_KEY    DeepSeek API key (for --summarize)
-    RECALL_LOG          Log file (default: /var/log/kaos/recall.log)
+    RECALL_LOG          Log file (default: <app>/data/logs/recall.log)
 """
 
 import json
@@ -25,7 +25,7 @@ import re
 import sqlite3
 import sys
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # --- Config ---
@@ -34,25 +34,52 @@ _APP_DIR = Path(__file__).resolve().parent.parent  # scripts/ -> app/
 AUDIT_LOG = Path(os.environ.get("AUDIT_LOG", str(_APP_DIR / "data" / "logs" / "audit.jsonl")))
 DB_PATH = Path(os.environ.get("DB_PATH", str(_APP_DIR / "data" / "recall.db")))
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-LOG_FILE = os.environ.get("RECALL_LOG", "/var/log/kaos/recall.log")
+LOG_FILE = os.environ.get("RECALL_LOG", str(_APP_DIR / "data" / "logs" / "recall.log"))
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL = "deepseek-chat"
 
 # --- Logging ---
 
-log_dir = Path(LOG_FILE).parent
-log_dir.mkdir(parents=True, exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler(),
-    ],
-)
 log = logging.getLogger("recall")
+_LOGGING_CONFIGURED = False
+
+
+def _as_app_relative(path: Path) -> Path:
+    """Resolve relative script paths from app/ for systemd-compatible runs."""
+    if path.is_absolute():
+        return path
+    return _APP_DIR / path
+
+
+def resolve_log_file() -> Path:
+    """Resolve the recall log path without creating it."""
+    return _as_app_relative(Path(LOG_FILE).expanduser())
+
+
+def setup_logging(*, enable_file: bool = True) -> None:
+    """Configure logging lazily so stats/import paths never need log access."""
+    global _LOGGING_CONFIGURED
+    if _LOGGING_CONFIGURED:
+        return
+
+    handlers: list[logging.Handler] = []
+    if enable_file:
+        log_file = resolve_log_file()
+        try:
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            handlers.append(logging.FileHandler(log_file))
+        except OSError as exc:
+            print(f"WARNING: file logging disabled for {log_file}: {exc}", file=sys.stderr)
+
+    handlers.append(logging.StreamHandler())
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=handlers,
+        force=True,
+    )
+    _LOGGING_CONFIGURED = True
 
 
 # --- LLM ---
@@ -201,7 +228,7 @@ def build_index() -> None:
 
     conn.execute(
         "INSERT OR REPLACE INTO index_state (source, last_file, last_offset, updated_at) VALUES (?, ?, ?, ?)",
-        ("full", "rebuild", total, datetime.now(timezone.utc).isoformat()),
+        ("full", "rebuild", total, datetime.now(UTC).isoformat()),
     )
 
     conn.commit()
@@ -345,12 +372,14 @@ def main() -> None:
     cmd = sys.argv[1]
 
     if cmd == "index":
+        setup_logging()
         build_index()
 
     elif cmd == "search":
         if len(sys.argv) < 3:
             print("Usage: recall.py search 'query'")
             sys.exit(1)
+        setup_logging()
 
         query = sys.argv[2]
         limit = 10

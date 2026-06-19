@@ -17,7 +17,7 @@ Environment:
     TG_BOT_TOKEN        Telegram bot token (for notifications)
     PROFILER_CHAT_ID    Telegram chat for notifications
     PROFILER_TOPIC_ID   Telegram topic for notifications
-    PROFILER_LOG        Log file (default: /var/log/kaos/contact-profiler.log)
+    PROFILER_LOG        Log file (default: <app>/data/logs/contact-profiler.log)
 """
 
 import argparse
@@ -95,7 +95,7 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 CHAT_ID = int(os.environ.get("PROFILER_CHAT_ID", "0"))
 TOPIC_ID = int(os.environ.get("PROFILER_TOPIC_ID", "0"))
-LOG_FILE = os.environ.get("PROFILER_LOG", "/var/log/kaos/contact-profiler.log")
+LOG_FILE = os.environ.get("PROFILER_LOG", str(_APP_DIR / "data" / "logs" / "contact-profiler.log"))
 
 DEEPSEEK_TIMEOUT = 180  # seconds for LLM analysis
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
@@ -103,18 +103,38 @@ DEEPSEEK_MODEL = "deepseek-chat"
 
 # --- Logging ---
 
-log_dir = Path(LOG_FILE).parent
-log_dir.mkdir(parents=True, exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler(),
-    ],
-)
 log = logging.getLogger("contact-profiler")
+_LOGGING_CONFIGURED = False
+
+
+def resolve_log_file() -> Path:
+    """Resolve the contact-profiler log path without creating it."""
+    return _as_app_relative(Path(LOG_FILE).expanduser())
+
+
+def setup_logging(*, enable_file: bool = True) -> None:
+    """Configure logging lazily so help/import paths never need log access."""
+    global _LOGGING_CONFIGURED
+    if _LOGGING_CONFIGURED:
+        return
+
+    handlers: list[logging.Handler] = []
+    if enable_file:
+        log_file = resolve_log_file()
+        try:
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            handlers.append(logging.FileHandler(log_file))
+        except OSError as exc:
+            print(f"WARNING: file logging disabled for {log_file}: {exc}", file=sys.stderr)
+
+    handlers.append(logging.StreamHandler())
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=handlers,
+        force=True,
+    )
+    _LOGGING_CONFIGURED = True
 
 
 # --- LLM ---
@@ -425,6 +445,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Build prompt but don't call LLM")
     parser.add_argument("--no-notify", action="store_true", help="Skip Telegram notification")
     args = parser.parse_args()
+    setup_logging(enable_file=not args.dry_run)
 
     try:
         run_profiler(
