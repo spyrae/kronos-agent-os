@@ -56,6 +56,13 @@ def test_skill_packs_list_show_and_dry_run(capsys):
     assert "Research Pack" in out
     assert "research-brief" in out
 
+    result = main(["skills", "show-pack", "content"])
+    out = capsys.readouterr().out
+
+    assert result == 0
+    assert "Content Pack" in out
+    assert "content-digest" in out
+
     result = main(["skills", "install-pack", "research", "--agent", "template-smoke-agent", "--dry-run"])
     out = capsys.readouterr().out
 

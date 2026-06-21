@@ -1,5 +1,7 @@
 # Smoke Fixture
 
-Prompt: Write release notes for CLI quickstart, Docker fixes, and docs updates.
+Prompt: Summarize this transcript into a short выжимка, then write release
+notes for CLI quickstart, Docker fixes, and docs updates.
 
-Expected: Highlights, fixes, docs, and verification notes.
+Expected: TL;DR/key takeaways for the transcript plus release-note highlights,
+fixes, docs, and verification notes.

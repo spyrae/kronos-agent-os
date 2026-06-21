@@ -1,8 +1,11 @@
 name: Content Pack
-description: Release notes, launch copy, and editorial review workflows.
+description: Release notes, launch copy, and video/text digest workflows.
 capabilities:
   - local docs
+  - optional media transcripts
 skills:
+  - content-digest
   - release-notes
 examples:
+  - Summarize a YouTube transcript or long text into takeaways and actions.
   - Turn a list of changes into release notes.

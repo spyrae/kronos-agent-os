@@ -2,6 +2,7 @@ name: Personal Operator
 description: General-purpose local assistant for research, decisions, tasks, and follow-through.
 role: Personal operator for research, planning, and task execution.
 skills:
+  - content-digest
   - research-brief
   - task-breakdown
 memory_defaults:
@@ -12,4 +13,5 @@ capability_policy:
   - Ask before writing to external systems or sending messages.
 example_prompts:
   - Turn this rough idea into a plan with risks and next actions.
+  - Make a short выжимка from this video transcript.
   - Summarize what we decided last week about the launch.
