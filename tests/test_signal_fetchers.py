@@ -77,21 +77,150 @@ async def test_reddit_fetcher_builds_site_query():
 
 
 @pytest.mark.asyncio
-async def test_x_fetcher_builds_site_query_and_author():
+async def test_x_fetcher_uses_official_api_when_token_is_available():
+    def fake_x_api(source, options, token, *, handle):
+        assert token == "token"
+        assert handle == "OpenAIDevs"
+        assert options.limit == 2
+        return {
+            "data": [
+                {
+                    "id": "123",
+                    "text": "API update for developers",
+                    "created_at": "2026-05-29T10:00:00.000Z",
+                    "author_id": "42",
+                    "public_metrics": {
+                        "like_count": 100,
+                        "retweet_count": 10,
+                        "reply_count": 5,
+                        "quote_count": 2,
+                        "impression_count": 10000,
+                    },
+                    "entities": {"urls": [{"expanded_url": "https://example.com"}]},
+                }
+            ]
+        }
+
+    result = await fetch_x_source(
+        _source("x", id="x_openai_devs", handle="@OpenAIDevs", trust="official"),
+        options=FetchOptions(limit=2),
+        x_api_fn=fake_x_api,
+        bearer_token="token",
+    )
+
+    item = result.items[0]
+    assert item.source_platform == "x"
+    assert item.author == "@OpenAIDevs"
+    assert item.handle == "@OpenAIDevs"
+    assert item.url == "https://x.com/OpenAIDevs/status/123"
+    assert item.published_at == "2026-05-29T10:00:00.000Z"
+    assert item.raw_payload["backend"] == "official_x_api"
+    assert item.raw_payload["public_metrics"]["like_count"] == 100
+    assert item.raw_payload["raw_api_payload"]["id"] == "123"
+    assert item.confidence_score == 85.0
+
+
+@pytest.mark.asyncio
+async def test_x_fetcher_missing_token_uses_strict_status_fallback():
     calls = []
 
     def fake_search(query, count, freshness):
         calls.append(query)
         return [SearchResult("OpenAI Devs", "https://x.com/OpenAIDevs/status/1", "API update")]
 
+    def should_not_call_api(*args, **kwargs):
+        raise AssertionError("X API must not be called without token")
+
     result = await fetch_x_source(
         _source("x", id="x_openai_devs", handle="@OpenAIDevs", trust="official"),
+        options=FetchOptions(limit=3, freshness="pw"),
         search_fn=fake_search,
+        x_api_fn=should_not_call_api,
+        bearer_token="",
     )
 
-    assert calls == ["site:x.com/OpenAIDevs Test source"]
+    assert calls == ["site:x.com/OpenAIDevs/status Test source"]
     assert result.items[0].author == "@OpenAIDevs"
+    assert result.items[0].url == "https://x.com/OpenAIDevs/status/1"
+    assert result.items[0].raw_payload["backend"] == "strict_exa_status_fallback"
     assert result.items[0].confidence_score == 85.0
+
+
+@pytest.mark.asyncio
+async def test_x_fetcher_rejects_secondary_articles_from_fallback():
+    def fake_search(query, count, freshness):
+        return [
+            SearchResult(
+                "Article about a tweet",
+                "https://example.com/news/openai-devs-tweet",
+                "This article embeds an X post",
+            )
+        ]
+
+    result = await fetch_x_source(
+        _source("x", id="x_openai_devs", handle="@OpenAIDevs"),
+        search_fn=fake_search,
+        bearer_token="",
+    )
+
+    assert result.ok is True
+    assert result.items == ()
+
+
+@pytest.mark.asyncio
+async def test_x_fetcher_accepts_matching_twitter_status_url():
+    def fake_search(query, count, freshness):
+        return [
+            SearchResult(
+                "YC status",
+                "https://twitter.com/ycombinator/status/1234567890?s=20",
+                "Batch update",
+            )
+        ]
+
+    result = await fetch_x_source(
+        _source("x", id="x_yc", handle="@ycombinator", trust="expert"),
+        search_fn=fake_search,
+        bearer_token="",
+    )
+
+    assert len(result.items) == 1
+    assert result.items[0].url == "https://x.com/ycombinator/status/1234567890"
+    assert result.items[0].source_item_key == "https://x.com/ycombinator/status/1234567890"
+
+
+@pytest.mark.asyncio
+async def test_x_fetcher_rejects_handle_mismatch():
+    def fake_search(query, count, freshness):
+        return [SearchResult("Other", "https://x.com/other/status/1", "Wrong handle")]
+
+    result = await fetch_x_source(
+        _source("x", id="x_openai_devs", handle="@OpenAIDevs"),
+        search_fn=fake_search,
+        bearer_token="",
+    )
+
+    assert result.items == ()
+
+
+@pytest.mark.asyncio
+async def test_x_fetcher_api_error_falls_back_without_failing_source():
+    def fake_x_api(*args, **kwargs):
+        raise ConnectionError("rate limited")
+
+    def fake_search(query, count, freshness):
+        return [SearchResult("OpenAI Devs", "https://x.com/OpenAIDevs/status/99", "Fallback")]
+
+    result = await fetch_x_source(
+        _source("x", id="x_openai_devs", handle="@OpenAIDevs"),
+        search_fn=fake_search,
+        x_api_fn=fake_x_api,
+        bearer_token="token",
+    )
+
+    assert result.ok is True
+    assert result.items[0].url == "https://x.com/OpenAIDevs/status/99"
+    assert result.items[0].raw_payload["backend"] == "strict_exa_status_fallback"
 
 
 @dataclass

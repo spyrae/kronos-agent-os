@@ -28,6 +28,20 @@ Candidates: product builders, developer-tool accounts, AI-tool startups, indie/b
 
 Quarantined examples: bot/fandom/culture-war/unrelated handles such as `bellcurvebot`, `cb_doge`, `massgravel`, `reddit_lies`.
 
+X ingest policy:
+
+- If `X_BEARER_TOKEN` is configured, the `x` fetcher uses the official recent
+  search API with `from:<handle> -is:retweet` and stores canonical status URLs,
+  created time, public metrics, author handle, and raw API payload.
+- If no token is configured, search fallback is strict: only
+  `x.com/<handle>/status/<numeric_id>` or
+  `twitter.com/<handle>/status/<numeric_id>` URLs for the exact source handle
+  become `SignalItem`s.
+- Secondary articles that merely mention or embed a tweet are rejected for
+  `x_*` sources. They may still appear through ordinary `search`/news sources.
+- API/search failures should degrade to an empty result for that source rather
+  than failing the full signal pipeline.
+
 ## Operating note
 
 The legacy Telegram watchlist remains in the private workspace at
