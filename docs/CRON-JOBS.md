@@ -239,8 +239,12 @@ Dialectical user modeling:
 Weekly investment market review:
 1. Load tickers from `workspace/skills/investment-analysis/references/WATCHLIST.md`
 2. Brave Search for news per ticker (freshness=past week, up to 10 tickers)
-3. LLM synthesis (Sonnet standard): market overview, per-ticker events + sentiment, next week outlook, actionable recommendations
+3. LLM synthesis (standard tier): market overview, per-ticker events + sentiment, next week watch items
 4. Send HTML report to Telegram
+
+Safety: this is a watchlist brief, not individualized financial advice. The
+prompt explicitly forbids direct buy/sell commands and asks for
+`monitor/review thesis/reduce risk/wait for data` style actions.
 
 **Dependencies:** BRAVE_API_KEY, WATCHLIST.md
 **Notification:** Bot API → Telegram Finance topic
