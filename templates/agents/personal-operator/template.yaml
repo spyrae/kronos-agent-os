@@ -3,6 +3,7 @@ description: General-purpose local assistant for research, decisions, tasks, and
 role: Personal operator for research, planning, and task execution.
 skills:
   - content-digest
+  - food-advisor
   - research-brief
   - task-breakdown
 memory_defaults:
@@ -13,5 +14,6 @@ capability_policy:
   - Ask before writing to external systems or sending messages.
 example_prompts:
   - Turn this rough idea into a plan with risks and next actions.
+  - Estimate and log calories for this meal.
   - Make a short выжимка from this video transcript.
   - Summarize what we decided last week about the launch.

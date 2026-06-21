@@ -1,0 +1,10 @@
+name: Health Lite Pack
+description: Lightweight calorie logging and non-medical nutrition summaries.
+capabilities:
+  - local notes
+  - optional Notion logging
+skills:
+  - food-advisor
+examples:
+  - Estimate calories/macros from a meal description and log assumptions.
+  - Summarize a day of food notes without medical advice.

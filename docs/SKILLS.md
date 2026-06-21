@@ -162,6 +162,7 @@ capability policy.
 Good public skills:
 
 - `content-digest` — summarize videos, transcripts, articles, documents, and pasted text
+- `food-advisor` — estimate/log calories and macros with non-medical boundaries
 - `research-brief` — source-backed research summary
 - `release-notes` — convert commits/issues into release notes
 - `incident-review` — summarize logs and follow-up tasks

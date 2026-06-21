@@ -47,6 +47,7 @@ def test_skill_packs_list_show_and_dry_run(capsys):
     assert result == 0
     assert "research" in out
     assert "finance-lite" in out
+    assert "health-lite" in out
     assert "kaos skills install-pack productivity --agent personal-demo --force" in out
 
     result = main(["skills", "show-pack", "research"])
@@ -62,6 +63,13 @@ def test_skill_packs_list_show_and_dry_run(capsys):
     assert result == 0
     assert "Content Pack" in out
     assert "content-digest" in out
+
+    result = main(["skills", "show-pack", "health-lite"])
+    out = capsys.readouterr().out
+
+    assert result == 0
+    assert "Health Lite Pack" in out
+    assert "food-advisor" in out
 
     result = main(["skills", "install-pack", "research", "--agent", "template-smoke-agent", "--dry-run"])
     out = capsys.readouterr().out
