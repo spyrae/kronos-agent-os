@@ -23,6 +23,7 @@ class ObserverSourceKind(StrEnum):
     TELEGRAM_UNREAD_DIGEST = "telegram_unread_digest"
     TELEGRAM_REPLY_DEBT = "telegram_reply_debt"
     TELEGRAM_DAILY_SCOPE = "telegram_daily_scope"
+    OBSERVER_MANUAL_COMMAND = "observer_manual_command"
     OSINT_PERSON = "osint_person"
     DOCUMENT_CAPTURE = "document_capture"
 

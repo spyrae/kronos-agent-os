@@ -26,6 +26,8 @@ class ObserverState:
     last_seen_message_ids: dict[str, int] = field(default_factory=dict)
     ignored_peers: set[str] = field(default_factory=set)
     muted_peers: set[str] = field(default_factory=set)
+    ignored_peer_reasons: dict[str, str] = field(default_factory=dict)
+    muted_peer_reasons: dict[str, str] = field(default_factory=dict)
     last_scan_at: dict[str, str] = field(default_factory=dict)
     last_digest_at: dict[str, str] = field(default_factory=dict)
     last_reported_debts: dict[str, str] = field(default_factory=dict)
@@ -41,6 +43,8 @@ class ObserverState:
             "last_seen_message_ids": dict(sorted(self.last_seen_message_ids.items())),
             "ignored_peers": sorted(self.ignored_peers),
             "muted_peers": sorted(self.muted_peers),
+            "ignored_peer_reasons": dict(sorted(self.ignored_peer_reasons.items())),
+            "muted_peer_reasons": dict(sorted(self.muted_peer_reasons.items())),
             "last_scan_at": dict(sorted(self.last_scan_at.items())),
             "last_digest_at": dict(sorted(self.last_digest_at.items())),
             "last_reported_debts": dict(sorted(self.last_reported_debts.items())),
@@ -66,6 +70,16 @@ class ObserverState:
             },
             ignored_peers={str(item) for item in data.get("ignored_peers") or []},
             muted_peers={str(item) for item in data.get("muted_peers") or []},
+            ignored_peer_reasons={
+                str(key): str(value)
+                for key, value in dict(data.get("ignored_peer_reasons") or {}).items()
+                if value
+            },
+            muted_peer_reasons={
+                str(key): str(value)
+                for key, value in dict(data.get("muted_peer_reasons") or {}).items()
+                if value
+            },
             last_scan_at={str(key): str(value) for key, value in dict(data.get("last_scan_at") or {}).items()},
             last_digest_at={str(key): str(value) for key, value in dict(data.get("last_digest_at") or {}).items()},
             last_reported_debts={
@@ -128,24 +142,42 @@ class ObserverStateStore:
             state.last_seen_message_ids[key] = int(last_seen_message_id)
         return self.save(state)
 
-    def set_ignored(self, peer_id: str, ignored: bool = True) -> ObserverState:
+    def set_ignored(
+        self,
+        peer_id: str,
+        ignored: bool = True,
+        *,
+        reason: str = "",
+    ) -> ObserverState:
         """Mark a peer as ignored or remove it from the ignore list."""
         state = self.load()
         key = str(peer_id)
         if ignored:
             state.ignored_peers.add(key)
+            if reason.strip():
+                state.ignored_peer_reasons[key] = reason.strip()
         else:
             state.ignored_peers.discard(key)
+            state.ignored_peer_reasons.pop(key, None)
         return self.save(state)
 
-    def set_muted(self, peer_id: str, muted: bool = True) -> ObserverState:
+    def set_muted(
+        self,
+        peer_id: str,
+        muted: bool = True,
+        *,
+        reason: str = "",
+    ) -> ObserverState:
         """Mark a peer as muted for notifications or remove that mute."""
         state = self.load()
         key = str(peer_id)
         if muted:
             state.muted_peers.add(key)
+            if reason.strip():
+                state.muted_peer_reasons[key] = reason.strip()
         else:
             state.muted_peers.discard(key)
+            state.muted_peer_reasons.pop(key, None)
         return self.save(state)
 
     def mark_digest(self, digest_name: str, timestamp: str | None = None) -> ObserverState:

@@ -1024,6 +1024,29 @@ async def _handle_aso_command(text: str) -> str | None:
         )
 
 
+async def _handle_observer_command(
+    text: str,
+    *,
+    is_dm: bool,
+    actor_id: str,
+) -> str | None:
+    """Handle /observer controls after Telegram access checks."""
+    if not text.strip().casefold().startswith("/observer"):
+        return None
+    if not is_dm:
+        log.info("Ignoring /observer command outside DM")
+        return ""
+
+    from kronos.observer.commands import handle_observer_command
+
+    return await handle_observer_command(
+        text,
+        client=_client,
+        is_dm=is_dm,
+        actor_id=actor_id,
+    )
+
+
 # --- Main entry ---
 
 
@@ -1421,6 +1444,14 @@ async def run_bridge(agent: KronosAgent) -> None:
                     reply = "Голосовой режим выключен. Голосом отвечаю только на голосовые."
         elif (runtime_reply := _handle_runtime_info_query(clean_text)) is not None:
             reply = runtime_reply
+        elif (observer_reply := await _handle_observer_command(
+            clean_text,
+            is_dm=is_dm,
+            actor_id=str(user_id),
+        )) is not None:
+            if not observer_reply:
+                return
+            reply = observer_reply
         # Cost guardian check
         else:
             guardian = get_guardian()

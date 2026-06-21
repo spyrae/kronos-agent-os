@@ -32,6 +32,7 @@ Observer must not:
 - `telegram_unread_digest`
 - `telegram_reply_debt`
 - `telegram_daily_scope`
+- `observer_manual_command`
 - `osint_person`
 - `document_capture`
 
@@ -62,6 +63,7 @@ workspace/notes/world/contacts/{slug}.md
 - last seen message ids;
 - ignored peers;
 - muted peers;
+- sanitized ignore/mute reasons;
 - last digest timestamps.
 
 `runs.jsonl` is append-only run metadata. It is sanitized before writing and is
@@ -75,3 +77,31 @@ for operational debugging, not for storing message bodies.
 - Use `kronos.observer.state.ObserverStateStore` for idempotent state
   persistence.
 - Future scanner code must prove it does not call `send_read_acknowledge`.
+
+## Manual controls
+
+Observer v1 controls are available through allowed Telegram DMs only. Group
+commands are ignored.
+
+```text
+/observer status
+/observer ignore <peer> [reason]
+/observer unignore <peer>
+/observer mute <peer> [reason]
+/observer unmute <peer>
+/observer debts
+/observer digest dry-run
+```
+
+Notes:
+
+- `<peer>` is the peer id/token shown in status or scanner-derived summaries.
+- `ignore` and `mute` both exclude peers from scanner snapshots and reply-debt
+  detection. `ignore` is for privacy/no-scan use cases; `mute` is for noisy
+  peers that should not trigger reminders.
+- `status` reports job enablement, last runs, and ignored/muted peer ids. It
+  intentionally does not include raw chat messages or run metadata.
+- `digest dry-run` builds the morning digest without sending a scheduled
+  notification and without updating scanner cursors.
+- Manual commands append sanitized audit records to
+  `workspace/ops/observer/runs.jsonl`.
