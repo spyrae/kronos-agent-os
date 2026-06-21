@@ -1047,6 +1047,27 @@ async def _handle_observer_command(
     )
 
 
+def _is_osint_command(text: str) -> bool:
+    return text.strip().casefold().startswith("/osint")
+
+
+async def _handle_osint_command(
+    text: str,
+    *,
+    is_dm: bool,
+) -> str | None:
+    """Handle explicit OSINT commands; never in groups."""
+    if not _is_osint_command(text):
+        return None
+    if not is_dm:
+        log.info("Ignoring /osint command outside DM")
+        return ""
+
+    from kronos.osint.person import handle_osint_command
+
+    return await asyncio.to_thread(handle_osint_command, text)
+
+
 # --- Main entry ---
 
 
@@ -1452,6 +1473,9 @@ async def run_bridge(agent: KronosAgent) -> None:
             if not observer_reply:
                 return
             reply = observer_reply
+        elif _is_osint_command(clean_text) and not is_dm:
+            log.info("Ignoring /osint command outside DM")
+            return
         # Cost guardian check
         else:
             guardian = get_guardian()
@@ -1461,6 +1485,13 @@ async def run_bridge(agent: KronosAgent) -> None:
             # Intercept /aso commands before agent
             elif (aso_reply := await _handle_aso_command(clean_text)) is not None:
                 reply = aso_reply
+            elif (osint_reply := await _handle_osint_command(
+                clean_text,
+                is_dm=is_dm,
+            )) is not None:
+                if not osint_reply:
+                    return
+                reply = osint_reply
             else:
                 # Call agent with new contract: raw user text as message,
                 # group metadata as transient extra_system_context only.
