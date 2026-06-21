@@ -140,12 +140,13 @@ JourneyBay travel insights digest:
 **Module:** `kronos/cron/email_expenses.py`
 
 Auto-extract expenses from Gmail receipts:
-1. Search Gmail for receipt/invoice emails (requires Google Workspace MCP)
-2. LLM extracts expense data (description, amount, currency, category, date)
-3. Create entries in Notion Expenses DB
+1. Search Gmail for receipt/invoice emails through Google Workspace MCP.
+2. LLM extracts expense data (description, amount, currency, category, date).
+3. Create entries through the canonical `add_expense` tool, so RUB/IDR
+   handling and budget FIFO stay consistent with manual expense logging.
 
-**Dependencies:** NOTION_API_KEY, Google OAuth (for Gmail)
-**Status:** Partially implemented — Gmail search requires MCP integration, currently a stub
+**Dependencies:** NOTION_API_KEY, NOTION_EXPENSES_DB_ID, Google Workspace OAuth, LITE LLM provider
+**Status:** MCP-backed best-effort; skips safely when any dependency is missing
 **Notification:** Webhook → Telegram DM
 
 ### 8. sleep-compute
