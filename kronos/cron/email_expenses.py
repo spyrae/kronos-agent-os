@@ -348,7 +348,7 @@ def _create_notion_expense(expense: dict[str, Any]) -> bool:
         return False
 
     currency = str(expense.get("currency", "IDR")).upper()
-    if currency not in ("IDR", "RUB"):
+    if currency not in ("IDR", "RUB", "USD"):
         log.info("Skipping email expense with unsupported currency: %s", currency)
         return False
 
