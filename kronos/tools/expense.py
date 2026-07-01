@@ -16,6 +16,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import namedtuple
 from datetime import datetime, timedelta, timezone
 
 from langchain_core.tools import tool
@@ -45,11 +46,19 @@ VALID_CATEGORIES = {
 }
 
 # Canonical expense schema:
-# - BUDGET.md tranche rate is IDR per 1 RUB.
-# - IDR expenses: Notion `Rate` stores the same IDR/RUB value (for example 233.5).
-# - IDR expenses: `Amount_RUB` is calculated as round(Amount_IDR / Rate).
-# - RUB expenses: `Amount_RUB` stores the original amount, no Rate/Amount_IDR/FIFO.
-# Do not convert Rate to RUB/IDR or RUB per 1000 IDR.
+# - BUDGET.md tranche carries two rates: `rate` = IDR per 1 RUB, `rate_usd` = IDR per 1 USD.
+# - IDR expenses: Notion `Rate` stores the IDR/RUB value (for example 233.5) and
+#   `Rate_USD` the IDR/USD value (for example 16300).
+# - IDR expenses: `Amount_RUB` = round(Amount_IDR / Rate), `Amount_USD` = round(Amount_IDR / Rate_USD).
+# - RUB expenses: `Amount_RUB` stores the original amount, no Rate/Amount_IDR/Amount_USD/FIFO.
+# - USD expenses: `Amount_USD` stores the original amount, no Rate_USD/Amount_IDR/FIFO.
+# Do not invert the rates (they are IDR per 1 unit, never unit per IDR or per 1000 IDR).
+# Legacy tranches without an IDR/USD rate still yield Amount_RUB; Amount_USD is left empty
+# until the tranche carries a USD rate.
+
+# Result of a FIFO pass over IDR tranches. amount_usd / rate_usd are None when any
+# consumed tranche lacks an IDR/USD rate (legacy budget) — RUB is always computed.
+FifoResult = namedtuple("FifoResult", ["amount_rub", "rate_rub", "amount_usd", "rate_usd", "tranches"])
 
 
 def _today() -> str:
@@ -116,7 +125,10 @@ def _parse_tranches(text: str) -> list[dict]:
             break
         if not in_active:
             continue
-        # Parse table row: | # | Дата | Сумма IDR | Остаток IDR | Курс (IDR/RUB) | Заметка |
+        # Parse table row. New format has an extra IDR/USD rate column:
+        #   | # | Дата | Сумма IDR | Остаток IDR | Курс (IDR/RUB) | Курс (IDR/USD) | Заметка |
+        # Legacy format has no USD rate:
+        #   | # | Дата | Сумма IDR | Остаток IDR | Курс (IDR/RUB) | Заметка |
         if line.startswith("|") and not line.startswith("|---") and not line.startswith("| #"):
             cells = [c.strip() for c in line.split("|")[1:-1]]
             if len(cells) >= 5:
@@ -126,7 +138,17 @@ def _parse_tranches(text: str) -> list[dict]:
                     total = float(cells[2].replace(",", "").replace(" ", ""))
                     remaining = float(cells[3].replace(",", "").replace(" ", ""))
                     rate = float(cells[4].replace(",", "").replace(" ", ""))
-                    note = cells[5].strip() if len(cells) > 5 else ""
+                    # Optional IDR/USD rate column. If cells[5] parses as a number it is
+                    # the USD rate (new format); otherwise it is the note (legacy format).
+                    rate_usd = None
+                    note = ""
+                    extra = cells[5:]
+                    if extra:
+                        try:
+                            rate_usd = float(extra[0].replace(",", "").replace(" ", ""))
+                            note = extra[1].strip() if len(extra) > 1 else ""
+                        except ValueError:
+                            note = extra[0].strip()
                     tranches.append(
                         {
                             "num": num,
@@ -134,6 +156,7 @@ def _parse_tranches(text: str) -> list[dict]:
                             "total": total,
                             "remaining": remaining,
                             "rate": rate,
+                            "rate_usd": rate_usd,
                             "note": note,
                         }
                     )
@@ -168,12 +191,15 @@ def _update_budget(text: str, tranches: list[dict]) -> str:
     table_lines = [
         marker_start,
         "",
-        "| # | Дата | Сумма IDR | Остаток IDR | Курс (IDR/RUB) | Заметка |",
-        "|---|------|-----------|-------------|-----------------|---------|",
+        "| # | Дата | Сумма IDR | Остаток IDR | Курс (IDR/RUB) | Курс (IDR/USD) | Заметка |",
+        "|---|------|-----------|-------------|-----------------|-----------------|---------|",
     ]
     for t in tranches:
+        rate_usd = t.get("rate_usd")
+        rate_usd_str = f"{rate_usd:g}" if rate_usd else ""
         table_lines.append(
-            f"| {t['num']} | {t['date']} | {t['total']:,.0f} | {t['remaining']:,.0f} | {t['rate']} | {t['note']} |"
+            f"| {t['num']} | {t['date']} | {t['total']:,.0f} | {t['remaining']:,.0f} | "
+            f"{t['rate']} | {rate_usd_str} | {t['note']} |"
         )
     table_lines.append("")
 
@@ -196,15 +222,21 @@ def _write_text_atomic(path: str, text: str) -> None:
         raise
 
 
-def _fifo_calculate(amount_idr: float, tranches: list[dict]) -> tuple[float, float, list[dict]]:
-    """FIFO: calculate RUB amount and deduct from tranches.
+def _fifo_calculate(amount_idr: float, tranches: list[dict]) -> FifoResult:
+    """FIFO: calculate RUB + USD amounts and deduct from tranches.
 
-    Rate in tranches = IDR per 1 RUB. Formula: amount_rub = amount_idr / rate.
+    Tranche rates are IDR per 1 unit: `rate` = IDR/RUB, `rate_usd` = IDR/USD.
+    Formulas: amount_rub = amount_idr / rate, amount_usd = amount_idr / rate_usd.
 
-    Returns: (amount_rub, effective_rate, updated_tranches)
+    USD is only reported when every consumed tranche carries a USD rate — a legacy
+    tranche without `rate_usd` leaves amount_usd/rate_usd as None (RUB still computed).
+
+    Returns: FifoResult(amount_rub, rate_rub, amount_usd, rate_usd, updated_tranches)
     """
     remaining = amount_idr
     total_rub = 0.0
+    total_usd = 0.0
+    usd_complete = True
 
     for t in tranches:
         if remaining <= 0:
@@ -215,8 +247,13 @@ def _fifo_calculate(amount_idr: float, tranches: list[dict]) -> tuple[float, flo
 
         take = min(remaining, available)
         # rate = IDR per 1 RUB → rub = idr / rate
-        rub_for_this = take / t["rate"]
-        total_rub += rub_for_this
+        total_rub += take / t["rate"]
+        # rate_usd = IDR per 1 USD → usd = idr / rate_usd
+        rate_usd = t.get("rate_usd")
+        if rate_usd and rate_usd > 0:
+            total_usd += take / rate_usd
+        else:
+            usd_complete = False
         t["remaining"] -= take
         remaining -= take
 
@@ -224,12 +261,24 @@ def _fifo_calculate(amount_idr: float, tranches: list[dict]) -> tuple[float, flo
         log.warning("FIFO: not enough budget! Deficit: %s IDR", remaining)
 
     effective_rate = amount_idr / total_rub if total_rub > 0 else 0
-    return round(total_rub), effective_rate, tranches
+
+    amount_usd = None
+    effective_rate_usd = None
+    if usd_complete and total_usd > 0:
+        amount_usd = round(total_usd, 2)
+        effective_rate_usd = amount_idr / total_usd
+
+    return FifoResult(round(total_rub), effective_rate, amount_usd, effective_rate_usd, tranches)
 
 
 def _notion_rate(rate_idr_per_rub: float) -> float:
     """Return Notion `Rate` value in the canonical IDR/RUB format."""
     return round(rate_idr_per_rub, 1)
+
+
+def _notion_rate_usd(rate_idr_per_usd: float) -> float:
+    """Return Notion `Rate_USD` value in the canonical IDR/USD format."""
+    return round(rate_idr_per_usd, 1)
 
 
 def _notion_headers() -> dict[str, str]:
@@ -397,17 +446,18 @@ def add_expense(
 ) -> str:
     """Add an expense to Notion with optional automatic FIFO budget calculation.
 
-    For IDR expenses, automatically reads BUDGET.md, calculates RUB from FIFO
-    tranches, writes to Notion, and updates the budget. No need to provide rate.
-    For RUB expenses, writes Amount_RUB as-is and does not touch tranches.
+    For IDR expenses, automatically reads BUDGET.md, converts to BOTH RUB and USD
+    from FIFO tranches, writes to Notion, and updates the budget. No need to provide
+    rates. For RUB expenses, writes Amount_RUB as-is; for USD expenses, writes
+    Amount_USD as-is. RUB and USD expenses never touch the IDR tranches.
 
     IMPORTANT: Do NOT pass `date` unless the user explicitly says a different date.
     The tool uses today's date automatically. Wrong dates will be auto-corrected.
 
     Args:
         description: What was purchased (e.g. "Кафе", "Grab", "Продукты")
-        amount: Transaction amount (e.g. 300870 IDR or 496 RUB)
-        currency: "IDR" or "RUB"
+        amount: Transaction amount (e.g. 300870 IDR, 496 RUB, or 12.50 USD)
+        currency: "IDR", "RUB", or "USD"
         category: One of: Food, Transport, Subscriptions, Shopping, Travel, Health, Entertainment, Other
         date: DO NOT SET unless user specified a date. Auto-defaults to today. Dates >30 days ago are rejected.
         split: True if expense is split 50/50 (with Sasha). Default False.
@@ -419,15 +469,17 @@ def add_expense(
 
     # Validate currency
     currency = currency.upper()
-    if currency not in ("IDR", "RUB"):
-        return f"[ERROR] Invalid currency '{currency}'. Must be IDR or RUB."
+    if currency not in ("IDR", "RUB", "USD"):
+        return f"[ERROR] Invalid currency '{currency}'. Must be IDR, RUB, or USD."
 
     # Validate and sanitize date (catches LLM hallucinating wrong year/month)
     date, date_warning = _validate_date(date)
 
     # --- FIFO budget calculation for IDR ---
     amount_rub = None
+    amount_usd = None
     rate_idr_per_rub = None
+    rate_idr_per_usd = None
     budget_updated = False
     budget_file = ""
     budget_new_text = None
@@ -443,9 +495,17 @@ def add_expense(
             if tranches:
                 total_remaining = sum(t["remaining"] for t in tranches)
                 if total_remaining >= amount:
-                    amount_rub, rate_idr_per_rub, tranches = _fifo_calculate(amount, tranches)
-                    if split and amount_rub:
-                        amount_rub = round(amount_rub / 2)
+                    fifo = _fifo_calculate(amount, tranches)
+                    amount_rub = fifo.amount_rub
+                    rate_idr_per_rub = fifo.rate_rub
+                    amount_usd = fifo.amount_usd
+                    rate_idr_per_usd = fifo.rate_usd
+                    tranches = fifo.tranches
+                    if split:
+                        if amount_rub:
+                            amount_rub = round(amount_rub / 2)
+                        if amount_usd:
+                            amount_usd = round(amount_usd / 2, 2)
                     budget_new_text = _update_budget(budget_text, tranches)
                 else:
                     log.warning("FIFO: insufficient budget (%s IDR available, need %s)", total_remaining, amount)
@@ -457,6 +517,10 @@ def add_expense(
         amount_rub = round(amount)
         if split:
             amount_rub = round(amount_rub / 2)
+    elif currency == "USD":
+        amount_usd = round(amount, 2)
+        if split:
+            amount_usd = round(amount_usd / 2, 2)
 
     # --- Build Notion properties ---
     properties: dict = {
@@ -472,8 +536,12 @@ def add_expense(
 
     if amount_rub is not None:
         properties["Amount_RUB"] = {"number": amount_rub}
+    if amount_usd is not None:
+        properties["Amount_USD"] = {"number": amount_usd}
     if rate_idr_per_rub is not None:
         properties["Rate"] = {"number": _notion_rate(rate_idr_per_rub)}
+    if rate_idr_per_usd is not None:
+        properties["Rate_USD"] = {"number": _notion_rate_usd(rate_idr_per_usd)}
 
     if ref:
         properties["Ref"] = {"rich_text": [{"text": {"content": ref}}]}
@@ -506,16 +574,29 @@ def add_expense(
         else:
             budget_updated = True
             log.info(
-                "FIFO: %s IDR → %s RUB (rate %.1f), budget updated",
+                "FIFO: %s IDR → %s RUB (rate %.1f) / %s USD (rate %s), budget updated",
                 amount,
                 amount_rub,
                 rate_idr_per_rub or 0,
+                amount_usd if amount_usd is not None else "—",
+                f"{rate_idr_per_usd:.1f}" if rate_idr_per_usd else "—",
             )
 
-    amount_display = f"{amount:,.0f} ₽" if currency == "RUB" else f"{amount:,.0f} {currency}"
+    if currency == "RUB":
+        amount_display = f"{amount:,.0f} ₽"
+    elif currency == "USD":
+        amount_display = f"{amount:,.2f} $"
+    else:
+        amount_display = f"{amount:,.0f} {currency}"
     parts = [f"✅ '{description}' — {amount_display}"]
-    if currency == "IDR" and amount_rub is not None:
-        parts.append(f"= {amount_rub:,} ₽")
+    if currency == "IDR":
+        conv = []
+        if amount_rub is not None:
+            conv.append(f"{amount_rub:,} ₽")
+        if amount_usd is not None:
+            conv.append(f"{amount_usd:,.2f} $")
+        if conv:
+            parts.append("= " + " / ".join(conv))
     if split:
         parts.append("(split, твоя доля)")
     parts.append(f"| Дата: {date}")
@@ -533,16 +614,19 @@ def add_expense(
 def add_tranche(
     amount_idr: float,
     rate: float,
+    rate_usd: float | None = None,
     note: str = "",
 ) -> str:
     """Add a new IDR budget tranche for FIFO expense tracking.
 
-    Call when the user says something like "у нас 10 млн рупий по курсу 207.6"
-    or "пополни бюджет 7 млн по 195".
+    Call when the user says something like "у нас 10 млн рупий, курс рубля 207.6,
+    курс доллара 16300" or "пополни бюджет 7 млн по 195 и 16250".
 
     Args:
         amount_idr: Amount in IDR (e.g. 10000000 for 10 million)
         rate: Exchange rate as IDR per 1 RUB (e.g. 207.6 means 207.6 IDR = 1 RUB)
+        rate_usd: Exchange rate as IDR per 1 USD (e.g. 16300 means 16300 IDR = 1 USD).
+            Optional, but pass it with every new tranche so IDR expenses convert to USD too.
         note: Optional note (e.g. "Второй транш")
     """
     budget_file = _budget_path()
@@ -563,6 +647,7 @@ def add_tranche(
             "total": amount_idr,
             "remaining": amount_idr,
             "rate": rate,
+            "rate_usd": rate_usd,
             "note": note or f"Транш #{next_num}",
         }
     )
@@ -572,11 +657,14 @@ def add_tranche(
         f.write(new_text)
 
     total_remaining = sum(t["remaining"] for t in tranches)
-    log.info("Tranche added: %s IDR at rate %s IDR/RUB", amount_idr, rate)
+    log.info("Tranche added: %s IDR at %s IDR/RUB, %s IDR/USD", amount_idr, rate, rate_usd or "—")
     total_rub = sum(t["remaining"] / t["rate"] for t in tranches if t["rate"] > 0)
+    total_usd = sum(t["remaining"] / t["rate_usd"] for t in tranches if t.get("rate_usd"))
+    rate_desc = f"{rate} IDR/RUB" + (f", {rate_usd:g} IDR/USD" if rate_usd else "")
+    usd_note = f" / ≈ ${total_usd:,.0f}" if total_usd > 0 else ""
     return (
-        f"OK: Транш #{next_num} добавлен — {amount_idr:,.0f} IDR по курсу {rate} IDR/RUB. "
-        f"Общий остаток: {total_remaining:,.0f} IDR ≈ {total_rub:,.0f} ₽ ({len(tranches)} траншей)"
+        f"OK: Транш #{next_num} добавлен — {amount_idr:,.0f} IDR по курсу {rate_desc}. "
+        f"Общий остаток: {total_remaining:,.0f} IDR ≈ {total_rub:,.0f} ₽{usd_note} ({len(tranches)} траншей)"
     )
 
 
@@ -584,17 +672,20 @@ def add_tranche(
 def replace_tranche(
     tranche_num: int,
     new_rate: float,
+    new_rate_usd: float | None = None,
     new_amount_idr: float | None = None,
     note: str = "",
 ) -> str:
-    """Replace an existing tranche with a new rate (and optionally new amount).
+    """Replace an existing tranche with new rates (and optionally new amount).
 
-    Use when the user says "поменяй курс транша 1 на 4.82" or
-    "обнови транш — остаток тот же, курс 5.10".
+    Use when the user says "поменяй курс транша 1 на 207.6 и 16300" or
+    "обнови транш — остаток тот же, курс 210".
 
     Args:
         tranche_num: Number of the tranche to replace (e.g. 1)
         new_rate: New exchange rate as IDR per 1 RUB (e.g. 207.6)
+        new_rate_usd: New exchange rate as IDR per 1 USD (e.g. 16300). If not provided,
+            keeps the tranche's current USD rate.
         new_amount_idr: New IDR amount. If not provided, keeps the current remaining amount.
         note: Optional note for the new tranche.
     """
@@ -612,13 +703,15 @@ def replace_tranche(
         return f"[ERROR] Транш #{tranche_num} не найден. Доступные: {nums}"
 
     old_rate = target["rate"]
-    old_remaining = target["remaining"]
+    old_rate_usd = target.get("rate_usd")
 
     # Update in place
     if new_amount_idr is not None:
         target["total"] = new_amount_idr
         target["remaining"] = new_amount_idr
     target["rate"] = new_rate
+    if new_rate_usd is not None:
+        target["rate_usd"] = new_rate_usd
     if note:
         target["note"] = note
 
@@ -626,9 +719,17 @@ def replace_tranche(
     with open(budget_file, "w") as f:
         f.write(new_text)
 
-    log.info("Tranche #%d updated: rate %s → %s IDR/RUB", tranche_num, old_rate, new_rate)
+    effective_rate_usd = target.get("rate_usd")
+    log.info(
+        "Tranche #%d updated: rate %s → %s IDR/RUB, USD %s → %s",
+        tranche_num, old_rate, new_rate, old_rate_usd or "—", effective_rate_usd or "—",
+    )
+    usd_part = ""
+    if effective_rate_usd:
+        usd_part = f", {old_rate_usd or '—'} → {effective_rate_usd:g} IDR/USD"
+        usd_part += f" ≈ ${target['remaining'] / effective_rate_usd:,.0f}"
     return (
-        f"OK: Транш #{tranche_num} обновлён — курс {old_rate} → {new_rate} IDR/RUB. "
+        f"OK: Транш #{tranche_num} обновлён — курс {old_rate} → {new_rate} IDR/RUB{usd_part}. "
         f"Остаток: {target['remaining']:,.0f} IDR ≈ {target['remaining'] / new_rate:,.0f} ₽"
     )
 
@@ -656,11 +757,21 @@ def get_budget() -> str:
         total_remaining += t["remaining"]
         rub = t["remaining"] / t["rate"] if t["rate"] > 0 else 0
         pct = (t["remaining"] / t["total"] * 100) if t["total"] > 0 else 0
+        rate_usd = t.get("rate_usd")
+        if rate_usd:
+            usd = t["remaining"] / rate_usd
+            rate_part = f"курс {t['rate']} IDR/RUB, {rate_usd:g} IDR/USD"
+            money_part = f"≈ {rub:,.0f} ₽ / ${usd:,.0f}"
+        else:
+            rate_part = f"курс {t['rate']} IDR/RUB"
+            money_part = f"≈ {rub:,.0f} ₽"
         lines.append(
             f"  #{t['num']} | {t['remaining']:,.0f} / {t['total']:,.0f} IDR "
-            f"({pct:.0f}%) | курс {t['rate']} IDR/RUB | ≈ {rub:,.0f} ₽ | {t['note']}"
+            f"({pct:.0f}%) | {rate_part} | {money_part} | {t['note']}"
         )
 
     total_rub = sum(t["remaining"] / t["rate"] for t in tranches if t["rate"] > 0)
-    lines.append(f"\n**Итого:** {total_remaining:,.0f} IDR ≈ {total_rub:,.0f} ₽")
+    total_usd = sum(t["remaining"] / t["rate_usd"] for t in tranches if t.get("rate_usd"))
+    usd_total = f" / ${total_usd:,.0f}" if total_usd > 0 else ""
+    lines.append(f"\n**Итого:** {total_remaining:,.0f} IDR ≈ {total_rub:,.0f} ₽{usd_total}")
     return "\n".join(lines)
