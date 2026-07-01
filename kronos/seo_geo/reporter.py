@@ -14,14 +14,12 @@ guards ("say so honestly if no data") prevent invention.
 
 from __future__ import annotations
 
-import json
 import logging
-from collections import Counter
 
 from langchain_core.messages import HumanMessage
 
 from kronos.llm import ModelTier, get_model
-from kronos.seo_geo.config import KEYWORDS, SITE_BY_ID
+from kronos.seo_geo.config import SITE_BY_ID
 from kronos.seo_geo.store import SeoGeoStore, get_store
 
 log = logging.getLogger("kronos.seo_geo.reporter")
@@ -156,7 +154,7 @@ def _format_data_for_llm(per_site: list[dict]) -> str:
                 b.append(f"    ⚠️ Tier-A NOT ranking: {gaps}")
         # GEO
         geo = d["geo"]
-        b.append(f"  GEO citations (7d):")
+        b.append("  GEO citations (7d):")
         b.append(f"    our citation rate per engine: {geo['rate_per_engine']}")
         b.append(f"    our average citation rate: {geo['avg_rate']}%")
         if geo["competitor_mentions"]:
@@ -178,7 +176,7 @@ def _format_data_for_llm(per_site: list[dict]) -> str:
             f" avg_position={t.get('avg_position',0)}"
         )
         if gsc["top_queries"]:
-            b.append(f"  GSC top queries (real impressions, NOT our keyword list):")
+            b.append("  GSC top queries (real impressions, NOT our keyword list):")
             for q in gsc["top_queries"][:10]:
                 b.append(
                     f"    - {q['q'][:80]!r}: {q['impr']} impr,"

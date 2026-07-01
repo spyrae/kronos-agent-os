@@ -10,8 +10,7 @@ from datetime import UTC, datetime
 from kronos.config import settings
 from kronos.cron.notify import send_bot_api
 from kronos.observer.daily_scope import build_daily_scope, local_day_window, save_daily_scope
-from kronos.observer.render import render_morning_observer_digest
-from kronos.observer.render import render_daily_scope
+from kronos.observer.render import render_daily_scope, render_morning_observer_digest
 from kronos.observer.reply_debts import detect_reply_debts
 from kronos.observer.state import ObserverStateStore
 from kronos.observer.telegram_scan import scan_private_dialogs
