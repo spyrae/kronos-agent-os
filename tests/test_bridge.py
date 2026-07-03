@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from kronos import bridge
 
 
@@ -197,6 +199,70 @@ def test_owner_topic_rejects_peer_sender(monkeypatch):
 
     assert bridge._owner_topic_accepts_sender(42) is True
     assert bridge._owner_topic_accepts_sender(2001) is False
+
+
+def test_chat_topic_from_thread_id_parses_telegram_topics():
+    assert bridge._chat_topic_from_thread_id("-1003642435967:22") == (-1003642435967, 22)
+    assert bridge._chat_topic_from_thread_id("12345") == (12345, None)
+    assert bridge._chat_topic_from_thread_id("bad") == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_approval_callback_allows_owner_topic_user_without_dm_allowlist(monkeypatch):
+    _clear_topic_alias_env(monkeypatch)
+    monkeypatch.setattr(bridge.settings, "allowed_users", "")
+    monkeypatch.setattr(bridge.settings, "allow_all_users", False)
+    monkeypatch.setattr(bridge.settings, "telegram_swarm_chat_id", 3642435967)
+    monkeypatch.setattr(bridge.settings, "telegram_finance_topic_id", 22)
+    monkeypatch.setattr(bridge.settings, "telegram_finance_agent", "kronos")
+    monkeypatch.setattr(bridge.settings, "agent_name", "kronos")
+
+    class FakeRouter:
+        def _is_peer(self, sender_id):
+            return False
+
+    monkeypatch.setattr(bridge, "_group_router", FakeRouter())
+    event = SimpleNamespace(is_private=False, chat_id=-1003642435967)
+    pending = {"thread_id": "-1003642435967:22"}
+
+    assert await bridge._approval_callback_allowed(event, sender_id=42, pending=pending) is True
+
+
+@pytest.mark.asyncio
+async def test_approval_callback_rejects_peer_in_owner_topic(monkeypatch):
+    _clear_topic_alias_env(monkeypatch)
+    monkeypatch.setattr(bridge.settings, "allowed_users", "")
+    monkeypatch.setattr(bridge.settings, "allow_all_users", False)
+    monkeypatch.setattr(bridge.settings, "telegram_swarm_chat_id", 3642435967)
+    monkeypatch.setattr(bridge.settings, "telegram_finance_topic_id", 22)
+    monkeypatch.setattr(bridge.settings, "telegram_finance_agent", "kronos")
+    monkeypatch.setattr(bridge.settings, "agent_name", "kronos")
+
+    class FakeRouter:
+        def _is_peer(self, sender_id):
+            return sender_id == 2001
+
+    monkeypatch.setattr(bridge, "_group_router", FakeRouter())
+    event = SimpleNamespace(is_private=False, chat_id=-1003642435967)
+    pending = {"thread_id": "-1003642435967:22"}
+
+    assert await bridge._approval_callback_allowed(event, sender_id=2001, pending=pending) is False
+
+
+@pytest.mark.asyncio
+async def test_approval_callback_topic_prefers_pending_thread():
+    reply_to = SimpleNamespace(reply_to_top_id=99, forum_topic=True, reply_to_msg_id=99)
+    event = SimpleNamespace(
+        is_private=False,
+        message=SimpleNamespace(reply_to=reply_to),
+    )
+
+    topic_id = await bridge._approval_callback_topic_id(
+        event,
+        {"thread_id": "-1003642435967:22"},
+    )
+
+    assert topic_id == 22
 
 
 def test_approval_callback_helpers_roundtrip():

@@ -129,11 +129,7 @@ def _topic_owner_agents(owner_agent: str) -> set[str]:
     Supports comma-separated values such as ``kronos,nexus`` for topics where
     both agents are allowed to answer.
     """
-    return {
-        agent.strip().lower()
-        for agent in (owner_agent or "").replace(";", ",").split(",")
-        if agent.strip()
-    }
+    return {agent.strip().lower() for agent in (owner_agent or "").replace(";", ",").split(",") if agent.strip()}
 
 
 def _approval_callback_data(action: str, approval_id: str) -> bytes:
@@ -146,7 +142,7 @@ def _parse_approval_callback_data(data: bytes | str) -> tuple[str, str] | None:
     text = data.decode("utf-8") if isinstance(data, bytes) else str(data)
     if not text.startswith(APPROVAL_CALLBACK_PREFIX):
         return None
-    remainder = text[len(APPROVAL_CALLBACK_PREFIX):]
+    remainder = text[len(APPROVAL_CALLBACK_PREFIX) :]
     try:
         action, approval_id = remainder.split(":", 1)
     except ValueError:
@@ -158,31 +154,35 @@ def _parse_approval_callback_data(data: bytes | str) -> tuple[str, str] | None:
 
 def _approval_buttons(approval_id: str):
     """Return Telethon inline buttons for a pending approval."""
-    return [[
-        Button.inline("✅ Approve", _approval_callback_data("approve", approval_id)),
-        Button.inline("❌ Reject", _approval_callback_data("reject", approval_id)),
-    ]]
+    return [
+        [
+            Button.inline("✅ Approve", _approval_callback_data("approve", approval_id)),
+            Button.inline("❌ Reject", _approval_callback_data("reject", approval_id)),
+        ]
+    ]
 
 
 def _approval_bot_reply_markup(approval_id: str) -> dict:
     """Return Bot API inline_keyboard markup for topic sends."""
     return {
-        "inline_keyboard": [[
-            {
-                "text": "✅ Approve",
-                "callback_data": _approval_callback_data(
-                    "approve",
-                    approval_id,
-                ).decode("utf-8"),
-            },
-            {
-                "text": "❌ Reject",
-                "callback_data": _approval_callback_data(
-                    "reject",
-                    approval_id,
-                ).decode("utf-8"),
-            },
-        ]],
+        "inline_keyboard": [
+            [
+                {
+                    "text": "✅ Approve",
+                    "callback_data": _approval_callback_data(
+                        "approve",
+                        approval_id,
+                    ).decode("utf-8"),
+                },
+                {
+                    "text": "❌ Reject",
+                    "callback_data": _approval_callback_data(
+                        "reject",
+                        approval_id,
+                    ).decode("utf-8"),
+                },
+            ]
+        ],
     }
 
 
@@ -191,6 +191,18 @@ def _last_pending_approval_id() -> str | None:
     if _agent is None:
         return None
     return getattr(_agent, "last_pending_approval_id", None)
+
+
+def _chat_topic_from_thread_id(thread_id: str) -> tuple[int | None, int | None]:
+    """Parse a Telegram thread id into chat/topic ids when possible."""
+    try:
+        chat_text, topic_text = str(thread_id).rsplit(":", 1)
+        return int(chat_text), int(topic_text)
+    except (TypeError, ValueError):
+        try:
+            return int(str(thread_id)), None
+        except (TypeError, ValueError):
+            return None, None
 
 
 def _resolve_topic_route(chat_id: int, topic_id: int | None) -> TopicRoute:
@@ -348,8 +360,7 @@ def _format_shared_group_context(
     return (
         "[Общая история этого Telegram-топика]\n"
         "Ниже недавние сообщения из общего журнала. Используй их как контекст, "
-        "но не считай новым запросом и не пересказывай без необходимости.\n"
-        + "\n".join(lines)
+        "но не считай новым запросом и не пересказывай без необходимости.\n" + "\n".join(lines)
     )
 
 
@@ -387,10 +398,7 @@ def _is_voice_message(event) -> bool:
     doc = getattr(event.message.media, "document", None)
     if not doc:
         return False
-    return any(
-        isinstance(attr, DocumentAttributeAudio) and attr.voice
-        for attr in doc.attributes
-    )
+    return any(isinstance(attr, DocumentAttributeAudio) and attr.voice for attr in doc.attributes)
 
 
 def _image_mime_type(event) -> str:
@@ -542,7 +550,8 @@ async def _transcribe_voice(file_path: str) -> str:
         fh = open(file_path, "rb")
         try:
             data.add_field(
-                "file", fh,
+                "file",
+                fh,
                 filename=os.path.basename(file_path),
                 content_type="audio/ogg",
             )
@@ -569,11 +578,12 @@ def _is_mentioned(event) -> bool:
         return True
     if event.message.entities:
         from telethon.tl.types import MessageEntityMention, MessageEntityMentionName
+
         for ent in event.message.entities:
             if isinstance(ent, MessageEntityMentionName) and ent.user_id == _my_id:
                 return True
             if isinstance(ent, MessageEntityMention):
-                mentioned = event.raw_text[ent.offset:ent.offset + ent.length].lstrip("@").lower()
+                mentioned = event.raw_text[ent.offset : ent.offset + ent.length].lstrip("@").lower()
                 if _my_username and mentioned == _my_username.lower():
                     return True
     return False
@@ -585,24 +595,14 @@ def _is_service_message(event) -> bool:
     return bool(getattr(message, "action", None))
 
 
-def _extract_topic_id(event) -> int | None:
-    """Extract forum topic ID from a Telethon message event.
-
-    In forum supergroups, messages belong to topics. The topic ID
-    is used to isolate conversation contexts per topic.
-
-    Private chats can expose ``forum_topic`` reply headers when Telegram
-    creates per-chat UI topics. KAOS should treat those as ordinary DMs:
-    replying to the topic root produces noisy "topic was created" quotes and
-    fragments the private conversation context.
-
-    Telethon bot mode: reply_to.reply_to_msg_id = topic root message ID.
-    General topic: reply_to_msg_id = 1 (or absent).
-    """
-    if getattr(event, "is_private", False):
+def _extract_topic_id_from_message(message, *, is_private: bool) -> int | None:
+    """Extract forum topic ID from a Telethon message object."""
+    if is_private:
+        return None
+    if message is None:
         return None
 
-    reply_to = getattr(event.message, "reply_to", None)
+    reply_to = getattr(message, "reply_to", None)
     if not reply_to:
         # General topic in forum groups may have no reply_to
         # Check if chat itself is a forum
@@ -625,10 +625,82 @@ def _extract_topic_id(event) -> int | None:
     return None
 
 
+def _extract_topic_id(event) -> int | None:
+    """Extract forum topic ID from a Telethon message event.
+
+    In forum supergroups, messages belong to topics. The topic ID
+    is used to isolate conversation contexts per topic.
+
+    Private chats can expose ``forum_topic`` reply headers when Telegram
+    creates per-chat UI topics. KAOS should treat those as ordinary DMs:
+    replying to the topic root produces noisy "topic was created" quotes and
+    fragments the private conversation context.
+
+    Telethon bot mode: reply_to.reply_to_msg_id = topic root message ID.
+    General topic: reply_to_msg_id = 1 (or absent).
+    """
+    return _extract_topic_id_from_message(
+        getattr(event, "message", None),
+        is_private=bool(getattr(event, "is_private", False)),
+    )
+
+
+async def _approval_callback_topic_id(event, pending: dict | None = None) -> int | None:
+    """Resolve the topic for an approval callback.
+
+    Bot API callback updates may not expose the original topic metadata in a
+    Telethon event, so prefer the durable approval thread id.
+    """
+    if pending:
+        _, topic_id = _chat_topic_from_thread_id(str(pending.get("thread_id", "")))
+        if topic_id:
+            return topic_id
+
+    message = getattr(event, "message", None)
+    if message is None:
+        get_message = getattr(event, "get_message", None)
+        if callable(get_message):
+            try:
+                message = await get_message()
+            except Exception as e:
+                log.debug("Could not fetch callback message for topic routing: %s", e)
+    return _extract_topic_id_from_message(
+        message,
+        is_private=bool(getattr(event, "is_private", False)),
+    )
+
+
+async def _approval_callback_allowed(
+    event,
+    *,
+    sender_id: int,
+    pending: dict | None = None,
+) -> bool:
+    """Return whether a Telegram user may resolve this approval callback."""
+    if settings.is_telegram_user_allowed(sender_id):
+        return True
+    if bool(getattr(event, "is_private", False)):
+        return False
+    if not pending:
+        return False
+
+    pending_chat_id, pending_topic_id = _chat_topic_from_thread_id(str(pending.get("thread_id", "")))
+    if pending_chat_id is None or pending_topic_id is None:
+        return False
+
+    event_chat_id = getattr(event, "chat_id", None)
+    if not _same_telegram_chat(event_chat_id, pending_chat_id):
+        return False
+
+    route = _resolve_topic_route(pending_chat_id, pending_topic_id)
+    return route.mode == "owner" and _agent_owns_topic(route) and _owner_topic_accepts_sender(sender_id)
+
+
 def _strip_mention(text: str) -> str:
     if not _my_username:
         return text
     import re
+
     cleaned = re.sub(r"@" + re.escape(_my_username), "", text, flags=re.IGNORECASE).strip()
     return cleaned if cleaned else text
 
@@ -719,7 +791,7 @@ async def _send_bot_api_message(
     """Send message via Bot API with message_thread_id and return first msg id."""
     url = f"https://api.telegram.org/bot{settings.tg_bot_token}/sendMessage"
 
-    chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)] if len(text) > 4000 else [text]
+    chunks = [text[i : i + 4000] for i in range(0, len(text), 4000)] if len(text) > 4000 else [text]
     first_msg_id: int | None = None
 
     async with aiohttp.ClientSession() as session:
@@ -847,6 +919,7 @@ async def _ask_agent(
     # Audit log
     duration_ms = int(time.monotonic() * 1000) - start_ms
     from kronos.router import classify_tier
+
     tier = classify_tier(message).value
 
     log_request(
@@ -879,7 +952,7 @@ async def _send_to_chat(
         kwargs["reply_to"] = topic_id
 
     if len(text) > 4000:
-        chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)]
+        chunks = [text[i : i + 4000] for i in range(0, len(text), 4000)]
         for chunk in chunks:
             await _client.send_message(chat_id, chunk, **kwargs)
             await asyncio.sleep(0.5)
@@ -940,24 +1013,28 @@ async def _handle_history(request: web.Request) -> web.Response:
     async for msg in _client.iter_messages(entity, limit=limit, offset_id=offset_id):
         if not msg.text:
             continue
-        messages.append({
-            "id": msg.id,
-            "date": msg.date.isoformat(),
-            "text": msg.text,
-            "is_outgoing": msg.out,
-        })
+        messages.append(
+            {
+                "id": msg.id,
+                "date": msg.date.isoformat(),
+                "text": msg.text,
+                "is_outgoing": msg.out,
+            }
+        )
 
-    return web.json_response({
-        "messages": messages,
-        "chat": {
-            "id": entity.id,
-            "username": getattr(entity, "username", None),
-            "first_name": getattr(entity, "first_name", None),
-        },
-        "total": len(messages),
-        "has_more": len(messages) == limit,
-        "oldest_id": messages[-1]["id"] if messages else 0,
-    })
+    return web.json_response(
+        {
+            "messages": messages,
+            "chat": {
+                "id": entity.id,
+                "username": getattr(entity, "username", None),
+                "first_name": getattr(entity, "first_name", None),
+            },
+            "total": len(messages),
+            "has_more": len(messages) == limit,
+            "oldest_id": messages[-1]["id"] if messages else 0,
+        }
+    )
 
 
 async def _handle_health(request: web.Request) -> web.Response:
@@ -1092,14 +1169,17 @@ async def run_bridge(agent: KronosAgent) -> None:
 
         action, approval_id = parsed
         sender_id = int(getattr(event, "sender_id", 0) or 0)
-        if not settings.is_telegram_user_allowed(sender_id):
-            log.info("Ignoring approval callback from unauthorized user %s", sender_id)
-            await event.answer("Not allowed", alert=True)
-            return
         if _agent is None:
             await event.answer("Agent is not ready", alert=True)
             return
 
+        pending = await _agent.get_pending_tool_approval(approval_id)
+        if not await _approval_callback_allowed(event, sender_id=sender_id, pending=pending):
+            log.info("Ignoring approval callback from unauthorized user %s", sender_id)
+            await event.answer("Not allowed", alert=True)
+            return
+
+        topic_id = await _approval_callback_topic_id(event, pending)
         approved = action == "approve"
         await event.answer("Approved" if approved else "Rejected")
         try:
@@ -1119,14 +1199,32 @@ async def run_bridge(agent: KronosAgent) -> None:
 
         next_approval_id = _last_pending_approval_id()
         buttons = _approval_buttons(next_approval_id) if next_approval_id else None
-        await event.respond(reply, buttons=buttons)
+        bot_markup = _approval_bot_reply_markup(next_approval_id) if next_approval_id else None
+        chat_id = int(getattr(event, "chat_id", 0) or 0)
+        if topic_id and settings.tg_bot_token and chat_id:
+            await _send_bot_api_message(
+                chat_id,
+                reply,
+                topic_id,
+                reply_markup=bot_markup,
+            )
+        elif topic_id and chat_id:
+            await _client.send_message(
+                chat_id,
+                reply,
+                reply_to=topic_id,
+                buttons=buttons,
+            )
+        else:
+            await event.respond(reply, buttons=buttons)
 
     @_client.on(events.NewMessage(incoming=True))
     async def handle_message(event):
         # Log ALL incoming events for debugging
         log.info(
             "[EVENT] chat=%s private=%s reply_to=%s text=%s",
-            event.chat_id, event.is_private,
+            event.chat_id,
+            event.is_private,
             getattr(event.message, "reply_to", None),
             (event.raw_text or "")[:50],
         )
@@ -1165,9 +1263,7 @@ async def run_bridge(agent: KronosAgent) -> None:
                     sender_type = "agent"
                     # Reverse lookup via the router's registry (single source of truth).
                     peer_uname = (getattr(sender, "username", "") or "").lower().lstrip("@")
-                    agent_name_tag = (
-                        _group_router._username_to_agent.get(peer_uname) if peer_uname else None
-                    )
+                    agent_name_tag = _group_router._username_to_agent.get(peer_uname) if peer_uname else None
             swarm.record_inbound_message(
                 chat_id=event.chat_id,
                 topic_id=topic_id_inbound,
@@ -1250,7 +1346,10 @@ async def run_bridge(agent: KronosAgent) -> None:
 
                 log.info(
                     "[GroupRouter] %s: tier=%d delay=%.0fs reason=%s",
-                    settings.agent_name, decision.tier, decision.delay, decision.reason,
+                    settings.agent_name,
+                    decision.tier,
+                    decision.delay,
+                    decision.reason,
                 )
 
                 # Resolve root user message id for claim bookkeeping. For
@@ -1278,7 +1377,9 @@ async def run_bridge(agent: KronosAgent) -> None:
                 # Post-delay recheck (Tier 2/3) — another agent may have
                 # answered while we were waiting.
                 still_ok = await _group_router.should_still_respond(
-                    event, _client, tier=decision.tier,
+                    event,
+                    _client,
+                    tier=decision.tier,
                 )
                 if not still_ok:
                     swarm.cancel_claim(
@@ -1416,9 +1517,7 @@ async def run_bridge(agent: KronosAgent) -> None:
                 )
 
         if not is_dm and shared_group_context:
-            group_extra_context = "\n\n".join(
-                part for part in (group_extra_context, shared_group_context) if part
-            )
+            group_extra_context = "\n\n".join(part for part in (group_extra_context, shared_group_context) if part)
 
         # Extract forum topic_id (for topic-based context isolation)
         topic_id = _extract_topic_id(event)
@@ -1465,11 +1564,13 @@ async def run_bridge(agent: KronosAgent) -> None:
                     reply = "Голосовой режим выключен. Голосом отвечаю только на голосовые."
         elif (runtime_reply := _handle_runtime_info_query(clean_text)) is not None:
             reply = runtime_reply
-        elif (observer_reply := await _handle_observer_command(
-            clean_text,
-            is_dm=is_dm,
-            actor_id=str(user_id),
-        )) is not None:
+        elif (
+            observer_reply := await _handle_observer_command(
+                clean_text,
+                is_dm=is_dm,
+                actor_id=str(user_id),
+            )
+        ) is not None:
             if not observer_reply:
                 return
             reply = observer_reply
@@ -1485,10 +1586,12 @@ async def run_bridge(agent: KronosAgent) -> None:
             # Intercept /aso commands before agent
             elif (aso_reply := await _handle_aso_command(clean_text)) is not None:
                 reply = aso_reply
-            elif (osint_reply := await _handle_osint_command(
-                clean_text,
-                is_dm=is_dm,
-            )) is not None:
+            elif (
+                osint_reply := await _handle_osint_command(
+                    clean_text,
+                    is_dm=is_dm,
+                )
+            ) is not None:
                 if not osint_reply:
                     return
                 reply = osint_reply
@@ -1582,10 +1685,11 @@ async def run_bridge(agent: KronosAgent) -> None:
                     buttons=approval_buttons,
                 )
             elif len(reply) > 4000:
-                chunks = [reply[i:i + 4000] for i in range(0, len(reply), 4000)]
+                chunks = [reply[i : i + 4000] for i in range(0, len(reply), 4000)]
                 for i, chunk in enumerate(chunks):
                     sent = await _client.send_message(
-                        event.chat_id, chunk,
+                        event.chat_id,
+                        chunk,
                         reply_to=event.message.id if i == 0 and not is_dm else None,
                         buttons=approval_buttons if i == 0 else None,
                     )
@@ -1689,7 +1793,10 @@ async def run_bridge(agent: KronosAgent) -> None:
                 )
                 log.info(
                     "[Feedback] %s on msg %d in chat %d: %s",
-                    agent_name, msg_id, chat_id, emoticon,
+                    agent_name,
+                    msg_id,
+                    chat_id,
+                    emoticon,
                 )
         except Exception as e:
             log.warning("Reaction handler error (non-fatal): %s", e)
@@ -1706,6 +1813,7 @@ async def run_bridge(agent: KronosAgent) -> None:
     # Initialize group router for multi-agent chats
     global _group_router
     from kronos.group_router import GroupRouter
+
     _group_router = GroupRouter(
         agent_name=settings.agent_name,
         my_id=_my_id,
@@ -1716,6 +1824,7 @@ async def run_bridge(agent: KronosAgent) -> None:
 
     # Share client for cron jobs and other modules
     from kronos.telegram_client import set_client
+
     set_client(_client)
 
     await _start_webhook_server()

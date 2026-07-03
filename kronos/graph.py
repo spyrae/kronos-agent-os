@@ -91,6 +91,7 @@ class KronosAgent:
 
         # Browser tools
         from kronos.tools.browser.tools import get_browser_tools
+
         browser_tools = get_browser_tools()
         if browser_tools:
             self._tools.extend(browser_tools)
@@ -98,6 +99,7 @@ class KronosAgent:
 
         # MCP gateway tools. Mutating runtime server management is opt-in.
         from kronos.tools.gateway_tools import get_gateway_tools
+
         self._tools.extend(get_gateway_tools())
 
         # Dynamic tools are powerful but risky; keep disabled in public-safe
@@ -105,6 +107,7 @@ class KronosAgent:
         if settings.enable_dynamic_tools:
             from kronos.tools.dynamic import load_persisted_tools
             from kronos.tools.dynamic_tools import get_dynamic_management_tools
+
             self._tools.extend(get_dynamic_management_tools())
             persisted = load_persisted_tools()
             if persisted:
@@ -115,10 +118,12 @@ class KronosAgent:
 
         # Session search tool
         from kronos.tools.session_search import session_search
+
         self._tools.append(session_search)
 
         # Composio tools
         from kronos.tools.composio_integration import get_composio_tools
+
         composio_tools = get_composio_tools()
         if composio_tools:
             self._tools.extend(composio_tools)
@@ -137,6 +142,7 @@ class KronosAgent:
         """Build supervisor if tools are available."""
         if enable and self._tools:
             from kronos.agents.supervisor import build_supervisor
+
             self._supervisor = build_supervisor(self._tools, on_tool_event=self._emit_tool_event)
             if self._supervisor:
                 log.info("Multi-agent supervisor enabled")
@@ -152,7 +158,8 @@ class KronosAgent:
         if self._system_prompt is None:
             catalog = self._skill_store.build_catalog() if self._skill_store else ""
             self._system_prompt = build_system_prompt(
-                settings.workspace_path, skill_catalog=catalog,
+                settings.workspace_path,
+                skill_catalog=catalog,
             )
             log.info("System prompt: %d chars, skills: %d chars", len(self._system_prompt), len(catalog))
         return self._system_prompt
@@ -169,6 +176,12 @@ class KronosAgent:
             for tool in getattr(self._supervisor, "_approval_tools", []):
                 tool_map[tool.name] = tool
         return tool_map
+
+    async def get_pending_tool_approval(self, approval_id: str) -> dict[str, Any] | None:
+        """Return a pending tool approval without claiming it."""
+        if not self._session_store:
+            return None
+        return await self._session_store.get_pending_approval(approval_id)
 
     def _build_durable_react_loop_kwargs(
         self,
@@ -267,10 +280,7 @@ class KronosAgent:
                 tool_message = ToolMessage(content=cached, tool_call_id=tool_call_id)
             elif tool is None:
                 tool_message = ToolMessage(
-                    content=(
-                        f"[ERROR] Approved tool '{tool_name}' is no longer available "
-                        "after restart."
-                    ),
+                    content=(f"[ERROR] Approved tool '{tool_name}' is no longer available after restart."),
                     tool_call_id=tool_call_id,
                 )
             else:
@@ -328,10 +338,7 @@ class KronosAgent:
             self._last_pending_approval_id = result.approval_id
             return result.content
 
-        save_messages = [
-            message for message in result.messages
-            if not isinstance(message, SystemMessage)
-        ]
+        save_messages = [message for message in result.messages if not isinstance(message, SystemMessage)]
         await self._session_store.finalize_turn(
             thread_id=thread_id,
             messages=save_messages,
@@ -378,11 +385,7 @@ class KronosAgent:
         is_ephemeral = not persist_user_turn
         self._last_pending_approval_id = None
 
-        if (
-            self._session_store
-            and not is_ephemeral
-            and not getattr(self, "_durable_recovery_checked", False)
-        ):
+        if self._session_store and not is_ephemeral and not getattr(self, "_durable_recovery_checked", False):
             await self._session_store.recover_abandoned_turns()
             self._durable_recovery_checked = True
 
@@ -479,7 +482,9 @@ class KronosAgent:
         if self._memory_enabled and not is_ephemeral:
             mem_state = {**state, "messages": list(persisted_history)}
             asyncio.get_event_loop().run_in_executor(
-                None, store_memories_background, mem_state,
+                None,
+                store_memories_background,
+                mem_state,
             )
 
         # Step 5: Compact if needed (only for real user turns).
