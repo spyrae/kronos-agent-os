@@ -1,7 +1,7 @@
 """Register all cron jobs with the scheduler.
 
-Jobs are agent-aware: some only run on specific agents (e.g. competitor
-monitoring only on nexus). The ``agent_name`` from settings controls this.
+Jobs are agent-aware: some only run on specific agents (e.g. analytics
+reports only on nexus). The ``agent_name`` from settings controls this.
 """
 
 import logging
@@ -14,7 +14,6 @@ log = logging.getLogger("kronos.cron")
 # Jobs that should only run on a specific agent to avoid duplicate work.
 # Key: job name, value: agent_name that owns it.
 _AGENT_EXCLUSIVE_JOBS: dict[str, str] = {
-    "competitor-weekly": "nexus",
     "analytics-pulse": "nexus",
     "analytics-weekly": "nexus",
     "analytics-alerts": "nexus",
@@ -27,7 +26,6 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.analytics_alerts import run_analytics_alerts
     from kronos.cron.analytics_pulse import run_analytics_pulse
     from kronos.cron.analytics_weekly import run_analytics_weekly
-    from kronos.cron.competitor_weekly import run_competitor_weekly
     from kronos.cron.email_expenses import run_email_expenses
     from kronos.cron.expense_digest import run_expense_digest
     from kronos.cron.group_digest import run_group_digest
@@ -41,7 +39,9 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
 
     # DISABLED 2026-06-11: job-search digest paused (see registration below).
     # from kronos.cron.signal_jobs import run_jobs_digest
-    from kronos.cron.signal_travel import run_travel_insights_digest
+    # DISABLED 2026-07-03: JourneyBay travel insights collection/analysis/
+    # publication paused (see registration below).
+    # from kronos.cron.signal_travel import run_travel_insights_digest
     from kronos.cron.skill_improve import run_skill_improve
     from kronos.cron.sleep_compute import run_sleep_compute
     from kronos.cron.source_quality_audit import run_source_quality_audit
@@ -72,8 +72,11 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # Product/Business Ideas — daily at 04:00 UTC (dedicated topic)
     scheduler.add_daily("signal-ideas", run_ideas_digest, hour_utc=4)
 
-    # JourneyBay Travel Insights — daily at 05:00 UTC (dedicated topic)
-    scheduler.add_daily("signal-travel-insights", run_travel_insights_digest, hour_utc=5)
+    # JourneyBay Travel Insights — daily at 05:00 UTC (dedicated topic).
+    # DISABLED 2026-07-03: stop all collection/analysis/publication for now.
+    # To re-enable: uncomment the import above + this line, bump the job count
+    # below back to 17, then restart the kronos agent.
+    # scheduler.add_daily("signal-travel-insights", run_travel_insights_digest, hour_utc=5)
 
     # Daily Scope — daily at 14:00 UTC (22:00 UTC+8)
     scheduler.add_daily("daily-scope", run_daily_scope, hour_utc=14)
@@ -112,7 +115,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # ── Agent-exclusive jobs (only registered on the owning agent) ──────
     nexus_jobs_registered = 0
 
-    if _AGENT_EXCLUSIVE_JOBS.get("competitor-weekly") == me:
+    if _AGENT_EXCLUSIVE_JOBS.get("analytics-weekly") == me:
         from kronos.cron.seo_geo_check import run_seo_geo_weekly
 
         # Daily analytics pulse at 01:00 UTC = 04:00 MSK — before user wakes up.
@@ -120,16 +123,20 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         # Periodic anomaly detector — every 2h.
         scheduler.add_periodic("analytics-alerts", run_analytics_alerts, interval_seconds=7200)
 
-        # ── All three weekly reports land Monday morning MSK ──
+        # ── Weekly reports land Monday morning MSK ──
         # Spaced 3h apart so the LLM (one Codex/Kimi process) is never
         # contended and Telegram doesn't get a burst of giant messages.
         #   03:00 UTC (06:00 MSK) — SEO/GEO (longest: 25-35 min run)
-        #   06:00 UTC (09:00 MSK) — Competitor intelligence
+        #   06:00 UTC (09:00 MSK) — Competitor intelligence (paused)
         #   09:00 UTC (12:00 MSK) — Analytics business report
         scheduler.add_weekly("seo-geo-weekly", run_seo_geo_weekly, weekday=0, hour_utc=3)
-        scheduler.add_weekly("competitor-weekly", run_competitor_weekly, weekday=0, hour_utc=6)
+        # DISABLED 2026-07-03: stop all competitor collection/analysis/publication
+        # for JB: Competitors Status. To re-enable: import
+        # run_competitor_weekly above, uncomment this line, bump
+        # nexus_jobs_registered back to 5, then restart the nexus agent.
+        # scheduler.add_weekly("competitor-weekly", run_competitor_weekly, weekday=0, hour_utc=6)
         scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
-        nexus_jobs_registered = 5
+        nexus_jobs_registered = 4
 
-    total = 17 + nexus_jobs_registered  # 18 base jobs; signal-jobs paused (-1)
+    total = 16 + nexus_jobs_registered  # 18 base jobs; signal-jobs and travel insights paused
     log.info("%d cron jobs registered for agent '%s'", total, me)

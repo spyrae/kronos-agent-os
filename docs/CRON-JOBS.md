@@ -10,9 +10,9 @@ All core cron jobs are registered in `kronos/cron/setup.py` and run by the built
 | 2 | news-monitor | Daily 00:00 UTC (08:00 UTC+8) | Daily | `news_monitor.py` |
 | 3 | personal-observer | Daily 23:00 UTC (07:00 UTC+8) | Daily | `personal_observer.py` |
 | 4 | group-digest | Daily 01:00 UTC (09:00 UTC+8) | Daily | `group_digest.py` |
-| 5 | signal-jobs | Daily 02:00 UTC (10:00 UTC+8) | Daily | `signal_jobs.py` |
+| 5 | signal-jobs | Paused | Daily | `signal_jobs.py` |
 | 6 | signal-ideas | Daily 04:00 UTC (12:00 UTC+8) | Daily | `signal_ideas.py` |
-| 7 | signal-travel-insights | Daily 05:00 UTC (13:00 UTC+8) | Daily | `signal_travel.py` |
+| 7 | signal-travel-insights | Paused | Daily | `signal_travel.py` |
 | 8 | daily-scope | Daily 14:00 UTC (22:00 UTC+8) | Daily | `personal_observer.py` |
 | 9 | email-expenses | Daily 00:00 UTC (08:00 UTC+8) | Daily | `email_expenses.py` |
 | 10 | sleep-compute | Daily 03:00 UTC (11:00 UTC+8) | Daily | `sleep_compute.py` |
@@ -123,8 +123,11 @@ Product/business ideas digest:
 **Notification:** Bot API → Telegram `Digest: Product/Business Ideas` topic
 
 ### 6. signal-travel-insights
-**Schedule:** Daily 05:00 UTC
+**Schedule:** Paused since 2026-07-03
 **Module:** `kronos/cron/signal_travel.py`
+
+Disabled: collection, analysis, and Telegram publication to
+`JB: Travel Insights` are currently stopped.
 
 JourneyBay travel insights digest:
 1. Load `travel_insights` sources from the Signal Intelligence registry.
@@ -304,11 +307,11 @@ topics can be configured independently:
 | Env var | Destination | Owner agent env/default | Current producers |
 |---------|-------------|-------------------------|-------------------|
 | `TOPIC_DIGEST_NEWS` | `Digest: News` | `TELEGRAM_DIGEST_NEWS_AGENT=kronos` | `news-monitor`, `group-digest` |
-| `TOPIC_JB_COMPETITORS` | `JB: Competitors Status` | `TELEGRAM_JB_COMPETITORS_AGENT=nexus` | `competitor-weekly` |
+| `TOPIC_JB_COMPETITORS` | `JB: Competitors Status` | `TELEGRAM_JB_COMPETITORS_AGENT=nexus` | paused |
 | `TOPIC_JB_SYSTEM` | `JB: System Status` | `TELEGRAM_JB_SYSTEM_AGENT=nexus` | analytics pulse/weekly/alerts, SEO/GEO |
 | `TOPIC_DIGEST_JOBS` | `Digest: Jobs` | `TELEGRAM_DIGEST_JOBS_AGENT=kronos` | `signal-jobs` |
 | `TOPIC_DIGEST_IDEAS` | `Digest: Product/Business Ideas` | `TELEGRAM_DIGEST_IDEAS_AGENT=kronos` | `signal-ideas` |
-| `TOPIC_JB_TRAVEL_INSIGHTS` | `JB: Travel Insights` | `TELEGRAM_JB_TRAVEL_INSIGHTS_AGENT=kronos` | `signal-travel-insights` |
+| `TOPIC_JB_TRAVEL_INSIGHTS` | `JB: Travel Insights` | `TELEGRAM_JB_TRAVEL_INSIGHTS_AGENT=kronos` | paused |
 
 Finance reports continue to use `TOPIC_FINANCE`.
 
