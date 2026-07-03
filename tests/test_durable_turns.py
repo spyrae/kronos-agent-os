@@ -45,10 +45,7 @@ def _minimal_agent(session_store: SessionStore) -> KronosAgent:
 def _active_turn_statuses(db_path: Path) -> list[str]:
     conn = sqlite3.connect(db_path)
     try:
-        return [
-            row[0]
-            for row in conn.execute("SELECT status FROM active_turns ORDER BY started_at")
-        ]
+        return [row[0] for row in conn.execute("SELECT status FROM active_turns ORDER BY started_at")]
     finally:
         conn.close()
 
@@ -107,10 +104,12 @@ async def test_react_loop_uses_memoized_tool_result_without_execution() -> None:
         name="counted",
         description="count calls",
     )
-    model = _make_model([
-        _ai_with_tool_call("counted", tool_call_id="call_cached"),
-        AIMessage(content="done"),
-    ])
+    model = _make_model(
+        [
+            _ai_with_tool_call("counted", tool_call_id="call_cached"),
+            AIMessage(content="done"),
+        ]
+    )
     saved_results: list[tuple[str, str]] = []
 
     result = await react_loop(
@@ -237,10 +236,12 @@ async def test_agent_approval_approve_executes_once_after_restart(tmp_path: Path
         name="mcp_add_server",
         description="mutates MCP servers",
     )
-    model = _make_model([
-        _ai_with_tool_call("mcp_add_server", tool_call_id="call_approve"),
-        AIMessage(content="done after approve"),
-    ])
+    model = _make_model(
+        [
+            _ai_with_tool_call("mcp_add_server", tool_call_id="call_approve"),
+            AIMessage(content="done after approve"),
+        ]
+    )
     agent = _minimal_agent(store)
     agent._tools = [tool]
 
@@ -282,6 +283,121 @@ async def test_agent_approval_approve_executes_once_after_restart(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_agent_approval_allows_same_tool_series_without_reapproval(tmp_path: Path) -> None:
+    store = SessionStore(str(tmp_path / "session.db"))
+    calls = 0
+
+    async def replace_tranche() -> str:
+        nonlocal calls
+        calls += 1
+        return f"tranche updated {calls}"
+
+    tool = StructuredTool.from_function(
+        coroutine=replace_tranche,
+        name="replace_tranche",
+        description="updates an existing tranche",
+    )
+    model = _make_model(
+        [
+            _ai_with_tool_call("replace_tranche", tool_call_id="call_15"),
+            _ai_with_tool_call("replace_tranche", tool_call_id="call_16"),
+            AIMessage(content="готово"),
+        ]
+    )
+    agent = _minimal_agent(store)
+    agent._tools = [tool]
+
+    with patch("kronos.graph.get_model", return_value=model):
+        waiting_reply = await agent.ainvoke(
+            message="обнови транши 15 и 16",
+            thread_id="thread",
+            user_id="u",
+            session_id="s",
+        )
+        approval_id = agent.last_pending_approval_id
+        assert approval_id is not None
+
+        final_reply = await agent.resolve_tool_approval(
+            approval_id,
+            approved=True,
+            decided_by="u",
+        )
+
+    assert "Approval ID" in waiting_reply
+    assert calls == 2
+    assert final_reply == "готово"
+    assert agent.last_pending_approval_id is None
+    saved = await store.load("thread")
+    assert [message.content for message in saved] == [
+        "обнови транши 15 и 16",
+        "",
+        "tranche updated 1",
+        "",
+        "tranche updated 2",
+        "готово",
+    ]
+    assert _active_turn_statuses(tmp_path / "session.db") == ["done"]
+
+
+@pytest.mark.asyncio
+async def test_agent_approval_still_requires_approval_for_different_tool(tmp_path: Path) -> None:
+    store = SessionStore(str(tmp_path / "session.db"))
+    replace_calls = 0
+    remove_calls = 0
+
+    async def replace_tranche() -> str:
+        nonlocal replace_calls
+        replace_calls += 1
+        return "tranche updated"
+
+    async def remove_server() -> str:
+        nonlocal remove_calls
+        remove_calls += 1
+        return "server removed"
+
+    replace_tool = StructuredTool.from_function(
+        coroutine=replace_tranche,
+        name="replace_tranche",
+        description="updates an existing tranche",
+    )
+    remove_tool = StructuredTool.from_function(
+        coroutine=remove_server,
+        name="mcp_remove_server",
+        description="removes a server",
+    )
+    model = _make_model(
+        [
+            _ai_with_tool_call("replace_tranche", tool_call_id="call_tranche"),
+            _ai_with_tool_call("mcp_remove_server", tool_call_id="call_remove"),
+        ]
+    )
+    agent = _minimal_agent(store)
+    agent._tools = [replace_tool, remove_tool]
+
+    with patch("kronos.graph.get_model", return_value=model):
+        await agent.ainvoke(
+            message="обнови транш и удали сервер",
+            thread_id="thread",
+            user_id="u",
+            session_id="s",
+        )
+        approval_id = agent.last_pending_approval_id
+        assert approval_id is not None
+
+        reply = await agent.resolve_tool_approval(
+            approval_id,
+            approved=True,
+            decided_by="u",
+        )
+
+    assert replace_calls == 1
+    assert remove_calls == 0
+    assert "Approval ID" in reply
+    assert agent.last_pending_approval_id is not None
+    assert agent.last_pending_approval_id != approval_id
+
+
+@pytest.mark.asyncio
 async def test_agent_approval_reject_does_not_execute_tool(tmp_path: Path) -> None:
     store = SessionStore(str(tmp_path / "session.db"))
     calls = 0
@@ -296,10 +412,12 @@ async def test_agent_approval_reject_does_not_execute_tool(tmp_path: Path) -> No
         name="mcp_remove_server",
         description="mutates MCP servers",
     )
-    model = _make_model([
-        _ai_with_tool_call("mcp_remove_server", tool_call_id="call_reject"),
-        AIMessage(content="continued without tool"),
-    ])
+    model = _make_model(
+        [
+            _ai_with_tool_call("mcp_remove_server", tool_call_id="call_reject"),
+            AIMessage(content="continued without tool"),
+        ]
+    )
     agent = _minimal_agent(store)
     agent._tools = [tool]
 

@@ -26,7 +26,7 @@ from langchain_core.tools import BaseTool
 
 from kronos.audit import log_tool_event, reset_tool_audit_context, set_tool_audit_context
 from kronos.config import settings
-from kronos.engine import AgentResult, execute_tool, react_loop
+from kronos.engine import AgentResult, execute_tool, react_loop, tool_requires_approval
 from kronos.llm import get_model
 from kronos.memory.context_engine import get_context_engine
 from kronos.memory.nodes import retrieve_memories, store_memories_background
@@ -188,6 +188,7 @@ class KronosAgent:
         *,
         turn_id: str,
         thread_id: str,
+        approved_tool_name: str | None = None,
     ) -> dict[str, Any]:
         """Build journal/cache/approval callbacks for a durable turn."""
         if not self._session_store:
@@ -219,12 +220,22 @@ class KronosAgent:
                 args=tool_call.get("args", {}) or {},
             )
 
-        return {
+        kwargs = {
             "on_message_delta": journal_delta,
             "get_cached_tool_result": get_cached_tool_result,
             "save_tool_result": save_tool_result,
             "request_tool_approval": request_tool_approval,
         }
+        if approved_tool_name:
+
+            async def approval_scope(tool: BaseTool, args: dict) -> bool:
+                if tool.name == approved_tool_name:
+                    return False
+                return tool_requires_approval(tool, args)
+
+            kwargs["needs_tool_approval"] = approval_scope
+
+        return kwargs
 
     async def _run_model_loop(
         self,
@@ -313,6 +324,7 @@ class KronosAgent:
         react_loop_kwargs = self._build_durable_react_loop_kwargs(
             turn_id=turn_id,
             thread_id=thread_id,
+            approved_tool_name=tool_name if approved else None,
         )
         audit_token = set_tool_audit_context(
             agent=settings.agent_name,
