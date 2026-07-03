@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from html import escape
 from typing import Any
 
@@ -16,7 +17,7 @@ from kronos.signals.sources import SignalSource
 from kronos.signals.store import SignalStore
 from kronos.signals.travel import journeybay_implication_for_items, travel_caveat_for_items
 
-TELEGRAM_SAFE_MAX_CHARS = 3900
+TELEGRAM_SAFE_MAX_CHARS = 30000
 MAX_IDEA_CLUSTERS = 10
 MAX_TRAVEL_CLUSTERS = 10
 TITLE_BY_CATEGORY = {
@@ -105,27 +106,38 @@ def render_digest(
         selected_clusters = selected_clusters[:MAX_IDEA_CLUSTERS]
     if route.category == "travel_insights":
         selected_clusters = selected_clusters[:MAX_TRAVEL_CLUSTERS]
-    title = f"{TITLE_BY_CATEGORY.get(route.category, route.destination)} — обзор сигналов"
+    title = _digest_title(route.category)
 
     lines = [f"<b>{escape(title)}</b>", ""]
     if not selected_clusters:
         lines.append("<i>За это окно нет достаточно сильных сигналов.</i>")
         return RenderedDigest(route, title, "\n".join(lines), (route.category,), (), ())
 
-    sections = _group_clusters(selected_clusters, items_by_cluster, source_map, category=route.category)
-    for section_title, rows in sections:
-        if not rows:
-            continue
-        lines.append(f"<b>{escape(section_title)}</b>")
-        lines.extend(rows)
-        lines.append("")
+    if route.category == "news":
+        lines.extend(
+            _render_cluster(
+                cluster,
+                tuple(items_by_cluster.get(int(cluster.get("id", 0) or 0), ())),
+                assess_evidence(
+                    tuple(items_by_cluster.get(int(cluster.get("id", 0) or 0), ())),
+                    sources_by_id=source_map,
+                ),
+                category=route.category,
+            )
+            for cluster in selected_clusters
+        )
+    else:
+        sections = _group_clusters(selected_clusters, items_by_cluster, source_map, category=route.category)
+        for section_title, rows in sections:
+            if not rows:
+                continue
+            lines.append(f"<b>{escape(section_title)}</b>")
+            lines.extend(rows)
+            lines.append("")
 
     cluster_ids = tuple(int(cluster.get("id", 0) or 0) for cluster in selected_clusters if cluster.get("id"))
     item_ids = tuple(
-        int(item_id)
-        for cluster in selected_clusters
-        for item_id in (cluster.get("item_ids") or [])
-        if item_id
+        int(item_id) for cluster in selected_clusters for item_id in (cluster.get("item_ids") or []) if item_id
     )
     body = _truncate_html("\n".join(lines).strip(), max_chars=max_chars)
     return RenderedDigest(route, title, body, (route.category,), cluster_ids, item_ids)
@@ -232,18 +244,14 @@ def _render_cluster(
 
     title = _clean_display_text(sanitize_trend_language(str(cluster.get("title") or "Без названия"), assessment))
     summary = _clean_display_text(sanitize_trend_language(str(cluster.get("summary") or ""), assessment))
-    evidence = _evidence_text(assessment)
     first_url = next((item.url for item in items if item.url), "")
     link = f' (<a href="{escape(first_url, quote=True)}">источник</a>)' if first_url else ""
 
     parts = [
         f"• <b>{escape(title)}</b>{link}",
-        f"  <i>Доказательность: {escape(evidence)}</i>",
     ]
     if summary:
         parts.append(f"  {escape(summary)}")
-    if not assessment.can_make_trend_claim:
-        parts.append("  <i>Осторожно: это наблюдение, а не доказанный тренд.</i>")
     return "\n".join(parts)
 
 
@@ -305,6 +313,13 @@ def _cluster_category(cluster: Mapping[str, Any]) -> str:
     return str(cluster.get("category") or "").strip().lower()
 
 
+def _digest_title(category: str) -> str:
+    if category == "news":
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        return f"📱 Дайджест — {today}"
+    return f"{TITLE_BY_CATEGORY.get(category, category)} — обзор сигналов"
+
+
 def _idea_applicability_score(items: Sequence[SignalItem]) -> float:
     text = " ".join(f"{item.title} {item.text} {item.normalized_text}".lower() for item in items)
     score = 0.0
@@ -341,8 +356,7 @@ def _evidence_text(assessment) -> str:
     platform_word = _plural_ru(assessment.platform_count, "платформа", "платформы", "платформ")
     level = EVIDENCE_LABELS.get(assessment.level, str(assessment.level))
     return (
-        f"{assessment.independent_source_count} {source_word} / "
-        f"{assessment.platform_count} {platform_word} · {level}"
+        f"{assessment.independent_source_count} {source_word} / {assessment.platform_count} {platform_word} · {level}"
     )
 
 
@@ -445,7 +459,7 @@ def _polish_prompt(category: str, body: str, *, max_chars: int, strict: bool = F
         "AI всегда переводи как ИИ.\n"
         "3. Убери markdown-мусор: **, ###, backticks, markdown-ссылки.\n"
         "4. Сохрани факты, числа и смысл; ничего не добавляй.\n"
-        "5. Сохрани все <a href=\"...\"> ссылки и URL.\n"
+        '5. Сохрани все <a href="..."> ссылки и URL.\n'
         "6. Используй только Telegram HTML-теги: <b>, <i>, <a>.\n"
         "7. Стиль: коротко, чисто, красиво, без канцелярита."
         f"{strict_rule}\n"
@@ -504,23 +518,4 @@ def _strip_urls_and_tags(text: str) -> str:
 
 
 def _truncate_html(text: str, *, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    suffix = "\n\n<i>…обрезано под лимит Telegram; полный артефакт сохранён.</i>"
-    budget = max_chars - len(suffix) - 2
-    if budget <= 0:
-        return suffix[-max_chars:]
-
-    lines: list[str] = []
-    length = 0
-    for line in text.splitlines():
-        next_length = length + len(line) + (1 if lines else 0)
-        if next_length > budget:
-            break
-        lines.append(line)
-        length = next_length
-
-    body = "\n".join(lines).rstrip()
-    if not body:
-        return suffix.strip()[:max_chars]
-    return f"{body}{suffix}"
+    return text

@@ -93,8 +93,8 @@ async def test_run_signal_digest_dry_run_persists_news_digest(tmp_path, signal_s
     assert run.saved_item_count == 3
     assert run.cluster_count == 3
     assert run.sent is False
-    assert "Новости и ИИ-индустрия — обзор сигналов" in run.rendered.body
-    assert "Доказательность:" in run.rendered.body
+    assert run.rendered.body.startswith("<b>📱 Дайджест — ")
+    assert "Доказательность:" not in run.rendered.body
 
     digest = signal_store.list_digests(destination="Digest: News")[0]
     assert digest["title"].startswith("[dry-run]")

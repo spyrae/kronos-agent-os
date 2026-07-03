@@ -68,6 +68,7 @@ FETCH_DELAY = 1.5  # seconds between Telethon requests (avoid flood wait)
 # Config: load categories & sources from GROUPS.md
 # ---------------------------------------------------------------------------
 
+
 def _load_groups() -> dict[str, list[dict]]:
     """Load monitored sources from GROUPS.md, organized by category.
 
@@ -76,6 +77,7 @@ def _load_groups() -> dict[str, list[dict]]:
     Sources can be channels (broadcast) or groups (chats) — both work.
     """
     from kronos.workspace import ws
+
     path = ws.skill_ref("group-digest", "GROUPS")
     if not path.exists():
         return {}
@@ -108,11 +110,13 @@ def _load_groups() -> dict[str, list[dict]]:
         if not identifier.startswith("@") and not identifier.startswith("id:"):
             continue
 
-        categories[current_category].append({
-            "name": name,
-            "identifier": identifier,
-            "description": parts[2],
-        })
+        categories[current_category].append(
+            {
+                "name": name,
+                "identifier": identifier,
+                "description": parts[2],
+            }
+        )
 
     # Remove empty categories
     return {cat: groups for cat, groups in categories.items() if groups}
@@ -123,25 +127,30 @@ def _news_digest_categories(categories: dict[str, list[dict]]) -> dict[str, list
 
     Job channels now feed the dedicated Signal Intelligence jobs digest.
     """
-    return {
-        category: sources
-        for category, sources in categories.items()
-        if not _is_job_category(category)
-    }
+    return {category: sources for category, sources in categories.items() if not _is_job_category(category)}
 
 
 def _is_job_category(category: str) -> bool:
     normalized = category.lower()
-    return "job" in normalized or "ваканс" in normalized
+    return any(
+        marker in normalized
+        for marker in (
+            "job",
+            "hiring",
+            "career",
+            "ваканс",
+            "работ",
+            "найм",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
 # Fetch: Telethon message retrieval
 # ---------------------------------------------------------------------------
 
-async def _fetch_messages(
-    source_id: str, hours: int = LOOKBACK_HOURS
-) -> list[dict]:
+
+async def _fetch_messages(source_id: str, hours: int = LOOKBACK_HOURS) -> list[dict]:
     """Fetch recent messages from a Telegram group or channel via userbot.
 
     Works for both broadcast channels and supergroups/chats.
@@ -191,11 +200,7 @@ async def _fetch_messages(
             # Sender: for channels it's the channel itself, for groups it's the user
             sender_name = ""
             if msg.sender:
-                sender_name = (
-                    getattr(msg.sender, "first_name", "")
-                    or getattr(msg.sender, "title", "")
-                    or ""
-                )
+                sender_name = getattr(msg.sender, "first_name", "") or getattr(msg.sender, "title", "") or ""
 
             # Extract URLs from message text
             urls = re.findall(r"https?://\S+", msg.text)
@@ -203,15 +208,17 @@ async def _fetch_messages(
             # Permalink to this specific post
             post_link = f"{permalink_base}/{msg.id}" if permalink_base else ""
 
-            messages.append({
-                "text": msg.text[:500],
-                "author": sender_name,
-                "reactions": reactions,
-                "views": views,
-                "date": msg.date.strftime("%H:%M"),
-                "urls": urls[:3],
-                "post_link": post_link,
-            })
+            messages.append(
+                {
+                    "text": msg.text[:500],
+                    "author": sender_name,
+                    "reactions": reactions,
+                    "views": views,
+                    "date": msg.date.strftime("%H:%M"),
+                    "urls": urls[:3],
+                    "post_link": post_link,
+                }
+            )
 
     except Exception as e:
         log.error("Failed to fetch '%s': %s", source_id, e)
@@ -222,6 +229,7 @@ async def _fetch_messages(
 # ---------------------------------------------------------------------------
 # Filter: engagement-based significance
 # ---------------------------------------------------------------------------
+
 
 def _filter_significant(
     messages: list[dict],
@@ -237,11 +245,7 @@ def _filter_significant(
 
     scored.sort(key=lambda m: m["_score"], reverse=True)
 
-    significant = [
-        m
-        for m in scored
-        if m["reactions"] >= min_reactions or m["views"] >= min_views
-    ]
+    significant = [m for m in scored if m["reactions"] >= min_reactions or m["views"] >= min_views]
 
     # If too few passed filter, take top by score
     if len(significant) < 5 and scored:
@@ -254,9 +258,8 @@ def _filter_significant(
 # Summarize: batched two-phase LLM pipeline
 # ---------------------------------------------------------------------------
 
-async def _summarize_batch(
-    category: str, batch: list[dict], batch_num: int
-) -> str | None:
+
+async def _summarize_batch(category: str, batch: list[dict], batch_num: int) -> str | None:
     """Summarize a batch of sources within a category (LITE tier).
 
     Each batch contains ~10 sources to stay within context limits.
@@ -264,10 +267,7 @@ async def _summarize_batch(
     if not batch:
         return None
 
-    groups_text = "\n\n".join(
-        f"**{g['name']}** ({g['count']} постов):\n{g['messages_text']}"
-        for g in batch
-    )
+    groups_text = "\n\n".join(f"**{g['name']}** ({g['count']} постов):\n{g['messages_text']}" for g in batch)
 
     prompt = f"""Суммаризируй значимые посты из Telegram-каналов и чатов категории "{category}" (часть {batch_num}).
 
@@ -276,10 +276,10 @@ async def _summarize_batch(
 Правила:
 - Выдели 5-10 ключевых тем/новостей
 - Для каждой: суть в 1-2 предложениях + источник (канал/чат)
-- ОБЯЗАТЕЛЬНО сохраняй ссылки: на инструменты, статьи, репозитории, вакансии
+- ОБЯЗАТЕЛЬНО сохраняй ссылки: на инструменты, статьи, репозитории и посты
 - Ссылки на сами посты [пост: url] тоже сохраняй — они пригодятся в итоговом дайджесте
 - Объединяй одну и ту же новость из разных источников
-- Отсеивай рекламу, вопросы новичков, дублирующийся контент
+- Отсеивай рекламу, вопросы новичков, вакансии и дублирующийся контент
 - Русский язык, формат plain text (не HTML)
 - Будь конкретным: цифры, названия, факты"""
 
@@ -288,11 +288,7 @@ async def _summarize_batch(
 
     try:
         response = model.invoke([HumanMessage(content=prompt)])
-        content = (
-            response.content
-            if isinstance(response.content, str)
-            else str(response.content)
-        )
+        content = response.content if isinstance(response.content, str) else str(response.content)
         if content and len(content) > 30:
             return content
     except Exception as e:
@@ -301,18 +297,13 @@ async def _summarize_batch(
     return None
 
 
-async def _summarize_category(
-    category: str, groups_data: list[dict]
-) -> str | None:
+async def _summarize_category(category: str, groups_data: list[dict]) -> str | None:
     """Summarize all sources in a category, splitting into batches if needed."""
     if not groups_data:
         return None
 
     # Split into batches
-    batches = [
-        groups_data[i : i + BATCH_SIZE]
-        for i in range(0, len(groups_data), BATCH_SIZE)
-    ]
+    batches = [groups_data[i : i + BATCH_SIZE] for i in range(0, len(groups_data), BATCH_SIZE)]
 
     if len(batches) == 1:
         return await _summarize_batch(category, batches[0], 1)
@@ -331,9 +322,7 @@ async def _summarize_category(
         return batch_summaries[0]
 
     # Merge batch summaries into one category summary
-    merge_text = "\n\n---\n\n".join(
-        f"Часть {i}:\n{s}" for i, s in enumerate(batch_summaries, 1)
-    )
+    merge_text = "\n\n---\n\n".join(f"Часть {i}:\n{s}" for i, s in enumerate(batch_summaries, 1))
 
     merge_prompt = f"""Объедини несколько частей суммари категории "{category}" в единый обзор.
 
@@ -350,11 +339,7 @@ async def _summarize_category(
 
     try:
         response = model.invoke([HumanMessage(content=merge_prompt)])
-        content = (
-            response.content
-            if isinstance(response.content, str)
-            else str(response.content)
-        )
+        content = response.content if isinstance(response.content, str) else str(response.content)
         if content and len(content) > 30:
             return content
     except Exception as e:
@@ -365,14 +350,9 @@ async def _summarize_category(
     return None
 
 
-async def _synthesize_digest(
-    today: str, category_summaries: dict[str, str]
-) -> str | None:
+async def _synthesize_digest(today: str, category_summaries: dict[str, str]) -> str | None:
     """Phase 2: Synthesize final digest from category summaries (STANDARD tier)."""
-    summaries_text = "\n\n".join(
-        f"=== {cat} ===\n{summary}"
-        for cat, summary in category_summaries.items()
-    )
+    summaries_text = "\n\n".join(f"=== {cat} ===\n{summary}" for cat, summary in category_summaries.items())
 
     prompt = f"""Ты — Group Digest агент. Дата: {today}.
 
@@ -381,31 +361,20 @@ async def _synthesize_digest(
 {summaries_text}
 
 Создай финальный дайджест:
-1. Для каждой категории — секция с иконкой
-2. AI & LLM: 10-15 пунктов (главная категория, тут больше всего контента)
-3. Job Market: 5-7 пунктов (самые интересные вакансии и тренды)
-4. Каждый пункт: <b>тема</b> — суть в 1-2 предложениях (источник)
-5. К каждому пункту ОБЯЗАТЕЛЬНО добавь ссылку — на инструмент, стат��ю, вакансию или пост в Telegram
-6. Формат ссылок: <a href="url">текст</a> или <a href="url">→ пост</a>
-7. В конце — 2-3 предложения с инсайтами/трендами дня
-8. Формат: HTML (<b>, <i>, <a href>)
-9. Русский язык
-10. Если контента много — не сокращай, пиши полностью
-
-Иконки категорий:
-- AI & LLM → 🤖
-- Job Market → 💼
+1. Сделай единый список новостей без разделения по категориям, каналам или платформам.
+2. Вакансии и найм полностью исключи: не создавай такой блок и не упоминай их.
+3. Каждый пункт: <b>тема</b> — суть в 1-2 предложениях (источник).
+4. К каждому пункту ОБЯЗАТЕЛЬНО добавь ссылку — на инструмент, статью, репозиторий или пост в Telegram.
+5. Формат ссылок: <a href="url">текст</a> или <a href="url">→ пост</a>.
+6. В конце — 2-3 предложения с инсайтами/трендами дня.
+7. Формат: HTML (<b>, <i>, <a href>).
+8. Русский язык.
+9. Если контента много — не сокращай, пиши полностью.
 
 Формат:
-<b>📱 Дайджест Telegram — {today}</b>
-
-<b>🤖 AI & LLM</b>
+<b>📱 Дайджест — {today}</b>
 • <b>Тема</b> — суть (<a href="url">источник</a>)
 • <b>Новый инструмент</b> — описание (<a href="tool_url">сайт</a> | <a href="post_url">пост</a>)
-...
-
-<b>💼 Job Market</b>
-• <b>Позиция, компания</b> — условия (<a href="vacancy_url">вакансия</a>)
 ...
 
 <b>💡 Инсайты дня:</b> ..."""
@@ -415,11 +384,7 @@ async def _synthesize_digest(
 
     try:
         response = model.invoke([HumanMessage(content=prompt)])
-        content = (
-            response.content
-            if isinstance(response.content, str)
-            else str(response.content)
-        )
+        content = response.content if isinstance(response.content, str) else str(response.content)
         if content and len(content) > 50:
             return content
     except Exception as e:
@@ -431,6 +396,7 @@ async def _synthesize_digest(
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
+
 
 async def run_group_digest() -> None:
     """Generate daily digest from Telegram groups and channels. Kronos only."""
@@ -485,11 +451,13 @@ async def run_group_digest() -> None:
                 msg_lines.append(line)
             messages_text = "\n".join(msg_lines)
 
-            groups_data.append({
-                "name": source["name"],
-                "count": len(significant),
-                "messages_text": messages_text,
-            })
+            groups_data.append(
+                {
+                    "name": source["name"],
+                    "count": len(significant),
+                    "messages_text": messages_text,
+                }
+            )
 
             await asyncio.sleep(FETCH_DELAY)
 
@@ -523,9 +491,8 @@ async def run_group_digest() -> None:
 
     if not digest:
         log.warning("Failed to synthesize digest, sending raw summaries")
-        fallback = f"<b>📱 Дайджест Telegram — {today}</b>\n\n"
-        for cat, summary in category_summaries.items():
-            fallback += f"<b>{cat}</b>\n{summary}\n\n"
+        fallback = f"<b>📱 Дайджест — {today}</b>\n\n"
+        fallback += "\n\n".join(category_summaries.values())
         digest = fallback
 
     # Fix HTML before sending (LLMs often produce broken markup)

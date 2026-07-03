@@ -1,7 +1,14 @@
 """Tests for group digest cron job."""
 
+import pytest
 
-from kronos.cron.group_digest import _filter_significant, _load_groups, _news_digest_categories
+from kronos.cron.group_digest import (
+    _filter_significant,
+    _is_job_category,
+    _load_groups,
+    _news_digest_categories,
+    _synthesize_digest,
+)
 from kronos.workspace import Workspace
 
 
@@ -84,12 +91,20 @@ class TestLoadGroups:
         categories = {
             "AI & LLM": [{"identifier": "@ai"}],
             "Job Market": [{"identifier": "@jobs"}],
+            "Hiring": [{"identifier": "@hiring"}],
+            "Работа": [{"identifier": "@work"}],
             "Вакансии": [{"identifier": "@rujobs"}],
         }
 
         result = _news_digest_categories(categories)
 
         assert result == {"AI & LLM": [{"identifier": "@ai"}]}
+
+    def test_job_category_detector_covers_common_names(self):
+        assert _is_job_category("Job Market")
+        assert _is_job_category("AI Hiring")
+        assert _is_job_category("Работа и найм")
+        assert not _is_job_category("AI & LLM")
 
 
 class TestFilterSignificant:
@@ -132,22 +147,46 @@ class TestFilterSignificant:
         assert all("viral" in r["text"] for r in result)
 
     def test_fallback_to_top_when_few_pass(self):
-        messages = [
-            {"text": f"msg{i}", "reactions": 1, "views": 50}
-            for i in range(20)
-        ]
+        messages = [{"text": f"msg{i}", "reactions": 1, "views": 50} for i in range(20)]
         result = _filter_significant(messages, min_reactions=10, min_views=10000)
 
         # None pass filter, so fallback to top 10
         assert len(result) == 10
 
     def test_caps_at_20(self):
-        messages = [
-            {"text": f"msg{i}", "reactions": 10, "views": 500}
-            for i in range(30)
-        ]
+        messages = [{"text": f"msg{i}", "reactions": 10, "views": 500} for i in range(30)]
         result = _filter_significant(messages)
         assert len(result) == 20
 
     def test_empty_input(self):
         assert _filter_significant([]) == []
+
+
+@pytest.mark.asyncio
+async def test_synthesize_digest_asks_for_unified_news_without_job_block(monkeypatch):
+    captured: dict[str, str] = {}
+
+    class Response:
+        content = "<b>📱 Дайджест — 2026-07-03</b>\n• <b>Новость</b> — суть"
+
+    class Model:
+        def invoke(self, messages):
+            captured["prompt"] = messages[0].content
+            return Response()
+
+    monkeypatch.setattr("kronos.cron.group_digest.get_model", lambda _tier: Model())
+
+    digest = await _synthesize_digest(
+        "2026-07-03",
+        {
+            "AI & LLM": "Новая модель вышла.",
+            "Tools": "Новый инструмент опубликован.",
+        },
+    )
+
+    prompt = captured["prompt"]
+    assert digest.startswith("<b>📱 Дайджест — 2026-07-03</b>")
+    assert "единый список новостей" in prompt
+    assert "без разделения по категориям" in prompt
+    assert "Вакансии и найм полностью исключи" in prompt
+    assert "Job Market" not in prompt

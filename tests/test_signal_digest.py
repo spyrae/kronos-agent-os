@@ -36,7 +36,7 @@ def test_routes_categories_to_destinations():
         route_for_category("unknown")
 
 
-def test_render_digest_groups_by_evidence_and_sanitizes_anecdote_language():
+def test_render_news_digest_is_unified_and_sanitizes_anecdote_language():
     clusters = [
         {
             "id": 1,
@@ -82,17 +82,19 @@ def test_render_digest_groups_by_evidence_and_sanitizes_anecdote_language():
     rendered = render_digest("news", clusters, items_by_cluster, sources_by_id=sources)
 
     assert rendered.route.destination == "Digest: News"
-    assert "<b>✅ Подтверждено / официально</b>" in rendered.body
-    assert "<b>📈 Формирующиеся сигналы</b>" in rendered.body
-    assert "<b>👀 Наблюдения к проверке</b>" in rendered.body
+    assert rendered.body.startswith("<b>📱 Дайджест — ")
+    assert "<b>✅ Подтверждено / официально</b>" not in rendered.body
+    assert "<b>📈 Формирующиеся сигналы</b>" not in rendered.body
+    assert "<b>👀 Наблюдения к проверке</b>" not in rendered.body
     assert "есть единичный сигнал к Codex" in rendered.body
     assert "отдельные источники упоминают в отдельных обсуждениях" in rendered.body
     assert "рынок сдвигается" not in rendered.body
-    assert "Осторожно: это наблюдение" in rendered.body
+    assert "Доказательность:" not in rendered.body
+    assert "Осторожно: это наблюдение" not in rendered.body
     assert 'href="https://x.com/OpenAIDevs/status/1"' in rendered.body
 
 
-def test_render_digest_is_telegram_chunk_safe():
+def test_render_digest_keeps_full_body_for_sender_chunking():
     clusters = [
         {
             "id": 1,
@@ -109,11 +111,11 @@ def test_render_digest_is_telegram_chunk_safe():
         max_chars=220,
     )
 
-    assert len(rendered.body) <= 220
-    assert "обрезано под лимит Telegram" in rendered.body
+    assert len(rendered.body) > 220
+    assert "обрезано под лимит Telegram" not in rendered.body
 
 
-def test_truncate_html_preserves_complete_tags():
+def test_truncate_html_is_legacy_noop_because_sender_chunks():
     text = "\n".join(
         [
             "<b>Новости и ИИ-индустрия — обзор сигналов</b>",
@@ -126,8 +128,8 @@ def test_truncate_html_preserves_complete_tags():
 
     truncated = _truncate_html(text, max_chars=175)
 
-    assert len(truncated) <= 175
-    assert "обрезано под лимит Telegram" in truncated
+    assert truncated == text
+    assert "обрезано под лимит Telegram" not in truncated
     assert truncated.count("<b>") == truncated.count("</b>")
     assert truncated.count("<i>") == truncated.count("</i>")
     assert truncated.count("<a ") == truncated.count("</a>")
@@ -198,7 +200,15 @@ def test_polish_rendered_digest_localizes_ai_acronym_without_touching_openai(mon
 
     rendered = render_digest(
         "travel_insights",
-        [{"id": 1, "category": "travel_insights", "title": "AI trip planner by OpenAI", "summary": "", "item_ids": [1]}],
+        [
+            {
+                "id": 1,
+                "category": "travel_insights",
+                "title": "AI trip planner by OpenAI",
+                "summary": "",
+                "item_ids": [1],
+            }
+        ],
         {
             1: [
                 _item(
