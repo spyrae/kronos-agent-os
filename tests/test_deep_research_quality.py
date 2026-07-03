@@ -73,6 +73,28 @@ def test_evaluate_quality_falls_back_to_heuristic_feedback(monkeypatch):
     assert "competitors" in result["quality_feedback"]
 
 
+def test_evaluate_quality_keeps_deterministic_heuristic_floor(monkeypatch):
+    from kronos.agents.deep_research import nodes
+
+    model = CapturingModel(
+        '{"score": 0, "weak_areas": ["Synthetic content"], '
+        '"feedback": "Collected text looks repetitive."}'
+    )
+    monkeypatch.setattr(nodes, "get_model", lambda _tier: model)
+
+    result = nodes.evaluate_quality(_state(
+        mode="topic",
+        search_results=[
+            {"query": "q1", "source": "brave", "content": "x" * 6000, "url": ""},
+            {"query": "q2", "source": "exa", "content": "y" * 5000, "url": ""},
+        ],
+    ))
+
+    assert result["quality_score"] == 75
+    assert "LLM judge was stricter" in result["quality_feedback"]
+    assert "Synthetic content" in result["quality_feedback"]
+
+
 def test_should_search_more_keeps_low_score_search_loop_but_synthesizes_medium_score():
     from kronos.agents.deep_research.nodes import should_search_more
 

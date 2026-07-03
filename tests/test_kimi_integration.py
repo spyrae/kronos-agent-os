@@ -43,13 +43,69 @@ def search_web(query: str) -> str:
 def _create_kimi():
     """Create Kimi model instance via Fireworks."""
     from langchain_openai import ChatOpenAI
+
+    from kronos.llm import resolve_provider_config
+
+    config = resolve_provider_config("kimi")
+    if not config or not config.ready:
+        pytest.skip("Kimi/Fireworks provider is not configured")
+
     return ChatOpenAI(
-        model="accounts/fireworks/routers/kimi-k2p5-turbo",
-        base_url="https://api.fireworks.ai/inference/v1",
-        api_key=settings.fireworks_api_key,
+        model=config.model,
+        base_url=config.base_url,
+        api_key=config.api_key,
         max_tokens=1024,
         temperature=0.3,
     )
+
+
+def _status_code(error: BaseException) -> int | None:
+    for attr in ("status_code", "status", "code"):
+        value = getattr(error, attr, None)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+
+    response = getattr(error, "response", None)
+    if response is not None:
+        for attr in ("status_code", "status"):
+            value = getattr(response, attr, None)
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str) and value.isdigit():
+                return int(value)
+    return None
+
+
+def _provider_unavailable_reason(error: BaseException) -> str:
+    status = _status_code(error)
+    message = str(error).lower()
+    if status in {401, 403}:
+        return "Kimi/Fireworks credentials were rejected"
+    if status == 404 and any(
+        marker in message
+        for marker in ("model not found", "model_not_found", "inaccessible", "not deployed")
+    ):
+        return "Kimi/Fireworks model is unavailable for this account"
+    if status == 412:
+        return "Fireworks API rejected the request precondition"
+    if any(
+        marker in message
+        for marker in ("model not found", "model_not_found", "inaccessible", "not deployed")
+    ):
+        return "Kimi/Fireworks model is unavailable for this account"
+    return ""
+
+
+def _invoke_or_skip(model, messages):
+    try:
+        return model.invoke(messages)
+    except Exception as exc:
+        reason = _provider_unavailable_reason(exc)
+        if reason:
+            pytest.skip(reason)
+        raise
 
 
 class TestKimiBasic:
@@ -57,7 +113,7 @@ class TestKimiBasic:
 
     def test_simple_response(self):
         model = _create_kimi()
-        response = model.invoke([HumanMessage(content="Скажи 'работает' одним словом.")])
+        response = _invoke_or_skip(model, [HumanMessage(content="Скажи 'работает' одним словом.")])
         assert isinstance(response, AIMessage)
         assert len(response.content) > 0
         print(f"\n  Response: {response.content}")
@@ -68,14 +124,14 @@ class TestKimiBasic:
             SystemMessage(content="Ты — AI-ассистент по имени Кронос. Отвечай кратко."),
             HumanMessage(content="Как тебя зовут?"),
         ]
-        response = model.invoke(messages)
+        response = _invoke_or_skip(model, messages)
         assert isinstance(response, AIMessage)
         assert len(response.content) > 0
         print(f"\n  Response: {response.content}")
 
     def test_russian_language(self):
         model = _create_kimi()
-        response = model.invoke([
+        response = _invoke_or_skip(model, [
             HumanMessage(content="Объясни одним предложением, что такое LangGraph."),
         ])
         assert isinstance(response, AIMessage)
@@ -89,7 +145,7 @@ class TestKimiToolBinding:
     def test_bind_single_tool(self):
         model = _create_kimi()
         bound = model.bind_tools([get_weather])
-        response = bound.invoke([HumanMessage(content="Какая погода в Москве?")])
+        response = _invoke_or_skip(bound, [HumanMessage(content="Какая погода в Москве?")])
         assert isinstance(response, AIMessage)
 
         if response.tool_calls:
@@ -103,7 +159,7 @@ class TestKimiToolBinding:
     def test_bind_multiple_tools(self):
         model = _create_kimi()
         bound = model.bind_tools([get_weather, calculate, search_web])
-        response = bound.invoke([HumanMessage(content="Сколько будет 2**10?")])
+        response = _invoke_or_skip(bound, [HumanMessage(content="Сколько будет 2**10?")])
         assert isinstance(response, AIMessage)
 
         if response.tool_calls:
@@ -117,7 +173,7 @@ class TestKimiToolBinding:
         """Model should NOT call tools for simple conversational messages."""
         model = _create_kimi()
         bound = model.bind_tools([get_weather, calculate, search_web])
-        response = bound.invoke([HumanMessage(content="Привет!")])
+        response = _invoke_or_skip(bound, [HumanMessage(content="Привет!")])
         assert isinstance(response, AIMessage)
 
         # Should respond with text, not a tool call
@@ -129,7 +185,7 @@ class TestKimiToolBinding:
         """Model should pick search_web for a search query."""
         model = _create_kimi()
         bound = model.bind_tools([get_weather, calculate, search_web])
-        response = bound.invoke([
+        response = _invoke_or_skip(bound, [
             HumanMessage(content="Найди информацию о последних новостях AI"),
         ])
         assert isinstance(response, AIMessage)
@@ -154,7 +210,7 @@ class TestKimiReActLoop:
 
         # Step 1: model decides to call tool
         messages = [HumanMessage(content="Какая погода в Париже?")]
-        response = bound.invoke(messages)
+        response = _invoke_or_skip(bound, messages)
 
         if not response.tool_calls:
             print(f"\n  Model answered directly: {response.content[:100]}")
@@ -169,7 +225,7 @@ class TestKimiReActLoop:
         messages.append(ToolMessage(content=tool_result, tool_call_id=tc["id"]))
 
         # Step 3: model produces final answer
-        final = bound.invoke(messages)
+        final = _invoke_or_skip(bound, messages)
         assert isinstance(final, AIMessage)
         assert len(final.content) > 0
         assert not final.tool_calls  # should not call tools again
@@ -187,7 +243,7 @@ class TestKimiReActLoop:
                 content="Какая погода в Токио и найди новости об AI в Японии"
             ),
         ]
-        response = bound.invoke(messages)
+        response = _invoke_or_skip(bound, messages)
 
         if not response.tool_calls:
             print(f"\n  Model answered directly: {response.content[:100]}")
@@ -205,7 +261,7 @@ class TestKimiReActLoop:
             messages.append(ToolMessage(content=result, tool_call_id=tc["id"]))
 
         # Final synthesis
-        final = bound.invoke(messages)
+        final = _invoke_or_skip(bound, messages)
         assert isinstance(final, AIMessage)
         assert len(final.content) > 0
         print(f"  Final: {final.content[:300]}")
@@ -232,7 +288,7 @@ class TestKimiViaFactory:
         """Invoke through factory — same path as graph.py uses."""
         from kronos.llm import ModelTier, get_model
         model = get_model(ModelTier.STANDARD)
-        response = model.invoke([HumanMessage(content="Ответь одним словом: 2+2=")])
+        response = _invoke_or_skip(model, [HumanMessage(content="Ответь одним словом: 2+2=")])
         assert isinstance(response, AIMessage)
         print(f"\n  Factory response: {response.content}")
 
@@ -241,7 +297,7 @@ class TestKimiViaFactory:
         from kronos.llm import ModelTier, get_model
         model = get_model(ModelTier.STANDARD)
         bound = model.bind_tools([get_weather, calculate])
-        response = bound.invoke([HumanMessage(content="Сколько 15 * 17?")])
+        response = _invoke_or_skip(bound, [HumanMessage(content="Сколько 15 * 17?")])
         assert isinstance(response, AIMessage)
 
         if response.tool_calls:

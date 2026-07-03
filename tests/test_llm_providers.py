@@ -258,6 +258,8 @@ async def test_get_model_does_not_retry_non_retriable_provider_error(monkeypatch
 def test_retriable_llm_error_classification() -> None:
     assert is_retriable_llm_error(FakeHTTPError(503)) is True
     assert is_retriable_llm_error(FakeHTTPError(429)) is True
+    assert is_retriable_llm_error(FakeHTTPError(404, "Model not found, inaccessible, and/or not deployed")) is True
+    assert is_retriable_llm_error(FakeHTTPError(404, "Not found")) is False
     assert is_retriable_llm_error(TimeoutError("timed out")) is True
     assert is_retriable_llm_error(FakeHTTPError(401)) is False
     assert is_retriable_llm_error(RuntimeError("blocked by shield")) is False

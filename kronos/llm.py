@@ -581,16 +581,26 @@ def is_retriable_llm_error(error: BaseException) -> bool:
     if isinstance(error, (TimeoutError, ConnectionError)):
         return True
 
+    message = str(error).lower()
     status_code = _status_code_from_error(error)
     if status_code is not None:
         if status_code >= 500:
             return True
         if status_code in RETRIABLE_STATUS_CODES:
             return True
+        if status_code == 404 and any(
+            marker in message
+            for marker in (
+                "model not found",
+                "model_not_found",
+                "inaccessible",
+                "not deployed",
+            )
+        ):
+            return True
         if 400 <= status_code < 500:
             return False
 
-    message = str(error).lower()
     retriable_markers = (
         "timeout",
         "timed out",

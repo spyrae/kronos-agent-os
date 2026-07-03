@@ -197,11 +197,23 @@ def evaluate_quality(state: DeepResearchState) -> DeepResearchState:
     mode = state.get("mode", "topic")
     topic = state.get("topic", "")
 
+    heuristic_score, heuristic_feedback = _score_research_quality(results, mode)
     judged = _judge_research_quality(results, mode, topic)
     if judged:
-        score, feedback = judged
+        judged_score, judged_feedback = judged
+        if judged_score >= heuristic_score:
+            score, feedback = judged_score, judged_feedback
+        else:
+            score = heuristic_score
+            feedback = (
+                f"{heuristic_feedback}\n\n"
+                "LLM judge was stricter than the deterministic heuristic; "
+                "use its caveats during synthesis without lowering the "
+                f"coverage score below {heuristic_score}/100.\n\n"
+                f"{judged_feedback}"
+            )
     else:
-        score, feedback = _score_research_quality(results, mode)
+        score, feedback = heuristic_score, heuristic_feedback
 
     log.info(
         "Quality evaluation: score=%d, results=%d, feedback=%s, iteration=%d",
