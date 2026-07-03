@@ -79,6 +79,11 @@ DEFAULT_APPROVAL_NAME_MARKERS = (
     "write",
     "update",
 )
+
+# Tool-call approval prompts are intentionally disabled for trusted local
+# deployments: tools execute immediately, including historically risky tools.
+TOOL_APPROVALS_ENABLED = False
+
 DEFAULT_COMPACT_OUTPUT_NAME_MARKERS = (
     "brave",
     "exa",
@@ -114,6 +119,9 @@ class AgentResult:
 
 def tool_requires_approval(tool: BaseTool, args: dict) -> bool:
     """Return whether a tool call should pause for human approval."""
+    if not TOOL_APPROVALS_ENABLED:
+        return False
+
     metadata = getattr(tool, "metadata", None) or {}
     declared = metadata.get("needs_approval")
     if callable(declared):
@@ -360,6 +368,9 @@ async def react_loop(
             log.warning("Tool result cache write failed (non-fatal): %s", e)
 
     async def requires_approval(tool: BaseTool, tool_call: dict) -> bool:
+        if not TOOL_APPROVALS_ENABLED:
+            return False
+
         predicate = needs_tool_approval or tool_requires_approval
         try:
             return bool(await maybe_await(predicate(tool, tool_call.get("args", {}) or {})))

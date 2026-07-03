@@ -221,7 +221,7 @@ async def test_pending_approval_claims_exactly_once(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_agent_approval_approve_executes_once_after_restart(tmp_path: Path) -> None:
+async def test_agent_tool_executes_without_approval(tmp_path: Path) -> None:
     db_path = tmp_path / "session.db"
     store = SessionStore(str(db_path))
     calls = 0
@@ -246,44 +246,27 @@ async def test_agent_approval_approve_executes_once_after_restart(tmp_path: Path
     agent._tools = [tool]
 
     with patch("kronos.graph.get_model", return_value=model):
-        waiting_reply = await agent.ainvoke(
+        reply = await agent.ainvoke(
             message="add mcp server",
             thread_id="thread",
             user_id="u",
             session_id="s",
         )
-        approval_id = agent.last_pending_approval_id
-        assert approval_id is not None
 
-        restarted_agent = _minimal_agent(store)
-        restarted_agent._tools = [tool]
-        final_reply = await restarted_agent.resolve_tool_approval(
-            approval_id,
-            approved=True,
-            decided_by="u",
-        )
-        duplicate_reply = await restarted_agent.resolve_tool_approval(
-            approval_id,
-            approved=True,
-            decided_by="u",
-        )
-
-    assert "Approval ID" in waiting_reply
     assert calls == 1
-    assert final_reply == "done after approve"
-    assert "уже обработан" in duplicate_reply
+    assert reply == "done after approve"
+    assert "Approval ID" not in reply
+    assert agent.last_pending_approval_id is None
     saved = await store.load("thread")
     assert [message.content for message in saved] == [
         "add mcp server",
-        "",
-        "executed once",
         "done after approve",
     ]
     assert _active_turn_statuses(db_path) == ["done"]
 
 
 @pytest.mark.asyncio
-async def test_agent_approval_allows_same_tool_series_without_reapproval(tmp_path: Path) -> None:
+async def test_agent_tool_series_executes_without_approval(tmp_path: Path) -> None:
     store = SessionStore(str(tmp_path / "session.db"))
     calls = 0
 
@@ -308,39 +291,27 @@ async def test_agent_approval_allows_same_tool_series_without_reapproval(tmp_pat
     agent._tools = [tool]
 
     with patch("kronos.graph.get_model", return_value=model):
-        waiting_reply = await agent.ainvoke(
+        reply = await agent.ainvoke(
             message="обнови транши 15 и 16",
             thread_id="thread",
             user_id="u",
             session_id="s",
         )
-        approval_id = agent.last_pending_approval_id
-        assert approval_id is not None
 
-        final_reply = await agent.resolve_tool_approval(
-            approval_id,
-            approved=True,
-            decided_by="u",
-        )
-
-    assert "Approval ID" in waiting_reply
     assert calls == 2
-    assert final_reply == "готово"
+    assert reply == "готово"
+    assert "Approval ID" not in reply
     assert agent.last_pending_approval_id is None
     saved = await store.load("thread")
     assert [message.content for message in saved] == [
         "обнови транши 15 и 16",
-        "",
-        "tranche updated 1",
-        "",
-        "tranche updated 2",
         "готово",
     ]
     assert _active_turn_statuses(tmp_path / "session.db") == ["done"]
 
 
 @pytest.mark.asyncio
-async def test_agent_approval_still_requires_approval_for_different_tool(tmp_path: Path) -> None:
+async def test_agent_different_tools_execute_without_approval(tmp_path: Path) -> None:
     store = SessionStore(str(tmp_path / "session.db"))
     replace_calls = 0
     remove_calls = 0
@@ -369,43 +340,36 @@ async def test_agent_approval_still_requires_approval_for_different_tool(tmp_pat
         [
             _ai_with_tool_call("replace_tranche", tool_call_id="call_tranche"),
             _ai_with_tool_call("mcp_remove_server", tool_call_id="call_remove"),
+            AIMessage(content="all done"),
         ]
     )
     agent = _minimal_agent(store)
     agent._tools = [replace_tool, remove_tool]
 
     with patch("kronos.graph.get_model", return_value=model):
-        await agent.ainvoke(
+        reply = await agent.ainvoke(
             message="обнови транш и удали сервер",
             thread_id="thread",
             user_id="u",
             session_id="s",
         )
-        approval_id = agent.last_pending_approval_id
-        assert approval_id is not None
-
-        reply = await agent.resolve_tool_approval(
-            approval_id,
-            approved=True,
-            decided_by="u",
-        )
 
     assert replace_calls == 1
-    assert remove_calls == 0
-    assert "Approval ID" in reply
-    assert agent.last_pending_approval_id is not None
-    assert agent.last_pending_approval_id != approval_id
+    assert remove_calls == 1
+    assert reply == "all done"
+    assert "Approval ID" not in reply
+    assert agent.last_pending_approval_id is None
 
 
 @pytest.mark.asyncio
-async def test_agent_approval_reject_does_not_execute_tool(tmp_path: Path) -> None:
+async def test_agent_remove_tool_executes_without_approval(tmp_path: Path) -> None:
     store = SessionStore(str(tmp_path / "session.db"))
     calls = 0
 
     async def risky_tool() -> str:
         nonlocal calls
         calls += 1
-        return "should not happen"
+        return "server removed"
 
     tool = StructuredTool.from_function(
         coroutine=risky_tool,
@@ -415,34 +379,26 @@ async def test_agent_approval_reject_does_not_execute_tool(tmp_path: Path) -> No
     model = _make_model(
         [
             _ai_with_tool_call("mcp_remove_server", tool_call_id="call_reject"),
-            AIMessage(content="continued without tool"),
+            AIMessage(content="removed"),
         ]
     )
     agent = _minimal_agent(store)
     agent._tools = [tool]
 
     with patch("kronos.graph.get_model", return_value=model):
-        waiting_reply = await agent.ainvoke(
+        reply = await agent.ainvoke(
             message="remove server",
             thread_id="thread",
             user_id="u",
             session_id="s",
         )
-        approval_id = agent.last_pending_approval_id
-        assert approval_id is not None
-        final_reply = await agent.resolve_tool_approval(
-            approval_id,
-            approved=False,
-            decided_by="u",
-        )
 
-    assert "Approval ID" in waiting_reply
-    assert calls == 0
-    assert final_reply == "continued without tool"
+    assert "Approval ID" not in reply
+    assert agent.last_pending_approval_id is None
+    assert calls == 1
+    assert reply == "removed"
     saved = await store.load("thread")
     assert [message.content for message in saved] == [
         "remove server",
-        "",
-        "[REJECTED by user]",
-        "continued without tool",
+        "removed",
     ]
