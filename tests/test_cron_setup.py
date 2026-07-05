@@ -44,6 +44,7 @@ def test_jb_exclusive_reports_do_not_register_on_kronos(monkeypatch):
 
     assert "competitor-weekly" not in scheduler.names
     assert "signal-travel-insights" not in scheduler.names
+    assert "people-scout" not in scheduler.names
     assert "analytics-pulse" not in scheduler.names
     assert "analytics-alerts" not in scheduler.names
     assert "analytics-weekly" not in scheduler.names
@@ -80,3 +81,17 @@ async def test_disabled_travel_runner_does_not_collect_or_publish(monkeypatch):
     )
 
     await run_travel_insights_digest()
+
+
+@pytest.mark.asyncio
+async def test_disabled_people_scout_runner_does_not_discover(monkeypatch):
+    monkeypatch.setattr(settings, "agent_name", "kronos")
+
+    def fail_get_model(*_args, **_kwargs):
+        raise AssertionError("people scout should not query the model")
+
+    monkeypatch.setattr("kronos.cron.people_scout.get_model", fail_get_model)
+
+    from kronos.cron.people_scout import run_people_scout
+
+    await run_people_scout()

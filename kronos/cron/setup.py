@@ -32,13 +32,14 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.heartbeat import run_heartbeat
     from kronos.cron.market_review import run_market_review
     from kronos.cron.news_monitor import run_news_monitor
-    from kronos.cron.people_scout import run_people_scout
     from kronos.cron.personal_observer import run_daily_scope, run_personal_observer
     from kronos.cron.self_improve import run_self_improve
     from kronos.cron.signal_ideas import run_ideas_digest
 
     # DISABLED 2026-06-11: job-search digest paused (see registration below).
     # from kronos.cron.signal_jobs import run_jobs_digest
+    # DISABLED 2026-07-05: People Scout paused (see registration below).
+    # from kronos.cron.people_scout import run_people_scout
     # DISABLED 2026-07-03: JourneyBay travel insights collection/analysis/
     # publication paused (see registration below).
     # from kronos.cron.signal_travel import run_travel_insights_digest
@@ -87,8 +88,13 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # Skill Improve — weekly Sunday 20:00 UTC (was: kronos-skill-improve.timer)
     scheduler.add_weekly("skill-improve", run_skill_improve, weekday=6, hour_utc=20)
 
-    # People Scout — weekly Sunday 02:00 UTC (was: kronos-people-scout.timer)
-    scheduler.add_weekly("people-scout", run_people_scout, weekday=6, hour_utc=2)
+    # People Scout — weekly Sunday 02:00 UTC (was: kronos-people-scout.timer).
+    # DISABLED 2026-07-05: paused — LinkedIn profile discovery is not needed for
+    # now. The runner, focus rotation, criteria and SEEN.md tracking stay intact.
+    # To re-enable: uncomment the import above + this line, flip
+    # PEOPLE_SCOUT_ENABLED back to True in people_scout.py, bump the job count
+    # below back to 16, then restart the kronos agent.
+    # scheduler.add_weekly("people-scout", run_people_scout, weekday=6, hour_utc=2)
 
     # User Model — weekly Wednesday 20:00 UTC (was: kronos-user-model.timer)
     scheduler.add_weekly("user-model", run_user_model, weekday=2, hour_utc=20)
@@ -138,5 +144,5 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
         nexus_jobs_registered = 4
 
-    total = 16 + nexus_jobs_registered  # 18 base jobs; signal-jobs and travel insights paused
+    total = 15 + nexus_jobs_registered  # 18 base jobs; signal-jobs, travel insights and people-scout paused
     log.info("%d cron jobs registered for agent '%s'", total, me)

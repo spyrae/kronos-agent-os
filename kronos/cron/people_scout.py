@@ -1,7 +1,11 @@
-"""People Scout — weekly LinkedIn profile discovery.
+"""People Scout — weekly LinkedIn profile discovery (PAUSED 2026-07-05).
 
 Rotates focus weekly: US founders → EU founders → AI engineers → Indie hackers.
 Uses LLM with web search knowledge, tracks seen profiles in SEEN.md.
+
+Paused via PEOPLE_SCOUT_ENABLED=False and unregistered in cron/setup.py; the
+mechanism (focus rotation, criteria, SEEN.md tracking) stays intact. Flip the
+flag back to True and re-register the job to resume.
 """
 
 import logging
@@ -13,6 +17,11 @@ from kronos.cron.notify import TOPIC_DIGEST, send_bot_api
 from kronos.llm import ModelTier, get_model
 
 log = logging.getLogger("kronos.cron.people_scout")
+
+# PAUSED 2026-07-05: LinkedIn profile discovery is not needed right now. The
+# runner, focus rotation, criteria and SEEN.md tracking stay intact — flip this
+# back to True (and re-register the job in cron/setup.py) to resume.
+PEOPLE_SCOUT_ENABLED = False
 
 FOCUS_ROTATION = [
     "US-based tech founders and startup CEOs",
@@ -48,6 +57,9 @@ def _save_seen(new_urls: list[str]) -> None:
 
 async def run_people_scout() -> None:
     """Discover interesting LinkedIn profiles. Kronos only."""
+    if not PEOPLE_SCOUT_ENABLED:
+        log.info("People Scout disabled; skipping profile discovery")
+        return
     if settings.agent_name != "kronos":
         return
 
