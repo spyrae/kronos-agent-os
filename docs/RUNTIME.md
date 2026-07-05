@@ -78,9 +78,9 @@ gitignored. Public templates belong in `workspaces/_template/`.
 `kaos demo` is deterministic and safe for quickstart.
 
 `kaos chat` requires at least one configured LLM provider. The default provider
-chain uses `FIREWORKS_API_KEY` and `DEEPSEEK_API_KEY`, but users can also bring
-OpenAI, OpenRouter, Groq, LiteLLM, Ollama, or any OpenAI-compatible endpoint.
-See [LLM Providers](LLM_PROVIDERS.md).
+chain uses `DEEPSEEK_API_KEY` (with the orchestrator on Codex CLI), but users can
+also bring OpenAI, OpenRouter, Groq, LiteLLM, Ollama, or any OpenAI-compatible
+endpoint. See [LLM Providers](LLM_PROVIDERS.md).
 
 The CLI uses the same `KronosAgent`, session store, memory flags, and tool
 gateway as the long-running runtime. Tool calls are printed as compact terminal

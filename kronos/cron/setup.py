@@ -130,7 +130,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         scheduler.add_periodic("analytics-alerts", run_analytics_alerts, interval_seconds=7200)
 
         # ── Weekly reports land Monday morning MSK ──
-        # Spaced 3h apart so the LLM (one Codex/Kimi process) is never
+        # Spaced 3h apart so the LLM (one Codex/DeepSeek process) is never
         # contended and Telegram doesn't get a burst of giant messages.
         #   03:00 UTC (06:00 MSK) — SEO/GEO (longest: 25-35 min run)
         #   06:00 UTC (09:00 MSK) — Competitor intelligence (paused)

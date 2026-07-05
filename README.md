@@ -61,10 +61,10 @@ cp .env.example .env
 kaos doctor
 ```
 
-Bring your own LLM by editing `.env`. The default chain is Fireworks/Kimi plus
-DeepSeek, but OpenAI, OpenRouter, Groq, Together, LiteLLM, Ollama, and arbitrary
-OpenAI-compatible endpoints can be configured without code changes. See
-[LLM Providers](docs/LLM_PROVIDERS.md).
+Bring your own LLM by editing `.env`. The default chain is DeepSeek (with the
+top-level orchestrator on Codex CLI), but OpenAI, OpenRouter, Groq, Together,
+LiteLLM, Ollama, and arbitrary OpenAI-compatible endpoints can be configured
+without code changes. See [LLM Providers](docs/LLM_PROVIDERS.md).
 
 If you work on the dashboard UI, run `nvm use` from the repository root before
 `npm install` in `dashboard-ui/`.
@@ -156,7 +156,7 @@ python -m kronos     # run the Telegram/webhook runtime
 Copy `.env.example` to `.env`. Minimum useful local setup:
 
 ```bash
-FIREWORKS_API_KEY=fw_...      # or DEEPSEEK_API_KEY
+DEEPSEEK_API_KEY=sk-...       # or OPENAI_API_KEY
 AGENT_NAME=kronos             # uses workspaces/kronos/
 ```
 

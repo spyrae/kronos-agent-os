@@ -1,8 +1,9 @@
 """LLM factory with configurable provider chains and cooldown tracking.
 
 Default resolution order:
-  standard: Kimi K2.5 via Fireworks -> DeepSeek V3
-  lite:     DeepSeek V3 -> Kimi K2.5 via Fireworks
+  orchestrator: Codex CLI (gpt-5.5)      # top-level supervisor
+  standard:     DeepSeek V3
+  lite:         DeepSeek V3
 
 Users can override the chains and provider details from .env without editing
 Python code. Most hosted and local providers are covered through the generic
@@ -317,20 +318,6 @@ class _PIIMaskingCallbackHandler(BaseCallbackHandler):
 
 
 _PRESETS: dict[str, dict[str, object]] = {
-    "kimi": {
-        "adapter": "openai-compatible",
-        "model": "accounts/fireworks/routers/kimi-k2p5-turbo",
-        "base_url": "https://api.fireworks.ai/inference/v1",
-        "api_key_env": "FIREWORKS_API_KEY",
-        "max_tokens": 8192,
-    },
-    "fireworks": {
-        "adapter": "openai-compatible",
-        "model": "accounts/fireworks/routers/kimi-k2p5-turbo",
-        "base_url": "https://api.fireworks.ai/inference/v1",
-        "api_key_env": "FIREWORKS_API_KEY",
-        "max_tokens": 8192,
-    },
     "deepseek": {
         "adapter": "deepseek",
         "model": "deepseek-chat",
@@ -472,8 +459,7 @@ def provider_chain(tier: ModelTier = ModelTier.STANDARD) -> list[str]:
         if tier == ModelTier.STANDARD
         else settings.kaos_lite_provider_chain
     )
-    fallback = "kimi,deepseek" if tier == ModelTier.STANDARD else "deepseek,kimi"
-    return _parse_chain(raw or fallback)
+    return _parse_chain(raw or "deepseek")
 
 
 def describe_provider_chain(tier: ModelTier = ModelTier.STANDARD) -> list[dict[str, object]]:
@@ -774,8 +760,6 @@ def _bool_env(name: str, default: bool) -> bool:
 
 
 def _api_key_from_env(name: str) -> str:
-    if name == "FIREWORKS_API_KEY":
-        return settings.fireworks_api_key or os.environ.get(name, "")
     if name == "DEEPSEEK_API_KEY":
         return settings.deepseek_api_key or os.environ.get(name, "")
     if name == "OPENAI_API_KEY":

@@ -5,13 +5,13 @@ KAOS uses two model tiers:
 - `standard`: higher quality reasoning, planning, tool-heavy work.
 - `lite`: cheaper/faster parsing, summaries, routing, memory maintenance.
 
-The default setup is still the original KAOS setup:
+The default setup uses DeepSeek for both tiers, with the top-level
+orchestrator on Codex CLI (see below):
 
 ```env
-KAOS_STANDARD_PROVIDER_CHAIN=kimi,deepseek
-KAOS_LITE_PROVIDER_CHAIN=deepseek,kimi
+KAOS_STANDARD_PROVIDER_CHAIN=deepseek
+KAOS_LITE_PROVIDER_CHAIN=deepseek
 
-FIREWORKS_API_KEY=fw_...
 DEEPSEEK_API_KEY=sk-...
 ```
 
@@ -30,9 +30,7 @@ If this is unset, the orchestrator uses the `standard` chain.
 
 | Provider id | Adapter | Default model | Key env | Notes |
 |-------------|---------|---------------|---------|-------|
-| `kimi` | OpenAI-compatible | `accounts/fireworks/routers/kimi-k2p5-turbo` | `FIREWORKS_API_KEY` | Fireworks-hosted Kimi |
-| `fireworks` | OpenAI-compatible | `accounts/fireworks/routers/kimi-k2p5-turbo` | `FIREWORKS_API_KEY` | Same default, easier to override |
-| `deepseek` | DeepSeek SDK | `deepseek-chat` | `DEEPSEEK_API_KEY` | Good lite/default fallback |
+| `deepseek` | DeepSeek SDK | `deepseek-chat` | `DEEPSEEK_API_KEY` | Default standard + lite model |
 | `openai` | OpenAI-compatible | `gpt-4.1-mini` | `OPENAI_API_KEY` | Official OpenAI endpoint |
 | `codex-cli` | Codex CLI | `gpt-5.5` | none | Uses local Codex OAuth/API login |
 | `openrouter` | OpenAI-compatible | `openai/gpt-4.1-mini` | `OPENROUTER_API_KEY` | Route many hosted models |
@@ -164,8 +162,7 @@ KAOS_PROVIDER_MY_LAB_TEMPERATURE=0.5
 
 | Provider | Chat | Tool calling | Local | Recommended tier | Notes |
 |----------|------|--------------|-------|------------------|-------|
-| Fireworks/Kimi | yes | provider/model dependent | no | `standard` | KAOS default standard model |
-| DeepSeek | yes | provider/model dependent | no | `lite`, fallback | KAOS default lite model |
+| DeepSeek | yes | provider/model dependent | no | `standard`, `lite` | KAOS default standard + lite model |
 | OpenAI | yes | strong | no | `standard` or `lite` | Most predictable for tools |
 | Codex CLI | yes | KAOS JSON bridge | local CLI | `orchestrator` | Uses `codex login`; slower startup per call |
 | OpenRouter | yes | model dependent | no | `standard` | Choose a model with tool support |

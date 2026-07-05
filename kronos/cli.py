@@ -46,7 +46,7 @@ def _runtime_llm_configured() -> bool:
 
 def _print_missing_runtime_llm() -> None:
     print("KAOS chat requires at least one configured LLM provider.")
-    print("Set FIREWORKS_API_KEY, DEEPSEEK_API_KEY, OPENAI_API_KEY, or configure a provider chain in .env.")
+    print("Set DEEPSEEK_API_KEY, OPENAI_API_KEY, or configure a provider chain in .env.")
     print("Run `kaos doctor` to inspect providers, or `kaos demo` for the offline walkthrough.")
 
 

@@ -40,7 +40,6 @@ def patched_settings(workspace_dir, monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "db_path", str(tmp_path / "session.db"))
     monkeypatch.setattr(settings, "swarm_db_path", str(tmp_path / "swarm.db"))
     monkeypatch.setattr(settings, "mem0_qdrant_path", str(tmp_path / "qdrant"))
-    monkeypatch.setattr(settings, "fireworks_api_key", "test-key")
     monkeypatch.setattr(settings, "deepseek_api_key", "")  # keep memory disabled
 
     # Reset SafeDB / swarm singletons so they pick up the new paths.

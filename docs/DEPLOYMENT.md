@@ -107,9 +107,8 @@ GitHub Actions run.
 At least one LLM provider is required for chat/runtime use:
 
 ```bash
-KAOS_STANDARD_PROVIDER_CHAIN=kimi,deepseek
-KAOS_LITE_PROVIDER_CHAIN=deepseek,kimi
-FIREWORKS_API_KEY=fw_...
+KAOS_STANDARD_PROVIDER_CHAIN=deepseek
+KAOS_LITE_PROVIDER_CHAIN=deepseek
 DEEPSEEK_API_KEY=sk-...
 ```
 

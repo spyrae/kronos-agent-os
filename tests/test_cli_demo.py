@@ -39,11 +39,10 @@ def test_demo_reply_mentions_relevant_kaos_module():
 
 
 def test_chat_prompt_without_runtime_llm_fails_cleanly(monkeypatch, capsys):
-    monkeypatch.setattr(settings, "fireworks_api_key", "")
     monkeypatch.setattr(settings, "deepseek_api_key", "")
     monkeypatch.setattr(settings, "openai_api_key", "")
-    monkeypatch.setattr(settings, "kaos_standard_provider_chain", "kimi,deepseek")
-    monkeypatch.setattr(settings, "kaos_lite_provider_chain", "deepseek,kimi")
+    monkeypatch.setattr(settings, "kaos_standard_provider_chain", "deepseek")
+    monkeypatch.setattr(settings, "kaos_lite_provider_chain", "deepseek")
     monkeypatch.setattr(settings, "kaos_orchestrator_provider_chain", "")
     for name in list(os.environ):
         if name.startswith("KAOS_PROVIDER_") or name in {

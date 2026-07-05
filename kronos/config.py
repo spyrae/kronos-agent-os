@@ -13,11 +13,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 
     # LLM Providers
-    fireworks_api_key: str = ""  # Fireworks AI — Kimi K2.5 Turbo (standard tier)
-    deepseek_api_key: str = ""   # DeepSeek V3 (lite tier)
+    deepseek_api_key: str = ""   # DeepSeek V3 (standard + lite tiers)
     openai_api_key: str = ""
-    kaos_standard_provider_chain: str = "kimi,deepseek"
-    kaos_lite_provider_chain: str = "deepseek,kimi"
+    kaos_standard_provider_chain: str = "deepseek"
+    kaos_lite_provider_chain: str = "deepseek"
     kaos_orchestrator_provider_chain: str = ""  # empty = standard tier
     kaos_vision_provider: str = "codex-cli"  # codex-cli | openai-api
     kaos_codex_model: str = "gpt-5.5"

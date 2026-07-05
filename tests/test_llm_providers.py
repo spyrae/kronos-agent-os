@@ -22,7 +22,6 @@ from kronos.llm import (
 
 
 def _clear_llm_keys(monkeypatch):
-    monkeypatch.setattr(settings, "fireworks_api_key", "")
     monkeypatch.setattr(settings, "deepseek_api_key", "")
     monkeypatch.setattr(settings, "openai_api_key", "")
     monkeypatch.setattr(settings, "groq_api_key", "")
@@ -52,24 +51,22 @@ def _clear_llm_keys(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
-def test_default_provider_chains_preserve_existing_order(monkeypatch):
+def test_default_provider_chains_resolve_to_deepseek(monkeypatch):
     _clear_llm_keys(monkeypatch)
-    monkeypatch.setattr(settings, "kaos_standard_provider_chain", "kimi,deepseek")
-    monkeypatch.setattr(settings, "kaos_lite_provider_chain", "deepseek,kimi")
 
-    assert provider_chain(ModelTier.STANDARD) == ["kimi", "deepseek"]
-    assert provider_chain(ModelTier.LITE) == ["deepseek", "kimi"]
+    assert provider_chain(ModelTier.STANDARD) == ["deepseek"]
+    assert provider_chain(ModelTier.LITE) == ["deepseek"]
 
 
-def test_deepseek_key_keeps_default_runtime_configured(monkeypatch):
+def test_deepseek_key_keeps_partial_chain_runtime_configured(monkeypatch):
     _clear_llm_keys(monkeypatch)
-    monkeypatch.setattr(settings, "kaos_standard_provider_chain", "kimi,deepseek")
+    monkeypatch.setattr(settings, "kaos_standard_provider_chain", "unknown-provider,deepseek")
     monkeypatch.setattr(settings, "deepseek_api_key", "sk-test")
 
     rows = describe_provider_chain(ModelTier.STANDARD)
 
     assert is_runtime_llm_configured() is True
-    assert rows[0]["provider"] == "kimi"
+    assert rows[0]["provider"] == "unknown_provider"
     assert rows[0]["configured"] is False
     assert rows[1]["provider"] == "deepseek"
     assert rows[1]["configured"] is True
