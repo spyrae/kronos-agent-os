@@ -175,9 +175,11 @@ async def run_email_expenses(
             )
 
     # 4) Always post a report to the finance topic so the run is visible.
-    open_pending = 0 if dry_run else len(ledger.list_pending())
+    #    A real run lists ALL open pending (with ids) so the agent re-asks the
+    #    user every run until each is resolved from chat.
+    open_pending_rows = [] if dry_run else ledger.list_pending()
     notifier(
-        _format_report(counts, report, open_pending, archiving_on=archiving_enabled()),
+        _format_report(counts, report, open_pending_rows, archiving_on=archiving_enabled()),
         topic_id=TOPIC_FINANCE,
     )
 
@@ -324,7 +326,7 @@ async def _archive(msg, *, gmail, ledger, counts) -> None:
 
 
 def _format_report(
-    counts: dict[str, int], report: _Report, open_pending: int, archiving_on: bool = False
+    counts: dict[str, int], report: _Report, open_pending_rows, archiving_on: bool = False
 ) -> str:
     tag = " [DRY-RUN — ничего не записано]" if report.dry_run else ""
     sources = ", ".join(report.sources) if report.sources else "—"
@@ -345,16 +347,25 @@ def _format_report(
         lines.append("\n<b>Записано:</b>")
         lines.extend(f"  {line}" for line in report.recorded)
 
-    if report.pending:
-        lines.append(f"\n❓ <b>Требуют категории ({len(report.pending)}):</b>")
-        lines.extend(f"  {line}" for line in report.pending)
-        if not report.dry_run:
-            lines.append('\nОтветь: «проведи трату #<id> как <категория>» или «пропусти #<id>».')
-            lines.append("(id смотри через list_pending_expenses)")
-
-    # Surface any older pending carried over from previous runs.
-    carry = open_pending - len(report.pending)
-    if carry > 0:
-        lines.append(f"\n➕ Ещё {carry} ожидают категории с прошлых прогонов (list_pending_expenses).")
+    if report.dry_run:
+        # Preview only — nothing is in the ledger yet, so no ids.
+        if report.pending:
+            lines.append(f"\n❓ <b>Требуют категории ({len(report.pending)}):</b>")
+            lines.extend(f"  {line}" for line in report.pending)
+    elif open_pending_rows:
+        # Ask about EVERY open pending (this run's + carried over), with ids,
+        # phrased as a question the user can answer directly in this topic.
+        lines.append(f"\n❓ <b>Куда отнести эти траты? ({len(open_pending_rows)})</b>")
+        for row in open_pending_rows:
+            amount = row["amount"]
+            amount_str = f"{amount:,.0f}" if amount is not None else "?"
+            lines.append(
+                f"  #{row['id']} [{row['source']}] {amount_str} {row['currency'] or ''} "
+                f"— {row['description']}"
+            )
+        lines.append(
+            "\nОтветь прямо здесь: «#id категория» через запятую "
+            "(напр. «#12 Travel, #13 Food»), или «пропусти #id»."
+        )
 
     return "\n".join(lines)

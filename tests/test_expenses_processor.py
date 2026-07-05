@@ -170,7 +170,29 @@ async def test_low_confidence_goes_to_pending(ledger, notes):
     assert gmail.archived == []           # not archived until resolved
     assert ledger.is_processed("p1") is False
     assert ledger.has_pending("p1") is True
-    assert "Требуют категории" in notes.captured[0][0]
+    report = notes.captured[0][0]
+    assert "Куда отнести эти траты?" in report
+    pid = ledger.list_pending()[0]["id"]
+    assert f"#{pid}" in report            # pending shown WITH its id so it can be resolved
+    assert "ATM withdrawal" in report
+
+
+@pytest.mark.asyncio
+async def test_reasks_open_pending_from_previous_runs(ledger, notes):
+    # A pending left over from an earlier run (user never answered)
+    old = ledger.add_pending(
+        message_id="old1", source="wondr", description="PEYIA BALI",
+        amount=494340, currency="IDR", amount_idr=494340, expense_date="2026-07-05",
+        guessed_category="Other", reason="low category confidence",
+    )
+    # This run finds nothing new — the report must still re-ask the old pending.
+    gmail = FakeGmail({"grab": []}, {})
+    counts, writer = await _run(gmail, ledger, notes, mapping={})
+
+    report = notes.captured[0][0]
+    assert "Куда отнести эти траты?" in report
+    assert f"#{old}" in report
+    assert "PEYIA BALI" in report
 
 
 @pytest.mark.asyncio
