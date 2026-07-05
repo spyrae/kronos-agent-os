@@ -361,6 +361,32 @@ def test_curate_news_digest_falls_back_without_llm(monkeypatch):
     assert "Почему важно:" not in curated.body
 
 
+def test_curate_news_digest_separates_items_with_blank_line(monkeypatch):
+    from kronos.signals.digest import curate_news_digest
+
+    clusters = [
+        {"id": 1, "category": "news", "title": "First story", "summary": "a", "item_ids": [11]},
+        {"id": 2, "category": "news", "title": "Second story", "summary": "b", "item_ids": [22]},
+    ]
+    items_by_cluster = {
+        1: [_item("x_openai_devs", "x", "First story", "https://x.com/a/1")],
+        2: [_item("reddit_ai", "reddit", "Second story", "https://r.com/2")],
+    }
+
+    class Response:
+        content = '[{"i": 0, "why": "one"}, {"i": 1, "why": "two"}]'
+
+    monkeypatch.setattr("kronos.llm.is_runtime_llm_configured", lambda: True)
+    monkeypatch.setattr("kronos.llm.invoke_with_fallback", lambda messages, tier: Response())
+
+    rendered = render_digest("news", clusters, items_by_cluster, max_chars=10000)
+    curated = curate_news_digest(rendered, clusters, items_by_cluster)
+
+    assert curated.body.count("• <b>") == 2
+    # a blank line precedes each bullet (after the title and between items)
+    assert "\n\n• <b>" in curated.body
+
+
 def test_synthesize_ideas_digest_replaces_body_with_generated_ideas(monkeypatch):
     from kronos.signals.digest import synthesize_ideas_digest
 

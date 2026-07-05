@@ -240,6 +240,7 @@ def curate_news_digest(
         why = _clean_display_text(entry["why"], limit=280)
         if why:
             lines.append(f"  <i>Почему важно:</i> {escape(why)}")
+        lines.append("")  # blank line separates items for readability
         if cluster_id:
             chosen_cluster_ids.append(cluster_id)
         chosen_item_ids.extend(int(i) for i in (cluster.get("item_ids") or []) if i)
@@ -649,7 +650,7 @@ def _polish_digest_with_llm(category: str, body: str, *, max_chars: int) -> str:
 
 def _polish_prompt(category: str, body: str, *, max_chars: int, strict: bool = False) -> str:
     strict_rule = (
-        "\n8. СТРОГО: переведи оставшиеся английские роли и общие слова "
+        "\n9. СТРОГО: переведи оставшиеся английские роли и общие слова "
         "(Product Manager → менеджер продукта, Software Engineer → инженер ПО, "
         "remote work → удалённая работа, workflow → процесс). "
         "В оригинале можно оставить только бренды, названия продуктов/моделей, URL, usernames и короткие аббревиатуры."
@@ -666,7 +667,9 @@ def _polish_prompt(category: str, body: str, *, max_chars: int, strict: bool = F
         "4. Сохрани факты, числа и смысл; ничего не добавляй.\n"
         '5. Сохрани все <a href="..."> ссылки и URL.\n'
         "6. Используй только Telegram HTML-теги: <b>, <i>, <a>.\n"
-        "7. Стиль: коротко, чисто, красиво, без канцелярита."
+        "7. Стиль: коротко, чисто, красиво, без канцелярита.\n"
+        "8. Сохрани разбивку на пункты: между пунктами (строки с •) оставляй пустую строку, "
+        "не склеивай их в сплошной текст."
         f"{strict_rule}\n"
         f"Итог максимум {max_chars - 120} символов.\n"
         "Верни только готовый HTML без пояснений.\n\n"
