@@ -47,6 +47,7 @@ DEFAULT_APPROVAL_TOOL_NAMES = {
     "add_expense",
     "add_tranche",
     "replace_tranche",
+    "resolve_pending_expense",
 }
 READ_ONLY_TOOL_PREFIXES = (
     "get_",
