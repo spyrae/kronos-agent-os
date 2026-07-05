@@ -26,7 +26,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.analytics_alerts import run_analytics_alerts
     from kronos.cron.analytics_pulse import run_analytics_pulse
     from kronos.cron.analytics_weekly import run_analytics_weekly
-    from kronos.cron.email_expenses import run_email_expenses
+    from kronos.cron.expenses.processor import run_email_expenses
     from kronos.cron.expense_digest import run_expense_digest
     from kronos.cron.group_digest import run_group_digest
     from kronos.cron.heartbeat import run_heartbeat
@@ -102,8 +102,8 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # Sleep-time Compute — daily at 03:00 UTC (11:00 UTC+8, after user sleeps)
     scheduler.add_daily("sleep-compute", run_sleep_compute, hour_utc=3)
 
-    # Email Expenses — daily at 00:00 UTC (08:00 UTC+8)
-    scheduler.add_daily("email-expenses", run_email_expenses, hour_utc=0)
+    # Email Expenses — daily at 13:00 UTC (21:00 UTC+8, вечером за прошедший день)
+    scheduler.add_daily("email-expenses", run_email_expenses, hour_utc=13)
 
     # Expense Digest — weekly Sunday 02:00 UTC (10:00 UTC+8)
     scheduler.add_weekly("expense-digest", run_expense_digest, weekday=6, hour_utc=2)

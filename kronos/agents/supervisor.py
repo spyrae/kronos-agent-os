@@ -325,7 +325,15 @@ def build_supervisor(
 
     # Direct expense/budget tools — no delegation needed, deterministic
     from kronos.tools.expense import add_expense, add_tranche, get_budget, replace_tranche
-    direct_tools = [add_expense, add_tranche, replace_tranche, get_budget]
+    from kronos.tools.expense_pending import (
+        list_pending_expenses,
+        resolve_pending_expense,
+        skip_pending_expense,
+    )
+    direct_tools = [
+        add_expense, add_tranche, replace_tranche, get_budget,
+        list_pending_expenses, resolve_pending_expense, skip_pending_expense,
+    ]
 
     # Combine: delegation tools + supervisor-only tools + direct tools
     all_tools = delegation_tools + supervisor_tools + direct_tools
