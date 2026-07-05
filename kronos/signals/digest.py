@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -11,6 +12,7 @@ from typing import Any
 
 from kronos.signals.ideas import caveat_for_items, product_angle_for_items, why_now_for_items
 from kronos.signals.models import SignalDigest, SignalItem
+from kronos.signals.news import news_priority_score
 from kronos.signals.routing import DigestRoute, route_for_category
 from kronos.signals.scoring import EvidenceLevel, assess_evidence, sanitize_trend_language
 from kronos.signals.sources import SignalSource
@@ -18,6 +20,7 @@ from kronos.signals.store import SignalStore
 from kronos.signals.travel import journeybay_implication_for_items, travel_caveat_for_items
 
 TELEGRAM_SAFE_MAX_CHARS = 30000
+MAX_NEWS_CLUSTERS = 10
 MAX_IDEA_CLUSTERS = 10
 MAX_TRAVEL_CLUSTERS = 10
 TITLE_BY_CATEGORY = {
@@ -102,6 +105,8 @@ def render_digest(
     source_map = dict(sources_by_id or {})
     selected_clusters = [cluster for cluster in clusters if _cluster_category(cluster) == route.category]
     selected_clusters = _rank_clusters(selected_clusters, items_by_cluster, source_map, category=route.category)
+    if route.category == "news":
+        selected_clusters = selected_clusters[:MAX_NEWS_CLUSTERS]
     if route.category == "ideas":
         selected_clusters = selected_clusters[:MAX_IDEA_CLUSTERS]
     if route.category == "travel_insights":
@@ -167,6 +172,200 @@ def polish_rendered_digest(digest: RenderedDigest, *, max_chars: int = TELEGRAM_
     return replace(digest, body=_truncate_html(cleaned, max_chars=max_chars))
 
 
+NEWS_EDITOR_SYSTEM = (
+    "Ты — персональный редактор AI/tech-дайджеста для Романа: фаундер, строит "
+    "AI-продукты, dev-tools, Telegram-ботов и трэвел-сервис JourneyBay. Твоя "
+    "задача — отобрать из потока только реально важное и полезное и отсеять "
+    "шум, рекламу, дубли и мелочь."
+)
+IDEAS_EDITOR_SYSTEM = (
+    "Ты — продуктовый стратег. На основе собранных сигналов спроса (боли, "
+    "запросы «ищу инструмент», обсуждения) ты формулируешь конкретные, "
+    "проверяемые идеи продуктов, бизнесов и фич — а не пересказываешь посты."
+)
+NEWS_EDITOR_CANDIDATE_MULTIPLIER = 2
+IDEAS_EDITOR_CANDIDATE_LIMIT = 20
+DEFAULT_MAX_IDEAS = 8
+
+
+def curate_news_digest(
+    rendered: RenderedDigest,
+    clusters: Sequence[Mapping[str, Any]],
+    items_by_cluster: Mapping[int, Sequence[SignalItem]],
+    *,
+    sources_by_id: Mapping[str, SignalSource] | None = None,
+    max_items: int = MAX_NEWS_CLUSTERS,
+) -> RenderedDigest:
+    """Re-select and annotate News clusters with an LLM editor (LITE tier).
+
+    The deterministic ``rendered`` digest is returned unchanged when the LLM
+    is not configured or returns nothing usable, so this is always safe to
+    call — it only ever improves the News digest, never breaks it.
+    """
+    if rendered.route.category != "news":
+        return rendered
+    source_map = dict(sources_by_id or {})
+    news_clusters = [cluster for cluster in clusters if _cluster_category(cluster) == "news"]
+    ranked = _rank_clusters(news_clusters, items_by_cluster, source_map, category="news")
+    candidates = ranked[: max_items * NEWS_EDITOR_CANDIDATE_MULTIPLIER]
+    if not candidates:
+        return rendered
+
+    prompt = (
+        "Ниже — пронумерованные новости-кандидаты.\n"
+        f"Отбери до {max_items} самых важных и полезных лично Роману "
+        "(релизы моделей и продуктов, заметные исследования, сделки и запуски "
+        "в AI-индустрии, dev-tools, стартапах). Отбрось рекламу, дубли, мелочь "
+        "и всё нерелевантное.\n"
+        "Верни СТРОГО JSON-массив в порядке важности, без текста вокруг: "
+        '[{"i": <номер>, "why": "<одна короткая строка: почему это важно>"}].\n\n'
+        f"{_numbered_candidate_catalog(candidates)}"
+    )
+    raw = _invoke_editor(NEWS_EDITOR_SYSTEM, prompt)
+    selection = _parse_editor_selection(raw, max_index=len(candidates) - 1, limit=max_items)
+    if not selection:
+        return rendered
+
+    lines = [f"<b>{escape(rendered.title)}</b>", ""]
+    chosen_cluster_ids: list[int] = []
+    chosen_item_ids: list[int] = []
+    for entry in selection:
+        cluster = candidates[entry["index"]]
+        cluster_id = int(cluster.get("id", 0) or 0)
+        items = tuple(items_by_cluster.get(cluster_id, ()))
+        title = _clean_display_text(str(cluster.get("title") or "Без названия"))
+        first_url = next((item.url for item in items if item.url), "")
+        link = f' (<a href="{escape(first_url, quote=True)}">источник</a>)' if first_url else ""
+        lines.append(f"• <b>{escape(title)}</b>{link}")
+        why = _clean_display_text(entry["why"], limit=280)
+        if why:
+            lines.append(f"  <i>Почему важно:</i> {escape(why)}")
+        if cluster_id:
+            chosen_cluster_ids.append(cluster_id)
+        chosen_item_ids.extend(int(i) for i in (cluster.get("item_ids") or []) if i)
+
+    body = "\n".join(lines).strip()
+    return replace(
+        rendered,
+        body=body,
+        cluster_ids=tuple(chosen_cluster_ids),
+        item_ids=tuple(dict.fromkeys(chosen_item_ids)),
+    )
+
+
+def synthesize_ideas_digest(
+    rendered: RenderedDigest,
+    clusters: Sequence[Mapping[str, Any]],
+    items_by_cluster: Mapping[int, Sequence[SignalItem]],
+    *,
+    sources_by_id: Mapping[str, SignalSource] | None = None,
+    max_ideas: int = DEFAULT_MAX_IDEAS,
+) -> RenderedDigest:
+    """Synthesize product/business ideas from raw demand signals via LLM.
+
+    Falls back to the deterministic ``rendered`` idea cards when the LLM is
+    not configured or returns nothing usable.
+    """
+    if rendered.route.category != "ideas":
+        return rendered
+    source_map = dict(sources_by_id or {})
+    idea_clusters = [cluster for cluster in clusters if _cluster_category(cluster) == "ideas"]
+    ranked = _rank_clusters(idea_clusters, items_by_cluster, source_map, category="ideas")
+    candidates = ranked[:IDEAS_EDITOR_CANDIDATE_LIMIT]
+    if not candidates:
+        return rendered
+
+    prompt = (
+        "Ниже — пронумерованные сырые сигналы спроса из сообществ (боли, "
+        "запросы, обсуждения).\n"
+        f"Сформулируй до {max_ideas} потенциально интересных идей "
+        "(продукт / бизнес / фича). Смешанный фокус: часть — под профиль "
+        "Романа (AI-продукты, dev-tools, Telegram-боты, трэвел JourneyBay), "
+        "часть — общерыночные.\n"
+        "Каждую идею выведи строго в этом формате (Telegram-HTML, только теги "
+        "<b> и <i>):\n"
+        "• <b>Идея:</b> <краткое название>\n"
+        "  <b>Проблема:</b> <какая боль и из каких сигналов>\n"
+        "  <b>Суть:</b> <что именно строим>\n"
+        "  <b>Для кого:</b> <аудитория>\n"
+        "  <b>Почему сейчас:</b> <окно возможности>\n"
+        "  <b>Первый шаг:</b> <как дёшево проверить спрос>\n"
+        "  <i>Релевантность тебе:</i> <высокая / средняя / низкая — и 3-5 слов почему>\n\n"
+        "Разделяй идеи пустой строкой. Без вступления и заключения. Пиши "
+        "по-русски, кроме брендов и названий.\n\n"
+        f"{_numbered_candidate_catalog(candidates)}"
+    )
+    raw = _invoke_editor(IDEAS_EDITOR_SYSTEM, prompt)
+    if not raw:
+        return rendered
+    body_inner = _clean_digest_markup(raw)
+    if len(body_inner) < 40 or "<b>Идея:</b>" not in body_inner:
+        return rendered
+    body = f"<b>{escape(rendered.title)}</b>\n\n{body_inner}".strip()
+    return replace(rendered, body=body)
+
+
+def _numbered_candidate_catalog(candidates: Sequence[Mapping[str, Any]]) -> str:
+    entries = []
+    for index, cluster in enumerate(candidates):
+        title = _clean_display_text(str(cluster.get("title") or ""))
+        summary = _clean_display_text(str(cluster.get("summary") or ""), limit=240)
+        block = f"[{index}] {title}".rstrip()
+        if summary:
+            block += f"\n{summary}"
+        entries.append(block)
+    return "\n\n".join(entries)
+
+
+def _invoke_editor(system_prompt: str, prompt: str) -> str | None:
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        from kronos.llm import ModelTier, invoke_with_fallback, is_runtime_llm_configured
+
+        if not is_runtime_llm_configured():
+            return None
+        response = invoke_with_fallback(
+            [SystemMessage(content=system_prompt), HumanMessage(content=prompt)],
+            tier=ModelTier.LITE,
+        )
+        content = response.content if isinstance(response.content, str) else str(response.content)
+        return content.strip() or None
+    except Exception:
+        return None
+
+
+def _parse_editor_selection(raw: str | None, *, max_index: int, limit: int) -> list[dict[str, Any]]:
+    if not raw:
+        return []
+    match = re.search(r"\[.*\]", raw, flags=re.DOTALL)
+    if not match:
+        return []
+    try:
+        data = json.loads(match.group(0))
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    selection: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            index = int(entry.get("i"))
+        except (TypeError, ValueError):
+            continue
+        if index < 0 or index > max_index or index in seen:
+            continue
+        why = str(entry.get("why") or "").strip()
+        selection.append({"index": index, "why": why})
+        seen.add(index)
+        if len(selection) >= limit:
+            break
+    return selection
+
+
 def _group_clusters(
     clusters: Sequence[Mapping[str, Any]],
     items_by_cluster: Mapping[int, Sequence[SignalItem]],
@@ -218,6 +417,8 @@ def _rank_clusters(
             category_bonus = _idea_applicability_score(items)
         elif category == "travel_insights":
             category_bonus = _travel_applicability_score(items)
+        elif category == "news":
+            category_bonus = news_priority_score(items)
         return (
             float(level_rank),
             float(assessment.independent_source_count),
@@ -258,7 +459,6 @@ def _render_cluster(
 def _render_idea_cluster(cluster: Mapping[str, Any], items: Sequence[SignalItem], assessment) -> str:
     title = _clean_display_text(sanitize_trend_language(str(cluster.get("title") or "Идея без названия"), assessment))
     summary = _clean_display_text(sanitize_trend_language(str(cluster.get("summary") or ""), assessment))
-    evidence = _evidence_text(assessment)
     first_url = next((item.url for item in items if item.url), "")
     link = f' (<a href="{escape(first_url, quote=True)}">источник</a>)' if first_url else ""
     caveat = caveat_for_items(items, can_make_trend_claim=assessment.can_make_trend_claim)
@@ -266,7 +466,6 @@ def _render_idea_cluster(cluster: Mapping[str, Any], items: Sequence[SignalItem]
 
     parts = [
         f"• <b>Идея:</b> {escape(title)}{link}",
-        f"  <i>Доказательность: {escape(evidence)}</i>",
     ]
     if summary:
         parts.append(f"  <b>Боль / возможность:</b> {escape(summary)}")
@@ -277,8 +476,6 @@ def _render_idea_cluster(cluster: Mapping[str, Any], items: Sequence[SignalItem]
             f"  <b>Ограничение:</b> {escape(caveat)}",
         ]
     )
-    if not assessment.can_make_trend_claim:
-        parts.append("  <i>Осторожно: это вход для исследования, а не подтверждённый спрос.</i>")
     return "\n".join(parts)
 
 

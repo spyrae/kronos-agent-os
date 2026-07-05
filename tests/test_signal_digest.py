@@ -262,7 +262,8 @@ def test_render_ideas_digest_uses_product_format_and_limits_to_ten():
     assert "<b>Продуктовый угол:</b>" in rendered.body
     assert "<b>Почему сейчас:</b>" in rendered.body
     assert "<b>Ограничение:</b>" in rendered.body
-    assert "подтверждённый спрос" in rendered.body
+    assert "Доказательность:" not in rendered.body
+    assert "Осторожно" not in rendered.body
 
 
 def test_render_travel_digest_uses_journeybay_format_and_guardrails():
@@ -320,3 +321,91 @@ def test_save_rendered_digest_persists_dry_run(tmp_path, monkeypatch):
     assert digest["title"].startswith("[dry-run]")
     assert digest["cluster_ids"] == [9]
     assert digest["item_ids"] == [90]
+
+
+def test_curate_news_digest_annotates_selected_clusters_with_llm(monkeypatch):
+    from kronos.signals.digest import curate_news_digest
+
+    clusters = [
+        {"id": 1, "category": "news", "title": "Model X released", "summary": "New model shipped", "item_ids": [11]},
+    ]
+    items_by_cluster = {1: [_item("x_openai_devs", "x", "Model X released", "https://x.com/a/1")]}
+
+    class Response:
+        content = '```json\n[{"i": 0, "why": "Важный релиз модели"}]\n```'
+
+    monkeypatch.setattr("kronos.llm.is_runtime_llm_configured", lambda: True)
+    monkeypatch.setattr("kronos.llm.invoke_with_fallback", lambda messages, tier: Response())
+
+    rendered = render_digest("news", clusters, items_by_cluster, max_chars=10000)
+    curated = curate_news_digest(rendered, clusters, items_by_cluster)
+
+    assert "Model X released" in curated.body
+    assert "<i>Почему важно:</i> Важный релиз модели" in curated.body
+    assert 'href="https://x.com/a/1"' in curated.body
+    assert curated.cluster_ids == (1,)
+
+
+def test_curate_news_digest_falls_back_without_llm(monkeypatch):
+    from kronos.signals.digest import curate_news_digest
+
+    monkeypatch.setattr("kronos.llm.is_runtime_llm_configured", lambda: False)
+
+    clusters = [{"id": 1, "category": "news", "title": "Something", "summary": "x", "item_ids": [11]}]
+    items_by_cluster = {1: [_item("x_openai_devs", "x", "Something", "https://x.com/a/1")]}
+    rendered = render_digest("news", clusters, items_by_cluster, max_chars=10000)
+
+    curated = curate_news_digest(rendered, clusters, items_by_cluster)
+
+    assert curated.body == rendered.body
+    assert "Почему важно:" not in curated.body
+
+
+def test_synthesize_ideas_digest_replaces_body_with_generated_ideas(monkeypatch):
+    from kronos.signals.digest import synthesize_ideas_digest
+
+    clusters = [{"id": 1, "category": "ideas", "title": "Looking for a tool", "summary": "I wish", "item_ids": [1]}]
+    items_by_cluster = {
+        1: [_item("reddit_ai_agents", "reddit", "I wish there was a tool", categories=("ideas",))]
+    }
+
+    generated = (
+        "• <b>Идея:</b> Авто-саммари сообществ\n"
+        "  <b>Проблема:</b> Ручной мониторинг Reddit\n"
+        "  <b>Суть:</b> Бот, который собирает боли\n"
+        "  <b>Для кого:</b> Продакты\n"
+        "  <b>Почему сейчас:</b> LLM подешевели\n"
+        "  <b>Первый шаг:</b> Лендинг + вейтлист\n"
+        "  <i>Релевантность тебе:</i> высокая — dev-tools"
+    )
+
+    class Response:
+        content = generated
+
+    monkeypatch.setattr("kronos.llm.is_runtime_llm_configured", lambda: True)
+    monkeypatch.setattr("kronos.llm.invoke_with_fallback", lambda messages, tier: Response())
+
+    rendered = render_digest("ideas", clusters, items_by_cluster, max_chars=10000)
+    synthesized = synthesize_ideas_digest(rendered, clusters, items_by_cluster)
+
+    assert "Авто-саммари сообществ" in synthesized.body
+    assert "<b>Проблема:</b>" in synthesized.body
+    assert "Релевантность тебе:" in synthesized.body
+    assert synthesized.body.startswith("<b>Продуктовые и бизнес-идеи")
+
+
+def test_synthesize_ideas_digest_falls_back_without_llm(monkeypatch):
+    from kronos.signals.digest import synthesize_ideas_digest
+
+    monkeypatch.setattr("kronos.llm.is_runtime_llm_configured", lambda: False)
+
+    clusters = [{"id": 1, "category": "ideas", "title": "Looking for a tool", "summary": "I wish", "item_ids": [1]}]
+    items_by_cluster = {
+        1: [_item("reddit_ai_agents", "reddit", "I wish there was a tool", categories=("ideas",))]
+    }
+    rendered = render_digest("ideas", clusters, items_by_cluster, max_chars=10000)
+
+    synthesized = synthesize_ideas_digest(rendered, clusters, items_by_cluster)
+
+    assert synthesized.body == rendered.body
+    assert "<b>Идея:</b>" in synthesized.body

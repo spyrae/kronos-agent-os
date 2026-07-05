@@ -1,9 +1,16 @@
 """Signal Intelligence primitives."""
 
 from kronos.signals.clustering import DeduplicationResult, deduplicate_items
-from kronos.signals.digest import RenderedDigest, render_digest, save_rendered_digest
+from kronos.signals.digest import (
+    RenderedDigest,
+    curate_news_digest,
+    render_digest,
+    save_rendered_digest,
+    synthesize_ideas_digest,
+)
 from kronos.signals.ideas import idea_signal_score, is_idea_signal
 from kronos.signals.models import SignalCluster, SignalDigest, SignalItem, StoreWriteResult
+from kronos.signals.news import is_news_signal, news_priority_score, news_signal_score
 from kronos.signals.pipeline import SignalDigestRun, run_signal_digest
 from kronos.signals.quality import SourceQualityAudit, SourceRecommendation, build_source_quality_audit
 from kronos.signals.routing import DigestRoute, route_for_category
@@ -33,16 +40,21 @@ __all__ = [
     "StoreWriteResult",
     "assess_evidence",
     "build_source_quality_audit",
+    "curate_news_digest",
     "deduplicate_items",
     "idea_signal_score",
     "is_idea_signal",
+    "is_news_signal",
     "is_travel_insight",
     "load_sources",
+    "news_priority_score",
+    "news_signal_score",
     "render_digest",
     "route_for_category",
     "run_signal_digest",
     "run_signal_dry_run",
     "sanitize_trend_language",
     "save_rendered_digest",
+    "synthesize_ideas_digest",
     "travel_insight_score",
 ]

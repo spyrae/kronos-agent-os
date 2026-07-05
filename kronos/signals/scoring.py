@@ -88,7 +88,7 @@ def score_item(item: SignalItem, source: SignalSource | None = None) -> float:
     if "jb_" in ",".join(item.categories) or "travel_insights" in item.categories:
         score += 10
 
-    score += min(_engagement_score(item), 30)
+    score += min(engagement_score(item), 30)
     score = max(0.0, min(100.0, score))
     return score
 
@@ -116,7 +116,7 @@ def assess_evidence(
             expert_count += 1
         item_score = item.importance_score or score_item(item, source)
         score += item_score
-        max_engagement = max(max_engagement, _engagement_score(item), item.importance_score)
+        max_engagement = max(max_engagement, engagement_score(item), item.importance_score)
 
     independent_count = len(source_ids)
     platform_count = len(platforms)
@@ -212,7 +212,8 @@ def _is_official(item: SignalItem, source: SignalSource | None) -> bool:
     return item.source_platform in OFFICIAL_PLATFORMS or bool(source and source.trust == "official")
 
 
-def _engagement_score(item: SignalItem) -> float:
+def engagement_score(item: SignalItem) -> float:
+    """Return a 0..100 engagement proxy from views/reactions/score payload."""
     payload = item.raw_payload or {}
     views = _number(payload.get("views"))
     reactions = _number(payload.get("reactions"))

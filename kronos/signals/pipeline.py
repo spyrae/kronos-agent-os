@@ -8,12 +8,20 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from kronos.signals.digest import RenderedDigest, polish_rendered_digest, render_digest, save_rendered_digest
+from kronos.signals.digest import (
+    RenderedDigest,
+    curate_news_digest,
+    polish_rendered_digest,
+    render_digest,
+    save_rendered_digest,
+    synthesize_ideas_digest,
+)
 from kronos.signals.fetchers import FetchOptions, FetchResult, fetch_sources
 from kronos.signals.fetchers.runner import Fetcher
 from kronos.signals.ideas import idea_signal_score, is_idea_signal
 from kronos.signals.jobs import is_job_signal, job_signal_score
 from kronos.signals.models import SignalCluster, SignalItem
+from kronos.signals.news import is_news_signal, news_signal_score
 from kronos.signals.routing import topic_id_for_category
 from kronos.signals.scoring import assess_evidence, score_item
 from kronos.signals.sources import SignalSource, load_sources
@@ -47,6 +55,7 @@ async def run_signal_digest(
     source_limit: int | None = None,
     fetch_limit: int = 8,
     polish: bool = False,
+    curate: bool = False,
 ) -> SignalDigestRun:
     """Fetch, score, cluster, render and optionally send one category digest."""
     registry = load_sources(sources_path)
@@ -68,6 +77,11 @@ async def run_signal_digest(
     saved_records = _save_scored_items(signal_store, fetch_results, sources_by_id, category=category)
     clusters, items_by_cluster = _create_clusters(signal_store, category, saved_records, sources_by_id)
     rendered = render_digest(category, clusters, items_by_cluster, sources_by_id=sources_by_id)
+    if curate:
+        if category == "news":
+            rendered = curate_news_digest(rendered, clusters, items_by_cluster, sources_by_id=sources_by_id)
+        elif category == "ideas":
+            rendered = synthesize_ideas_digest(rendered, clusters, items_by_cluster, sources_by_id=sources_by_id)
     if polish:
         rendered = polish_rendered_digest(rendered)
     digest_id = save_rendered_digest(signal_store, rendered, dry_run=dry_run)
@@ -117,6 +131,8 @@ def _save_scored_items(
                 continue
             if category == "ideas" and not is_idea_signal(item):
                 continue
+            if category == "news" and not is_news_signal(item, source):
+                continue
             if category == "travel_insights" and not is_travel_insight(item):
                 continue
             item_score = item.importance_score or score_item(item, source)
@@ -124,6 +140,8 @@ def _save_scored_items(
                 item_score = max(item_score, job_signal_score(item))
             if category == "ideas":
                 item_score = max(item_score, idea_signal_score(item))
+            if category == "news":
+                item_score = max(item_score, news_signal_score(item))
             if category == "travel_insights":
                 item_score = max(item_score, travel_insight_score(item))
             confidence = item.confidence_score or min(100.0, item_score)

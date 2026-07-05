@@ -15,7 +15,7 @@ async def run_news_monitor() -> None:
 
     from kronos.signals.pipeline import run_signal_digest
 
-    run = await run_signal_digest("news", topic_id=TOPIC_DIGEST_NEWS, polish=True)
+    run = await run_signal_digest("news", topic_id=TOPIC_DIGEST_NEWS, polish=True, curate=True)
     if not run.sent and run.saved_item_count == 0:
         log.info("No signal news items collected; sending compatibility empty digest notice")
         send_bot_api(run.rendered.body, parse_mode="HTML", topic_id=TOPIC_DIGEST_NEWS)
