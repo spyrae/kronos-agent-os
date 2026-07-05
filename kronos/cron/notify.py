@@ -159,11 +159,57 @@ def _markdown_to_html(text: str) -> str:
     return text
 
 
+_TG_ALLOWED_TAGS = {"b", "strong", "i", "em", "u", "s", "a", "code", "pre"}
+_HTML_TAG_RE = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9]*)((?:\s[^<>]*)?)>")
+_STRAY_AMP_RE = re.compile(r"&(?!amp;|lt;|gt;|quot;|#\d+;|#x[0-9a-fA-F]+;)")
+
+
+def _escape_html_text(segment: str) -> str:
+    """Escape stray HTML specials in a plain-text segment (keeps valid entities)."""
+    segment = _STRAY_AMP_RE.sub("&amp;", segment)
+    return segment.replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _telegram_safe_html(text: str) -> str:
+    """Return Telegram-valid HTML: escape stray specials, balance allowed tags.
+
+    Text between tags is entity-escaped; unknown tags are escaped to literal
+    text; allowed tags are kept but balanced (orphan closers dropped, unclosed
+    openers closed) so Telegram's parser never rejects the message and falls
+    back to raw-tag plain text.
+    """
+    out: list[str] = []
+    stack: list[str] = []
+    pos = 0
+    for match in _HTML_TAG_RE.finditer(text):
+        out.append(_escape_html_text(text[pos:match.start()]))
+        pos = match.end()
+        closing, name, attrs = match.group(1), match.group(2).lower(), match.group(3)
+        if name not in _TG_ALLOWED_TAGS:
+            out.append(_escape_html_text(match.group(0)))
+            continue
+        if not closing:
+            stack.append(name)
+            out.append(f"<{name}{attrs}>")
+        elif name in stack:
+            while stack:
+                top = stack.pop()
+                out.append(f"</{top}>")
+                if top == name:
+                    break
+        # orphan closing tag with no matching opener → dropped
+    out.append(_escape_html_text(text[pos:]))
+    while stack:
+        out.append(f"</{stack.pop()}>")
+    return "".join(out)
+
+
 def _sanitize_html(text: str) -> str:
     """Strip full HTML documents down to body content for Telegram.
 
     Also normalises Markdown LLMs commonly emit into Telegram-supported HTML
-    (see _markdown_to_html).
+    (see _markdown_to_html) and guarantees Telegram-valid HTML via
+    _telegram_safe_html.
     """
     # LLMs sometimes wrap output in <!DOCTYPE html>...<body>...</body>
     body_match = re.search(r"<body[^>]*>(.*)</body>", text, re.DOTALL | re.IGNORECASE)
@@ -176,6 +222,9 @@ def _sanitize_html(text: str) -> str:
     text = re.sub(r"</?(?:html|head|body|meta|title|div|span|p|br\s*/?|h[1-6]|ul|ol|li|table|tr|td|th|thead|tbody|img|hr)[^>]*>", "", text, flags=re.IGNORECASE)
     # Collapse multiple newlines
     text = re.sub(r"\n{3,}", "\n\n", text)
+    # Final pass: escape stray &<> and balance tags so Telegram never rejects
+    # the HTML (LLMs occasionally emit an orphan </i> or an unescaped &).
+    text = _telegram_safe_html(text)
     return text.strip()
 
 
