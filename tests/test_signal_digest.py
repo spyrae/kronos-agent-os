@@ -382,8 +382,12 @@ def test_synthesize_ideas_digest_replaces_body_with_generated_ideas(monkeypatch)
     class Response:
         content = generated
 
+    class FakeOrchestrator:
+        def invoke(self, messages):
+            return Response()
+
     monkeypatch.setattr("kronos.llm.is_runtime_llm_configured", lambda: True)
-    monkeypatch.setattr("kronos.llm.invoke_with_fallback", lambda messages, tier: Response())
+    monkeypatch.setattr("kronos.llm.get_orchestrator_model", lambda: FakeOrchestrator())
 
     rendered = render_digest("ideas", clusters, items_by_cluster, max_chars=10000)
     synthesized = synthesize_ideas_digest(rendered, clusters, items_by_cluster)

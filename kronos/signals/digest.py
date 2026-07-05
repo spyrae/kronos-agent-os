@@ -295,7 +295,9 @@ def synthesize_ideas_digest(
         "по-русски, кроме брендов и названий.\n\n"
         f"{_numbered_candidate_catalog(candidates)}"
     )
-    raw = _invoke_editor(IDEAS_EDITOR_SYSTEM, prompt)
+    # Idea synthesis is a creative/analytical task — run it on the orchestrator
+    # (Codex/gpt-5.5), not the lite tier. News curation stays on lite.
+    raw = _invoke_editor(IDEAS_EDITOR_SYSTEM, prompt, use_orchestrator=True)
     if not raw:
         return rendered
     body_inner = _clean_digest_markup(raw)
@@ -317,18 +319,24 @@ def _numbered_candidate_catalog(candidates: Sequence[Mapping[str, Any]]) -> str:
     return "\n\n".join(entries)
 
 
-def _invoke_editor(system_prompt: str, prompt: str) -> str | None:
+def _invoke_editor(system_prompt: str, prompt: str, *, use_orchestrator: bool = False) -> str | None:
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        from kronos.llm import ModelTier, invoke_with_fallback, is_runtime_llm_configured
+        from kronos.llm import (
+            ModelTier,
+            get_orchestrator_model,
+            invoke_with_fallback,
+            is_runtime_llm_configured,
+        )
 
         if not is_runtime_llm_configured():
             return None
-        response = invoke_with_fallback(
-            [SystemMessage(content=system_prompt), HumanMessage(content=prompt)],
-            tier=ModelTier.LITE,
-        )
+        messages = [SystemMessage(content=system_prompt), HumanMessage(content=prompt)]
+        if use_orchestrator:
+            response = get_orchestrator_model().invoke(messages)
+        else:
+            response = invoke_with_fallback(messages, tier=ModelTier.LITE)
         content = response.content if isinstance(response.content, str) else str(response.content)
         return content.strip() or None
     except Exception:
