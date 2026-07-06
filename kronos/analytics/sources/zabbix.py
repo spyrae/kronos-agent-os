@@ -58,6 +58,7 @@ def collect() -> dict:
             "limit": 20,
             "severities": [2, 3, 4, 5],  # Warning, Average, High, Disaster
             "selectHosts": ["host"],
+            "suppressed": False,  # exclude problems intentionally suppressed in Zabbix
         })
 
         # Active triggers
@@ -70,21 +71,34 @@ def collect() -> dict:
         })
 
         hosts_total = len(hosts)
-        critical_triggers = [t for t in triggers if int(t.get("priority", "0")) >= 4]
-        warning_triggers = [t for t in triggers if int(t.get("priority", "0")) in (2, 3)]
+
+        # "Update available" notifications (diun) are informational only — pending
+        # Docker image updates, not a health issue. They must NOT influence the
+        # assessment (counts / summary). Split them out; report count separately.
+        def _is_update(text: str) -> bool:
+            t = (text or "").lower()
+            return "обновлени" in t or "update available" in t
+
+        real_problems = [p for p in problems if not _is_update(p.get("name", ""))]
+        updates_available = [p for p in problems if _is_update(p.get("name", ""))]
+        real_triggers = [t for t in triggers if not _is_update(t.get("description", ""))]
+
+        critical_triggers = [t for t in real_triggers if int(t.get("priority", "0")) >= 4]
+        warning_triggers = [t for t in real_triggers if int(t.get("priority", "0")) in (2, 3)]
 
         problems_summary = []
-        for p in problems[:5]:
+        for p in real_problems[:5]:
             host = p.get("hosts", [{}])[0].get("host", "unknown")
             name = p.get("name", "Unknown problem")
             problems_summary.append(f"{name} on {host}")
 
         return {
             "hosts_total": hosts_total,
-            "active_problems": len(problems),
+            "active_problems": len(real_problems),
             "critical_triggers": len(critical_triggers),
             "warning_triggers": len(warning_triggers),
             "problems_summary": problems_summary,
+            "updates_available": len(updates_available),  # informational only, not a health issue
         }
 
     except Exception as e:
