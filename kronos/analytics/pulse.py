@@ -73,6 +73,8 @@ Generate a concise daily pulse:
 
 If a data source returned an error, note it as "⚠️ Source unavailable" — don't skip the section.
 
+Note: Zabbix `updates_available` = count of pending Docker image updates. It is informational ONLY — never treat it as a 🔴/🟡 signal, never list it under "Issues requiring attention", and never let it affect the overall status. Mention it at most as a neutral one-liner under Infrastructure.
+
 Write in Russian. Format for Telegram — use emoji, keep it under 1800 chars.
 Be specific with numbers, don't be vague."""
 
