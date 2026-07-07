@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.parse
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -187,6 +188,71 @@ NEWS_EDITOR_CANDIDATE_MULTIPLIER = 2
 IDEAS_EDITOR_CANDIDATE_LIMIT = 20
 DEFAULT_MAX_IDEAS = 8
 
+# Human-readable source names by domain — turns a bare "источник" link into a
+# recognizable label (Hugging Face, GitHub, Telegram…). Unknown hosts fall back
+# to the bare domain, which still reads better than a generic "источник".
+_SOURCE_LABELS = {
+    "huggingface.co": "Hugging Face",
+    "github.com": "GitHub",
+    "gitlab.com": "GitLab",
+    "reddit.com": "Reddit",
+    "x.com": "X",
+    "twitter.com": "X",
+    "t.me": "Telegram",
+    "telegram.me": "Telegram",
+    "youtube.com": "YouTube",
+    "youtu.be": "YouTube",
+    "arxiv.org": "arXiv",
+    "habr.com": "Habr",
+    "medium.com": "Medium",
+    "substack.com": "Substack",
+    "openai.com": "OpenAI",
+    "anthropic.com": "Anthropic",
+    "blog.google": "Google",
+    "techcrunch.com": "TechCrunch",
+    "theverge.com": "The Verge",
+    "venturebeat.com": "VentureBeat",
+}
+
+
+def _source_label(url: str) -> str:
+    """Human-readable source name from a URL (bare domain fallback, then 'источник')."""
+    if not url:
+        return "источник"
+    try:
+        host = urllib.parse.urlsplit(url).netloc.lower()
+    except (ValueError, TypeError):
+        return "источник"
+    host = host.removeprefix("www.")
+    for domain, label in _SOURCE_LABELS.items():
+        if host == domain or host.endswith("." + domain):
+            return label
+    return host or "источник"
+
+
+def _news_insights(titles: Sequence[str]) -> str | None:
+    """Synthesize a short 'trends of the day' note from the selected headlines.
+
+    Returns None when the LLM is unavailable or yields nothing usable, so the
+    caller simply omits the block — this never breaks the digest.
+    """
+    clean_titles = [t for t in titles if t]
+    if len(clean_titles) < 3:
+        return None
+    joined = "\n".join(f"- {t}" for t in clean_titles[:12])
+    prompt = (
+        "Вот заголовки главных новостей сегодняшнего AI/tech-дайджеста:\n\n"
+        f"{joined}\n\n"
+        "Сформулируй 2-3 предложения об общих трендах и выводах дня: что "
+        "связывает эти новости и куда движется индустрия. Только суть, без "
+        "вступления и списков. По-русски."
+    )
+    raw = _invoke_editor(NEWS_EDITOR_SYSTEM, prompt)
+    if not raw:
+        return None
+    text = _clean_display_text(raw, limit=600)
+    return text or None
+
 
 def curate_news_digest(
     rendered: RenderedDigest,
@@ -229,21 +295,32 @@ def curate_news_digest(
     lines = [f"<b>{escape(rendered.title)}</b>", ""]
     chosen_cluster_ids: list[int] = []
     chosen_item_ids: list[int] = []
+    chosen_titles: list[str] = []
     for entry in selection:
         cluster = candidates[entry["index"]]
         cluster_id = int(cluster.get("id", 0) or 0)
         items = tuple(items_by_cluster.get(cluster_id, ()))
         title = _clean_display_text(str(cluster.get("title") or "Без названия"))
         first_url = next((item.url for item in items if item.url), "")
-        link = f' (<a href="{escape(first_url, quote=True)}">источник</a>)' if first_url else ""
+        link = (
+            f' (<a href="{escape(first_url, quote=True)}">{escape(_source_label(first_url))}</a>)'
+            if first_url
+            else ""
+        )
         lines.append(f"• <b>{escape(title)}</b>{link}")
         why = _clean_display_text(entry["why"], limit=280)
         if why:
             lines.append(f"  <i>Почему важно:</i> {escape(why)}")
         lines.append("")  # blank line separates items for readability
+        chosen_titles.append(title)
         if cluster_id:
             chosen_cluster_ids.append(cluster_id)
         chosen_item_ids.extend(int(i) for i in (cluster.get("item_ids") or []) if i)
+
+    insight = _news_insights(chosen_titles)
+    if insight:
+        lines.append("<b>💡 Инсайты дня:</b>")
+        lines.append(f"  {escape(insight)}")
 
     body = "\n".join(lines).strip()
     return replace(
@@ -455,7 +532,7 @@ def _render_cluster(
     title = _clean_display_text(sanitize_trend_language(str(cluster.get("title") or "Без названия"), assessment))
     summary = _clean_display_text(sanitize_trend_language(str(cluster.get("summary") or ""), assessment))
     first_url = next((item.url for item in items if item.url), "")
-    link = f' (<a href="{escape(first_url, quote=True)}">источник</a>)' if first_url else ""
+    link = f' (<a href="{escape(first_url, quote=True)}">{escape(_source_label(first_url))}</a>)' if first_url else ""
 
     parts = [
         f"• <b>{escape(title)}</b>{link}",
