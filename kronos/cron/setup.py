@@ -28,7 +28,8 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.analytics_weekly import run_analytics_weekly
     from kronos.cron.expenses.processor import run_email_expenses
     from kronos.cron.expense_digest import run_expense_digest
-    from kronos.cron.group_digest import run_group_digest
+    # DISABLED 2026-07-07: group-digest paused — duplicate of news-monitor on Digest:News.
+    # from kronos.cron.group_digest import run_group_digest
     from kronos.cron.heartbeat import run_heartbeat
     from kronos.cron.market_review import run_market_review
     from kronos.cron.news_monitor import run_news_monitor
@@ -60,8 +61,14 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # Personal Observer — daily at 23:00 UTC (07:00 UTC+8), avoids 00:00/01:00 digest conflicts.
     scheduler.add_daily("personal-observer", run_personal_observer, hour_utc=23)
 
-    # Group Digest — daily at 01:00 UTC (09:00 UTC+8)
-    scheduler.add_daily("group-digest", run_group_digest, hour_utc=1)
+    # Group Digest — daily at 01:00 UTC (09:00 UTC+8).
+    # DISABLED 2026-07-07: paused — news-monitor (Signal Intelligence) already
+    # publishes to the same Digest:News topic at 00:00 UTC, so group-digest at
+    # 01:00 produced a second, duplicate message. GROUPS.md Telegram sources are
+    # kept intact for a future merge into Signal Intelligence. To re-enable:
+    # uncomment the import above + this line, bump the job count below back to
+    # 15, then restart the kronos agent.
+    # scheduler.add_daily("group-digest", run_group_digest, hour_utc=1)
 
     # Jobs Digest — daily at 02:00 UTC (dedicated Signal Intelligence topic).
     # DISABLED 2026-06-11: paused — job-search signals are not being collected
@@ -144,5 +151,5 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
         nexus_jobs_registered = 4
 
-    total = 15 + nexus_jobs_registered  # 18 base jobs; signal-jobs, travel insights and people-scout paused
+    total = 14 + nexus_jobs_registered  # 18 base jobs; signal-jobs, travel insights, people-scout and group-digest paused
     log.info("%d cron jobs registered for agent '%s'", total, me)
