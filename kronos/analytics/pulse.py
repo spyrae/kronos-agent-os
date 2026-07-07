@@ -75,6 +75,8 @@ If a data source returned an error, note it as "⚠️ Source unavailable" — d
 
 Note: Zabbix `updates_available` = count of pending Docker image updates. It is informational ONLY — never treat it as a 🔴/🟡 signal, never list it under "Issues requiring attention", and never let it affect the overall status. Mention it at most as a neutral one-liner under Infrastructure.
 
+Note: For Sentry, base the status and "Issues requiring attention" ONLY on `unresolved_active_24h` and `top_issues_active_24h` (issues actually seen in the last 24h). `unresolved_total` is the historical backlog and `total_events_all_time` is a lifetime counter — never present a large all-time count as a fresh spike or as today's problem. If `unresolved_active_24h` is 0, Sentry is calm regardless of backlog size.
+
 Write in Russian. Format for Telegram — use emoji, keep it under 1800 chars.
 Be specific with numbers, don't be vague."""
 
