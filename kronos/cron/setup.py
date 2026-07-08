@@ -35,6 +35,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.handoff import run_handoff_intake
     from kronos.cron.heartbeat import run_heartbeat
     from kronos.cron.market_review import run_market_review
+    from kronos.cron.memory_ask import run_memory_intake
     from kronos.cron.news_monitor import run_news_monitor
     from kronos.cron.personal_observer import run_daily_scope, run_personal_observer
     from kronos.cron.reminders import run_due_reminders
@@ -67,6 +68,9 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
 
     # Council intake — contribute positions + synthesize, poll every 30s (5.2)
     scheduler.add_periodic("council-intake", run_council_intake, interval_seconds=30)
+
+    # Cross-agent memory query intake — poll every 30s (roadmap 5.3)
+    scheduler.add_periodic("memory-intake", run_memory_intake, interval_seconds=30)
 
     # News Monitor — daily at 00:00 UTC (was: kronos-news-monitor.timer)
     scheduler.add_daily("news-monitor", run_news_monitor, hour_utc=0)
@@ -164,5 +168,5 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
         nexus_jobs_registered = 4
 
-    total = 17 + nexus_jobs_registered  # +user-reminders +handoff-intake +council-intake; signal-jobs, travel insights, people-scout and group-digest paused
+    total = 18 + nexus_jobs_registered  # +user-reminders +handoff/council/memory intake; signal-jobs, travel insights, people-scout and group-digest paused
     log.info("%d cron jobs registered for agent '%s'", total, me)

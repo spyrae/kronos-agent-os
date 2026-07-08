@@ -237,6 +237,23 @@ def _schema(conn) -> None:
             created_at REAL NOT NULL,
             UNIQUE (session_id, agent_name)
         );
+
+        -- Cross-agent memory queries (roadmap 5.3): each agent has a private
+        -- Mem0/FTS, so one agent asks another "what do you have on X" and the
+        -- target shares from its own memory. Fire-and-forget into the chat.
+        CREATE TABLE IF NOT EXISTS memory_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            topic_id INTEGER NOT NULL DEFAULT 0,
+            thread_id TEXT NOT NULL,
+            from_agent TEXT NOT NULL,
+            to_agent TEXT NOT NULL,
+            query TEXT NOT NULL,
+            state TEXT NOT NULL CHECK (state IN ('pending','done','failed')),
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_requests_intake
+            ON memory_requests(to_agent, state, created_at);
         """
     )
     columns = {
@@ -700,6 +717,69 @@ class SwarmStore:
             "UPDATE council_sessions SET state = ? WHERE id = ?",
             ("done" if success else "failed", session_id),
         )
+
+    # ------------------------------------------------------------------
+    # Cross-agent memory queries (roadmap 5.3)
+    # ------------------------------------------------------------------
+
+    def create_memory_request(
+        self,
+        *,
+        chat_id: int,
+        topic_id: int | None,
+        thread_id: str,
+        from_agent: str,
+        to_agent: str,
+        query: str,
+    ) -> int:
+        """Queue a memory query for another agent. Returns its id."""
+        cursor = self._db.write(
+            """
+            INSERT INTO memory_requests
+                (chat_id, topic_id, thread_id, from_agent, to_agent,
+                 query, state, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+            """,
+            (chat_id, topic_id or 0, thread_id, from_agent, to_agent, query, time.time()),
+        )
+        return int(cursor.lastrowid)
+
+    def accept_next_memory_request(self, to_agent: str) -> dict | None:
+        """Atomically claim the oldest pending memory query for this agent."""
+
+        def _tx(conn):
+            row = conn.execute(
+                """
+                SELECT * FROM memory_requests
+                WHERE to_agent = ? AND state = 'pending'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (to_agent,),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "UPDATE memory_requests SET state = 'done' WHERE id = ?",
+                (row["id"],),
+            )
+            return dict(row)
+
+        return self._db.write_tx(_tx)
+
+    def complete_memory_request(self, request_id: int, *, success: bool = True) -> None:
+        self._db.write(
+            "UPDATE memory_requests SET state = ? WHERE id = ?",
+            ("done" if success else "failed", request_id),
+        )
+
+    def pending_memory_requests(self, to_agent: str) -> list[dict]:
+        rows = self._db.read(
+            "SELECT * FROM memory_requests WHERE to_agent = ? AND state = 'pending' "
+            "ORDER BY created_at",
+            (to_agent,),
+        )
+        return [dict(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Metrics

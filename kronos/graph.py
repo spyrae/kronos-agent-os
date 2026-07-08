@@ -139,11 +139,12 @@ class KronosAgent:
             [schedule_task, schedule_followup, list_scheduled_tasks, cancel_scheduled_task]
         )
 
-        # Cross-agent hand-off (roadmap 5.1) + council (5.2)
+        # Swarm collaboration: hand-off (5.1) + council (5.2) + memory query (5.3)
         from kronos.tools.council import convene_council
         from kronos.tools.handoff import handoff_to_agent
+        from kronos.tools.memory_ask import ask_agent_memory
 
-        self._tools.extend([handoff_to_agent, convene_council])
+        self._tools.extend([handoff_to_agent, convene_council, ask_agent_memory])
 
         # Composio tools
         from kronos.tools.composio_integration import get_composio_tools
