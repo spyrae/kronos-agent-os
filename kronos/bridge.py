@@ -50,8 +50,27 @@ if not DEFAULT_NOTIFY_CHAT and settings.telegram_swarm_chat_id:
         else settings.telegram_swarm_chat_id
     )
 
-# Agent lock — one request at a time
-_agent_lock = asyncio.Lock()
+# Per-thread serialization + bounded global concurrency. A single heavy ReAct
+# cycle (up to 25 turns × 120s tool timeout) must not block every other
+# chat/topic/DM/peer-reaction. Each thread_id runs its turns in order (history
+# consistency); the semaphore caps how many threads hit the LLM API at once.
+_agent_semaphore = asyncio.Semaphore(int(os.environ.get("AGENT_MAX_CONCURRENCY", "3")))
+_thread_locks: dict[str, asyncio.Lock] = {}
+
+
+def _thread_lock(thread_id: str) -> asyncio.Lock:
+    """Return the per-thread lock, creating it on first use.
+
+    Synchronous on purpose: with no await between the get and the set, the
+    asyncio event loop can't interleave two calls, so there's no race and no
+    guard lock is needed. thread_id space is bounded by active chats×topics
+    (tens for a personal swarm), so the dict is never evicted.
+    """
+    lock = _thread_locks.get(thread_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _thread_locks[thread_id] = lock
+    return lock
 
 # Agent reference (set in run_bridge)
 _agent: KronosAgent | None = None
@@ -897,7 +916,7 @@ async def _ask_agent(
     reply = None
 
     try:
-        async with _agent_lock:
+        async with _thread_lock(thread_id), _agent_semaphore:
             reply = await _agent.ainvoke(
                 message=message,
                 thread_id=thread_id,
@@ -1211,8 +1230,10 @@ async def run_bridge(agent: KronosAgent) -> None:
         topic_id = await _approval_callback_topic_id(event, pending)
         approved = action == "approve"
         await event.answer("Approved" if approved else "Rejected")
+        # Serialize the resolve against new messages on the same thread.
+        approval_thread = str(pending["thread_id"]) if pending else f"approval:{approval_id}"
         try:
-            async with _agent_lock:
+            async with _thread_lock(approval_thread), _agent_semaphore:
                 reply = await _agent.resolve_tool_approval(
                     approval_id,
                     approved=approved,
