@@ -193,6 +193,67 @@ def _schema(conn) -> None:
             ON feedback(agent_name, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_feedback_reaction
             ON feedback(reaction, created_at DESC);
+
+        -- Cross-agent hand-off queue (roadmap 5.1): agent A routes a request it
+        -- deems out of its domain to profile agent B, who polls its pending
+        -- rows and answers — instead of A going silent or replying worse.
+        CREATE TABLE IF NOT EXISTS handoffs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            topic_id INTEGER NOT NULL DEFAULT 0,
+            thread_id TEXT NOT NULL,
+            from_agent TEXT NOT NULL,
+            to_agent TEXT NOT NULL,
+            context TEXT NOT NULL,
+            state TEXT NOT NULL CHECK (state IN ('pending','accepted','done','failed')),
+            created_at REAL NOT NULL,
+            accepted_at REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_handoffs_intake
+            ON handoffs(to_agent, state, created_at);
+
+        -- Council sessions (roadmap 5.2): a structured multi-agent debate. The
+        -- initiator convenes N participants who each submit an independent
+        -- position; once all are in, the initiator synthesizes one answer.
+        CREATE TABLE IF NOT EXISTS council_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            topic_id INTEGER NOT NULL DEFAULT 0,
+            thread_id TEXT NOT NULL,
+            initiator TEXT NOT NULL,
+            question TEXT NOT NULL,
+            participants TEXT NOT NULL,
+            state TEXT NOT NULL CHECK (state IN ('gathering','synthesizing','done','failed')),
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_council_state
+            ON council_sessions(state, initiator);
+
+        CREATE TABLE IF NOT EXISTS council_positions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            agent_name TEXT NOT NULL,
+            position TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            UNIQUE (session_id, agent_name)
+        );
+
+        -- Cross-agent memory queries (roadmap 5.3): each agent has a private
+        -- Mem0/FTS, so one agent asks another "what do you have on X" and the
+        -- target shares from its own memory. Fire-and-forget into the chat.
+        CREATE TABLE IF NOT EXISTS memory_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            topic_id INTEGER NOT NULL DEFAULT 0,
+            thread_id TEXT NOT NULL,
+            from_agent TEXT NOT NULL,
+            to_agent TEXT NOT NULL,
+            query TEXT NOT NULL,
+            state TEXT NOT NULL CHECK (state IN ('pending','done','failed')),
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_requests_intake
+            ON memory_requests(to_agent, state, created_at);
         """
     )
     columns = {
@@ -480,6 +541,245 @@ class SwarmStore:
             (chat_id, topic_id or 0, root_msg_id),
         )
         return int(row["c"]) if row else 0
+
+    # ------------------------------------------------------------------
+    # Cross-agent hand-offs (roadmap 5.1)
+    # ------------------------------------------------------------------
+
+    def create_handoff(
+        self,
+        *,
+        chat_id: int,
+        topic_id: int | None,
+        thread_id: str,
+        from_agent: str,
+        to_agent: str,
+        context: str,
+    ) -> int:
+        """Queue a hand-off from one agent to another. Returns its id."""
+        cursor = self._db.write(
+            """
+            INSERT INTO handoffs
+                (chat_id, topic_id, thread_id, from_agent, to_agent,
+                 context, state, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+            """,
+            (chat_id, topic_id or 0, thread_id, from_agent, to_agent, context, time.time()),
+        )
+        return int(cursor.lastrowid)
+
+    def accept_next_handoff(self, to_agent: str) -> dict | None:
+        """Atomically claim the oldest pending hand-off for this agent.
+
+        Runs under an IMMEDIATE transaction so overlapping intake polls never
+        process the same row twice. Returns the row as a dict, or None.
+        """
+
+        def _tx(conn):
+            row = conn.execute(
+                """
+                SELECT * FROM handoffs
+                WHERE to_agent = ? AND state = 'pending'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (to_agent,),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "UPDATE handoffs SET state = 'accepted', accepted_at = ? WHERE id = ?",
+                (time.time(), row["id"]),
+            )
+            return dict(row)
+
+        return self._db.write_tx(_tx)
+
+    def complete_handoff(self, handoff_id: int, *, success: bool = True) -> None:
+        self._db.write(
+            "UPDATE handoffs SET state = ? WHERE id = ?",
+            ("done" if success else "failed", handoff_id),
+        )
+
+    def pending_handoffs(self, to_agent: str) -> list[dict]:
+        rows = self._db.read(
+            "SELECT * FROM handoffs WHERE to_agent = ? AND state = 'pending' "
+            "ORDER BY created_at",
+            (to_agent,),
+        )
+        return [dict(row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Council sessions (roadmap 5.2)
+    # ------------------------------------------------------------------
+
+    def create_council(
+        self,
+        *,
+        chat_id: int,
+        topic_id: int | None,
+        thread_id: str,
+        initiator: str,
+        question: str,
+        participants: list[str],
+    ) -> int:
+        """Open a council gathering positions from participants. Returns its id."""
+        cursor = self._db.write(
+            """
+            INSERT INTO council_sessions
+                (chat_id, topic_id, thread_id, initiator, question,
+                 participants, state, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'gathering', ?)
+            """,
+            (
+                chat_id, topic_id or 0, thread_id, initiator, question,
+                ",".join(participants), time.time(),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    def pending_council_tasks(self, agent_name: str) -> list[dict]:
+        """Gathering sessions where this agent is a participant but hasn't
+        submitted a position yet."""
+        rows = self._db.read(
+            "SELECT * FROM council_sessions WHERE state = 'gathering' ORDER BY created_at"
+        )
+        result = []
+        for row in rows:
+            participants = [p for p in row["participants"].split(",") if p]
+            if agent_name not in participants:
+                continue
+            already = self._db.read_one(
+                "SELECT 1 FROM council_positions WHERE session_id = ? AND agent_name = ?",
+                (row["id"], agent_name),
+            )
+            if already is None:
+                result.append(dict(row))
+        return result
+
+    def submit_position(self, session_id: int, agent_name: str, position: str) -> None:
+        """Record an agent's independent position. Idempotent per participant."""
+        self._db.write(
+            "INSERT OR IGNORE INTO council_positions "
+            "(session_id, agent_name, position, created_at) VALUES (?, ?, ?, ?)",
+            (session_id, agent_name, position, time.time()),
+        )
+
+    def councils_awaiting_synthesis(self, initiator: str) -> list[dict]:
+        """Gathering sessions initiated by this agent (synthesis poll targets)."""
+        rows = self._db.read(
+            "SELECT * FROM council_sessions "
+            "WHERE state = 'gathering' AND initiator = ? ORDER BY created_at",
+            (initiator,),
+        )
+        return [dict(row) for row in rows]
+
+    def claim_synthesis(self, session_id: int, initiator: str) -> dict | None:
+        """If all participants have submitted and the session is still gathering,
+        atomically flip it to 'synthesizing' and return it. Otherwise None.
+
+        Runs under an IMMEDIATE transaction so only one synthesis fires.
+        """
+
+        def _tx(conn):
+            row = conn.execute(
+                "SELECT * FROM council_sessions "
+                "WHERE id = ? AND initiator = ? AND state = 'gathering'",
+                (session_id, initiator),
+            ).fetchone()
+            if row is None:
+                return None
+            participants = [p for p in row["participants"].split(",") if p]
+            (count,) = conn.execute(
+                "SELECT COUNT(*) FROM council_positions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if count < len(participants):
+                return None  # still gathering
+            conn.execute(
+                "UPDATE council_sessions SET state = 'synthesizing' WHERE id = ?",
+                (session_id,),
+            )
+            return dict(row)
+
+        return self._db.write_tx(_tx)
+
+    def get_positions(self, session_id: int) -> list[dict]:
+        rows = self._db.read(
+            "SELECT agent_name, position FROM council_positions "
+            "WHERE session_id = ? ORDER BY created_at",
+            (session_id,),
+        )
+        return [dict(row) for row in rows]
+
+    def complete_council(self, session_id: int, *, success: bool = True) -> None:
+        self._db.write(
+            "UPDATE council_sessions SET state = ? WHERE id = ?",
+            ("done" if success else "failed", session_id),
+        )
+
+    # ------------------------------------------------------------------
+    # Cross-agent memory queries (roadmap 5.3)
+    # ------------------------------------------------------------------
+
+    def create_memory_request(
+        self,
+        *,
+        chat_id: int,
+        topic_id: int | None,
+        thread_id: str,
+        from_agent: str,
+        to_agent: str,
+        query: str,
+    ) -> int:
+        """Queue a memory query for another agent. Returns its id."""
+        cursor = self._db.write(
+            """
+            INSERT INTO memory_requests
+                (chat_id, topic_id, thread_id, from_agent, to_agent,
+                 query, state, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+            """,
+            (chat_id, topic_id or 0, thread_id, from_agent, to_agent, query, time.time()),
+        )
+        return int(cursor.lastrowid)
+
+    def accept_next_memory_request(self, to_agent: str) -> dict | None:
+        """Atomically claim the oldest pending memory query for this agent."""
+
+        def _tx(conn):
+            row = conn.execute(
+                """
+                SELECT * FROM memory_requests
+                WHERE to_agent = ? AND state = 'pending'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (to_agent,),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "UPDATE memory_requests SET state = 'done' WHERE id = ?",
+                (row["id"],),
+            )
+            return dict(row)
+
+        return self._db.write_tx(_tx)
+
+    def complete_memory_request(self, request_id: int, *, success: bool = True) -> None:
+        self._db.write(
+            "UPDATE memory_requests SET state = ? WHERE id = ?",
+            ("done" if success else "failed", request_id),
+        )
+
+    def pending_memory_requests(self, to_agent: str) -> list[dict]:
+        rows = self._db.read(
+            "SELECT * FROM memory_requests WHERE to_agent = ? AND state = 'pending' "
+            "ORDER BY created_at",
+            (to_agent,),
+        )
+        return [dict(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Metrics
