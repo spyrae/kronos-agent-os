@@ -26,8 +26,9 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.analytics_alerts import run_analytics_alerts
     from kronos.cron.analytics_pulse import run_analytics_pulse
     from kronos.cron.analytics_weekly import run_analytics_weekly
-    from kronos.cron.expenses.processor import run_email_expenses
     from kronos.cron.expense_digest import run_expense_digest
+    from kronos.cron.expenses.processor import run_email_expenses
+
     # DISABLED 2026-07-07: group-digest paused — duplicate of news-monitor on Digest:News.
     # from kronos.cron.group_digest import run_group_digest
     from kronos.cron.heartbeat import run_heartbeat

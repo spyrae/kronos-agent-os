@@ -92,7 +92,7 @@ async def main():
         about = g["about"][:80] if g["about"] else ""
         print(f"| {i} | {g['title']} | {g['identifier']} | {members_str} | {about} |")
 
-    print(f"\n## Группы/супергруппы (чаты)\n")
+    print("\n## Группы/супергруппы (чаты)\n")
     print("| # | Name | ID | Members | Description |")
     print("|---|------|----|---------|-------------|")
     for i, g in enumerate(chats, 1):
