@@ -1,0 +1,29 @@
+name: Security Audit
+
+# Dependency vulnerability scanning runs on a schedule (not in the PR gate)
+# because a newly published CVE can turn audit red with no code change —
+# that must not block unrelated PRs. A failed run here emails the repo
+# owner; Dependabot (.github/dependabot.yml) opens the fix PRs.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  npm-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: dashboard-ui/package-lock.json
+      - run: npm ci
+        working-directory: dashboard-ui
+      - run: npm audit --audit-level=moderate
+        working-directory: dashboard-ui

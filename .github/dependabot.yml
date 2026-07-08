@@ -1,0 +1,31 @@
+version: 2
+
+# Dependabot opens the dependency-update PRs that security-audit.yml only
+# reports. minor/patch updates are grouped to keep PR noise low; majors and
+# security fixes still arrive as their own PRs so they get attention.
+updates:
+  - package-ecosystem: "npm"
+    directory: "/dashboard-ui"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      pip-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns: ["*"]

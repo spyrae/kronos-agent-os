@@ -45,8 +45,9 @@ jobs:
           cache-dependency-path: dashboard-ui/package-lock.json
       - run: npm ci
         working-directory: dashboard-ui
-      - run: npm audit --audit-level=moderate
-        working-directory: dashboard-ui
+      # npm audit intentionally NOT gated here: new CVEs turn PRs red without
+      # any code change. Dependency scanning lives in security-audit.yml
+      # (scheduled) + Dependabot instead.
       - run: npm run lint
         working-directory: dashboard-ui
       - run: npm run build
