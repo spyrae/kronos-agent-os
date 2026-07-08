@@ -6,6 +6,7 @@ import shutil
 import signal
 from pathlib import Path
 
+from kronos import __version__
 from kronos.config import settings
 from kronos.cron.scheduler import Scheduler
 from kronos.cron.setup import setup_cron_jobs
@@ -89,7 +90,7 @@ def _ensure_data_dirs() -> None:
 
 async def main():
     """Start Kronos Agent OS: build agent, start bridge + cron scheduler."""
-    log.info("Starting Kronos Agent OS v0.1.0")
+    log.info("Starting Kronos Agent OS v%s", __version__)
     _ensure_data_dirs()
 
     session_store = SessionStore(settings.db_path, agent_name=settings.agent_name)
