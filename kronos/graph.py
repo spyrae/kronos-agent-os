@@ -139,6 +139,11 @@ class KronosAgent:
             [schedule_task, schedule_followup, list_scheduled_tasks, cancel_scheduled_task]
         )
 
+        # Cross-agent hand-off (roadmap 5.1)
+        from kronos.tools.handoff import handoff_to_agent
+
+        self._tools.append(handoff_to_agent)
+
         # Composio tools
         from kronos.tools.composio_integration import get_composio_tools
 

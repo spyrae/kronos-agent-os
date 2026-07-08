@@ -193,6 +193,24 @@ def _schema(conn) -> None:
             ON feedback(agent_name, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_feedback_reaction
             ON feedback(reaction, created_at DESC);
+
+        -- Cross-agent hand-off queue (roadmap 5.1): agent A routes a request it
+        -- deems out of its domain to profile agent B, who polls its pending
+        -- rows and answers — instead of A going silent or replying worse.
+        CREATE TABLE IF NOT EXISTS handoffs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            topic_id INTEGER NOT NULL DEFAULT 0,
+            thread_id TEXT NOT NULL,
+            from_agent TEXT NOT NULL,
+            to_agent TEXT NOT NULL,
+            context TEXT NOT NULL,
+            state TEXT NOT NULL CHECK (state IN ('pending','accepted','done','failed')),
+            created_at REAL NOT NULL,
+            accepted_at REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_handoffs_intake
+            ON handoffs(to_agent, state, created_at);
         """
     )
     columns = {
@@ -480,6 +498,73 @@ class SwarmStore:
             (chat_id, topic_id or 0, root_msg_id),
         )
         return int(row["c"]) if row else 0
+
+    # ------------------------------------------------------------------
+    # Cross-agent hand-offs (roadmap 5.1)
+    # ------------------------------------------------------------------
+
+    def create_handoff(
+        self,
+        *,
+        chat_id: int,
+        topic_id: int | None,
+        thread_id: str,
+        from_agent: str,
+        to_agent: str,
+        context: str,
+    ) -> int:
+        """Queue a hand-off from one agent to another. Returns its id."""
+        cursor = self._db.write(
+            """
+            INSERT INTO handoffs
+                (chat_id, topic_id, thread_id, from_agent, to_agent,
+                 context, state, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+            """,
+            (chat_id, topic_id or 0, thread_id, from_agent, to_agent, context, time.time()),
+        )
+        return int(cursor.lastrowid)
+
+    def accept_next_handoff(self, to_agent: str) -> dict | None:
+        """Atomically claim the oldest pending hand-off for this agent.
+
+        Runs under an IMMEDIATE transaction so overlapping intake polls never
+        process the same row twice. Returns the row as a dict, or None.
+        """
+
+        def _tx(conn):
+            row = conn.execute(
+                """
+                SELECT * FROM handoffs
+                WHERE to_agent = ? AND state = 'pending'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (to_agent,),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "UPDATE handoffs SET state = 'accepted', accepted_at = ? WHERE id = ?",
+                (time.time(), row["id"]),
+            )
+            return dict(row)
+
+        return self._db.write_tx(_tx)
+
+    def complete_handoff(self, handoff_id: int, *, success: bool = True) -> None:
+        self._db.write(
+            "UPDATE handoffs SET state = ? WHERE id = ?",
+            ("done" if success else "failed", handoff_id),
+        )
+
+    def pending_handoffs(self, to_agent: str) -> list[dict]:
+        rows = self._db.read(
+            "SELECT * FROM handoffs WHERE to_agent = ? AND state = 'pending' "
+            "ORDER BY created_at",
+            (to_agent,),
+        )
+        return [dict(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Metrics
