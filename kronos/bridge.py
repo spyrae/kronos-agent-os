@@ -79,6 +79,15 @@ _my_id: int | None = None
 # Monotonic-wall timestamp of the last incoming Telegram event, for /health
 # liveness (0.0 = nothing received yet).
 _last_event_ts: float = 0.0
+
+
+def get_agent() -> "KronosAgent | None":
+    """Current KronosAgent instance (set in run_bridge), or None.
+
+    Lets in-process cron jobs (e.g. follow-ups) reuse the live agent instead of
+    building a second one.
+    """
+    return _agent
 _my_username: str | None = None
 
 # Group routing (initialized in run_bridge after login)

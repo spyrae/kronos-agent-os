@@ -136,3 +136,83 @@ async def test_run_due_reminders_keeps_pending_on_failure(isolated_db, monkeypat
 
     # delivery failed → still pending for retry
     assert len(scheduled_tasks.list_pending("kronos")) == 1
+
+
+def test_schedule_followup_tool_adds_followup_kind(isolated_db):
+    from kronos.tools.reminders import schedule_followup
+
+    token = set_tool_audit_context(agent="kronos", thread_id="42", session_id="42")
+    try:
+        future = (datetime.now(UTC) + timedelta(hours=2)).isoformat()
+        result = schedule_followup.invoke({"when_iso": future, "task": "check DEV-1698"})
+    finally:
+        reset_tool_audit_context(token)
+
+    assert "Вернусь" in result
+    pending = scheduled_tasks.list_pending("kronos")
+    assert len(pending) == 1
+    assert pending[0]["kind"] == "followup"
+    assert pending[0]["message"] == "check DEV-1698"
+
+
+async def test_run_due_followup_invokes_agent_and_sends_result(isolated_db, monkeypatch):
+    from kronos.cron import reminders as cron_reminders
+
+    now = time.time()
+    scheduled_tasks.add_task(
+        agent_name="kronos", chat_id=7, topic_id=None, thread_id="7",
+        run_at=now - 1, message="do the thing", recur_seconds=0, kind="followup",
+    )
+
+    class FakeAgent:
+        async def ainvoke(self, message, **kwargs):
+            return f"result for: {message[:12]}"
+
+    monkeypatch.setattr("kronos.bridge._agent", FakeAgent())
+    sent: list[str] = []
+    monkeypatch.setattr(
+        cron_reminders, "send_webhook",
+        lambda text, *a, **k: sent.append(text) or True,
+    )
+
+    await cron_reminders.run_due_reminders()
+
+    assert sent and sent[0].startswith("result for:")
+    assert scheduled_tasks.list_pending("kronos") == []  # completed
+
+
+async def test_run_due_followup_retries_when_agent_not_ready(isolated_db, monkeypatch):
+    from kronos.cron import reminders as cron_reminders
+
+    now = time.time()
+    scheduled_tasks.add_task(
+        agent_name="kronos", chat_id=7, topic_id=None, thread_id="7",
+        run_at=now - 1, message="x", recur_seconds=0, kind="followup",
+    )
+    monkeypatch.setattr("kronos.bridge._agent", None)
+    sent: list[int] = []
+    monkeypatch.setattr(cron_reminders, "send_webhook", lambda *a, **k: sent.append(1) or True)
+
+    await cron_reminders.run_due_reminders()
+
+    assert sent == []  # nothing delivered
+    assert len(scheduled_tasks.list_pending("kronos")) == 1  # still pending
+
+
+def test_kind_column_migration_on_legacy_db(isolated_db):
+    import kronos.db as db_mod
+
+    db = db_mod.get_db("scheduled_tasks")
+    # Simulate a DB created before the kind column existed.
+    db.write("DROP TABLE IF EXISTS scheduled_tasks")
+    db.write(
+        "CREATE TABLE scheduled_tasks ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, agent_name TEXT NOT NULL, "
+        "chat_id INTEGER NOT NULL, topic_id INTEGER, thread_id TEXT NOT NULL, "
+        "run_at REAL NOT NULL, recur_seconds INTEGER NOT NULL DEFAULT 0, "
+        "message TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', "
+        "created_at REAL NOT NULL)"
+    )
+    db.init_schema(scheduled_tasks._init_schema)
+    cols = {row[1] for row in db.read("PRAGMA table_info(scheduled_tasks)")}
+    assert "kind" in cols

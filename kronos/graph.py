@@ -131,10 +131,13 @@ class KronosAgent:
         from kronos.tools.reminders import (
             cancel_scheduled_task,
             list_scheduled_tasks,
+            schedule_followup,
             schedule_task,
         )
 
-        self._tools.extend([schedule_task, list_scheduled_tasks, cancel_scheduled_task])
+        self._tools.extend(
+            [schedule_task, schedule_followup, list_scheduled_tasks, cancel_scheduled_task]
+        )
 
         # Composio tools
         from kronos.tools.composio_integration import get_composio_tools

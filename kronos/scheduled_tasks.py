@@ -30,6 +30,7 @@ def _init_schema(conn) -> None:
             run_at        REAL    NOT NULL,
             recur_seconds INTEGER NOT NULL DEFAULT 0,
             message       TEXT    NOT NULL,
+            kind          TEXT    NOT NULL DEFAULT 'reminder',
             status        TEXT    NOT NULL DEFAULT 'pending',
             created_at    REAL    NOT NULL
         );
@@ -37,6 +38,12 @@ def _init_schema(conn) -> None:
             ON scheduled_tasks(status, agent_name, run_at);
         """
     )
+    # Migrate DBs created before the kind column existed (roadmap 4.3).
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(scheduled_tasks)")}
+    if "kind" not in cols:
+        conn.execute(
+            "ALTER TABLE scheduled_tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'reminder'"
+        )
 
 
 def _db():
@@ -54,13 +61,18 @@ def add_task(
     run_at: float,
     message: str,
     recur_seconds: int = 0,
+    kind: str = "reminder",
 ) -> int:
-    """Insert a pending task and return its id."""
+    """Insert a pending task and return its id.
+
+    kind="reminder" delivers message verbatim; kind="followup" runs message as
+    an agent prompt when due and delivers the agent's result.
+    """
     cursor = _db().write(
         "INSERT INTO scheduled_tasks "
-        "(agent_name, chat_id, topic_id, thread_id, run_at, recur_seconds, message, status, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
-        (agent_name, chat_id, topic_id, thread_id, run_at, recur_seconds, message, time.time()),
+        "(agent_name, chat_id, topic_id, thread_id, run_at, recur_seconds, message, kind, status, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+        (agent_name, chat_id, topic_id, thread_id, run_at, recur_seconds, message, kind, time.time()),
     )
     return int(cursor.lastrowid)
 
