@@ -127,6 +127,15 @@ class KronosAgent:
 
         self._tools.append(session_search)
 
+        # Scheduled tasks / reminders (roadmap 4.2)
+        from kronos.tools.reminders import (
+            cancel_scheduled_task,
+            list_scheduled_tasks,
+            schedule_task,
+        )
+
+        self._tools.extend([schedule_task, list_scheduled_tasks, cancel_scheduled_task])
+
         # Composio tools
         from kronos.tools.composio_integration import get_composio_tools
 
