@@ -37,6 +37,10 @@ def _append_run_history(entry: dict) -> None:
 # UTC+8 timezone for scheduling
 UTC8 = timezone(timedelta(hours=8))
 
+# Consecutive failures before a job fires an NTFY alert (so a job can't fail
+# silently for a week — the scheduler otherwise just logs and moves on).
+CRON_ALERT_THRESHOLD = 3
+
 
 @dataclass
 class CronJob:
@@ -49,6 +53,7 @@ class CronJob:
     enabled: bool = True
     last_run: float = 0.0
     _running: bool = False
+    consecutive_failures: int = 0
 
 
 class Scheduler:
@@ -57,6 +62,9 @@ class Scheduler:
     def __init__(self):
         self.jobs: dict[str, CronJob] = {}
         self._stop = asyncio.Event()
+        # Hold strong refs to in-flight job tasks; asyncio only keeps a weak
+        # reference, so without this the GC can collect a task mid-run.
+        self._running_tasks: set[asyncio.Task] = set()
 
     def add(self, job: CronJob) -> None:
         self.jobs[job.name] = job
@@ -135,6 +143,28 @@ class Scheduler:
 
         return False
 
+    async def _maybe_alert(self, job: CronJob) -> None:
+        """Fire one NTFY alert when a job first hits CRON_ALERT_THRESHOLD.
+
+        Uses == (not >=) so a persistently failing job alerts once at the
+        threshold rather than on every subsequent run.
+        """
+        if job.consecutive_failures != CRON_ALERT_THRESHOLD:
+            return
+        try:
+            from kronos.cron.notify import send_ntfy
+
+            await asyncio.to_thread(
+                send_ntfy,
+                f"Cron job '{job.name}' failed {job.consecutive_failures}× in a row "
+                f"on agent '{settings.agent_name}'. Check logs.",
+                title="Kronos cron failing",
+                priority="high",
+                tags="warning",
+            )
+        except Exception as e:
+            log.warning("Failed to send cron failure alert for %s: %s", job.name, e)
+
     async def _run_job(self, job: CronJob) -> None:
         job._running = True
         job.last_run = time.time()
@@ -147,12 +177,18 @@ class Scheduler:
         try:
             await job.func()
             duration = time.monotonic() - start
+            job.consecutive_failures = 0
             log.info("[cron] Completed: %s (%.1fs)", job.name, duration)
         except Exception as e:
             duration = time.monotonic() - start
             status = "error"
             error = str(e)
-            log.error("[cron] Failed: %s (%.1fs): %s", job.name, duration, e)
+            job.consecutive_failures += 1
+            log.error(
+                "[cron] Failed: %s (%.1fs) [%d in a row]: %s",
+                job.name, duration, job.consecutive_failures, e,
+            )
+            await self._maybe_alert(job)
         finally:
             job._running = False
             _append_run_history({
@@ -177,7 +213,9 @@ class Scheduler:
         while not self._stop.is_set():
             for job in self.jobs.values():
                 if self._should_run(job):
-                    asyncio.create_task(self._run_job(job))
+                    task = asyncio.create_task(self._run_job(job))
+                    self._running_tasks.add(task)
+                    task.add_done_callback(self._running_tasks.discard)
 
             # Check every 30 seconds
             try:
