@@ -35,6 +35,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.market_review import run_market_review
     from kronos.cron.news_monitor import run_news_monitor
     from kronos.cron.personal_observer import run_daily_scope, run_personal_observer
+    from kronos.cron.reminders import run_due_reminders
     from kronos.cron.self_improve import run_self_improve
     from kronos.cron.signal_ideas import run_ideas_digest
 
@@ -55,6 +56,9 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
 
     # Heartbeat — every 30 minutes (was: kronos-heartbeat.timer)
     scheduler.add_periodic("heartbeat", run_heartbeat, interval_seconds=1800)
+
+    # User-scheduled reminders / tasks — poll every minute (roadmap 4.2)
+    scheduler.add_periodic("user-reminders", run_due_reminders, interval_seconds=60)
 
     # News Monitor — daily at 00:00 UTC (was: kronos-news-monitor.timer)
     scheduler.add_daily("news-monitor", run_news_monitor, hour_utc=0)
@@ -152,5 +156,5 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
         nexus_jobs_registered = 4
 
-    total = 14 + nexus_jobs_registered  # 18 base jobs; signal-jobs, travel insights, people-scout and group-digest paused
+    total = 15 + nexus_jobs_registered  # +user-reminders; signal-jobs, travel insights, people-scout and group-digest paused
     log.info("%d cron jobs registered for agent '%s'", total, me)

@@ -79,6 +79,15 @@ _my_id: int | None = None
 # Monotonic-wall timestamp of the last incoming Telegram event, for /health
 # liveness (0.0 = nothing received yet).
 _last_event_ts: float = 0.0
+
+
+def get_agent() -> "KronosAgent | None":
+    """Current KronosAgent instance (set in run_bridge), or None.
+
+    Lets in-process cron jobs (e.g. follow-ups) reuse the live agent instead of
+    building a second one.
+    """
+    return _agent
 _my_username: str | None = None
 
 # Group routing (initialized in run_bridge after login)
@@ -884,6 +893,113 @@ async def _clear_context(chat_id: int, topic_id: int | None = None) -> str:
     return await _agent.clear_context(thread_id)
 
 
+# --- Live progress reporter (roadmap 4.1) ---
+
+_PROGRESS_THROTTLE_SECONDS = 1.6  # keep well under Telegram's edit rate limit
+_PROGRESS_TOOL_LABELS: tuple[tuple[str, str], ...] = (
+    ("brave", "🔍 ищу в вебе"),
+    ("exa", "🔍 ищу в вебе"),
+    ("search", "🔍 ищу"),
+    ("fetch", "📄 читаю источник"),
+    ("content", "📄 читаю источник"),
+    ("extract", "📄 разбираю материал"),
+    ("transcript", "📄 читаю расшифровку"),
+    ("channel", "📡 смотрю каналы"),
+    ("digest", "📡 собираю дайджест"),
+    ("finance", "💹 считаю финансы"),
+    ("expense", "💹 записываю расход"),
+    ("memory", "🧠 роюсь в памяти"),
+    ("deploy", "🚀 деплою"),
+)
+
+
+def _humanize_tool(name: str) -> str:
+    low = name.lower()
+    for marker, label in _PROGRESS_TOOL_LABELS:
+        if marker in low:
+            return label
+    return f"🔧 {name}"
+
+
+def _progress_label(event: str, payload: dict) -> str | None:
+    if event == "tool_call":
+        return f"{_humanize_tool(str(payload.get('name', '')))}…"
+    if event == "tool_approval_required":
+        return "⏸️ жду подтверждения…"
+    return None
+
+
+class _ProgressReporter:
+    """Edits a single throwaway 'draft' message with live tool progress.
+
+    Lazily materialized: the draft is only sent once there's something to
+    report, so fast (no-tool) replies don't flash a throwaway message. It is
+    deleted in finish() so the caller's normal send path (validation, approval
+    buttons, TTS, chunking) is untouched. All Telegram calls are best-effort —
+    progress must never break a real reply.
+    """
+
+    def __init__(self, chat_id: int, topic_id: int | None):
+        self._chat_id = chat_id
+        self._topic_id = topic_id
+        self._draft = None
+        self._shown = ""
+        self._pending: str | None = None
+        self._stop = asyncio.Event()
+        self._task: asyncio.Task | None = None
+
+    def start(self) -> "_ProgressReporter":
+        self._task = asyncio.create_task(self._run())
+        return self
+
+    def on_event(self, event: str, payload: dict) -> None:
+        # Sync callback invoked from the engine on each tool event.
+        label = _progress_label(event, payload)
+        if label:
+            self._pending = label
+
+    async def _run(self) -> None:
+        while not self._stop.is_set():
+            pending = self._pending
+            if pending and pending != self._shown:
+                self._shown = pending
+                await self._render(pending)
+                # Throttle edits to stay under Telegram's rate limit.
+                wait = _PROGRESS_THROTTLE_SECONDS
+            else:
+                # Nothing to show yet — poll often so the first event surfaces
+                # quickly instead of after a full throttle window.
+                wait = 0.1
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=wait)
+            except TimeoutError:
+                pass
+
+    async def _render(self, text: str) -> None:
+        try:
+            if self._draft is None:
+                kwargs = {"reply_to": self._topic_id} if self._topic_id else {}
+                self._draft = await _client.send_message(self._chat_id, text, **kwargs)
+            else:
+                await _client.edit_message(self._chat_id, self._draft, text)
+        except Exception as e:
+            log.debug("Progress render failed (non-fatal): %s", e)
+
+    async def finish(self) -> None:
+        self._stop.set()
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if self._draft is not None:
+            try:
+                await _client.delete_messages(self._chat_id, [self._draft])
+            except Exception as e:
+                log.debug("Progress draft delete failed (non-fatal): %s", e)
+
+
 async def _ask_agent(
     message: str,
     chat_id: int,
@@ -911,9 +1027,10 @@ async def _ask_agent(
     # Topic-aware thread isolation
     thread_id = f"{chat_id}:{topic_id}" if topic_id else str(chat_id)
 
-    # Start typing indicator
+    # Start typing indicator + live progress reporter
     stop_typing = asyncio.Event()
     typing_task = asyncio.create_task(_typing_loop(chat_id, stop_typing))
+    reporter = _ProgressReporter(chat_id, topic_id).start()
 
     start_ms = int(time.monotonic() * 1000)
     reply = None
@@ -928,6 +1045,7 @@ async def _ask_agent(
                 source_kind=source_kind,
                 persist_user_turn=persist_user_turn,
                 extra_system_context=extra_system_context,
+                on_tool_event=reporter.on_event,
             )
     except Exception as e:
         log.error("Agent error: %s", e)
@@ -935,6 +1053,7 @@ async def _ask_agent(
     finally:
         stop_typing.set()
         typing_task.cancel()
+        await reporter.finish()
 
     if not reply:
         reply = "Не удалось получить ответ от агента. Попробуй переформулировать запрос."

@@ -26,7 +26,13 @@ from langchain_core.tools import BaseTool
 
 from kronos.audit import log_tool_event, reset_tool_audit_context, set_tool_audit_context
 from kronos.config import settings
-from kronos.engine import AgentResult, execute_tool, react_loop, tool_requires_approval
+from kronos.engine import (
+    AgentResult,
+    ToolEventCallback,
+    execute_tool,
+    react_loop,
+    tool_requires_approval,
+)
 from kronos.llm import get_model
 from kronos.memory.context_engine import get_context_engine
 from kronos.memory.nodes import retrieve_memories, store_memories_background
@@ -120,6 +126,18 @@ class KronosAgent:
         from kronos.tools.session_search import session_search
 
         self._tools.append(session_search)
+
+        # Scheduled tasks / reminders (roadmap 4.2)
+        from kronos.tools.reminders import (
+            cancel_scheduled_task,
+            list_scheduled_tasks,
+            schedule_followup,
+            schedule_task,
+        )
+
+        self._tools.extend(
+            [schedule_task, schedule_followup, list_scheduled_tasks, cancel_scheduled_task]
+        )
 
         # Composio tools
         from kronos.tools.composio_integration import get_composio_tools
@@ -243,10 +261,21 @@ class KronosAgent:
         messages: list[BaseMessage],
         source_message: str,
         react_loop_kwargs: dict[str, Any],
+        on_tool_event: ToolEventCallback | None = None,
     ) -> AgentResult:
-        """Run either the supervisor or direct model loop."""
+        """Run either the supervisor or direct model loop.
+
+        The agent-level callback handles audit/logging; a per-call callback
+        (e.g. live progress in the bridge) is layered on top so both fire.
+        """
+        emit = self._emit_tool_event
+        if on_tool_event is not None:
+            def emit(event: str, payload: dict[str, Any], _extra=on_tool_event) -> None:
+                self._emit_tool_event(event, payload)
+                _extra(event, payload)
+
         if self._supervisor:
-            return await self._supervisor(messages, **react_loop_kwargs)
+            return await self._supervisor(messages, on_tool_event=emit, **react_loop_kwargs)
 
         tier = classify_tier(source_message)
         model = get_model(tier)
@@ -255,7 +284,7 @@ class KronosAgent:
             messages=messages,
             tools=self._tools,
             system_prompt=self._get_system_prompt(),
-            on_tool_event=self._emit_tool_event,
+            on_tool_event=emit,
             **react_loop_kwargs,
         )
 
@@ -367,6 +396,7 @@ class KronosAgent:
         source_kind: str = "user",
         persist_user_turn: bool = True,
         extra_system_context: str = "",
+        on_tool_event: ToolEventCallback | None = None,
     ) -> str:
         """Process a message and return the response text.
 
@@ -474,6 +504,7 @@ class KronosAgent:
                     messages=working_history,
                     source_message=message,
                     react_loop_kwargs=react_loop_kwargs,
+                    on_tool_event=on_tool_event,
                 )
                 response_text = result.content
             except Exception as e:

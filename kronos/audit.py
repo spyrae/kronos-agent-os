@@ -62,6 +62,15 @@ def reset_tool_audit_context(token: Token) -> None:
     _tool_audit_context.reset(token)
 
 
+def get_tool_audit_context() -> dict[str, str]:
+    """Current per-request context (agent, thread_id, session_id, ...) or {}.
+
+    Lets tools that run mid-invocation recover which chat/thread they belong to
+    (e.g. schedule_task needs the originating chat to deliver the reminder).
+    """
+    return dict(_tool_audit_context.get())
+
+
 def _redact_string(value: str, *, max_len: int = 500) -> str:
     redacted = value
     for pattern, replacement in _SECRET_PATTERNS:
