@@ -31,6 +31,6 @@
     "globals": "^17.4.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
-    "vite": "^6.4.2"
+    "vite": "^8.1.3"
   }
 }
