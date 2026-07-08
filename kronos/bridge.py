@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import random
+import secrets
 import tempfile
 import time
 from dataclasses import dataclass
@@ -963,10 +964,27 @@ async def _send_to_chat(
 # --- Webhook server (for cron scripts, same API as Kronos I) ---
 
 
-async def _handle_webhook(request: web.Request) -> web.Response:
-    secret = request.headers.get("X-Webhook-Secret", "")
-    if secret != settings.webhook_secret:
+def _webhook_unauthorized(request: web.Request) -> web.Response | None:
+    """Fail-closed webhook auth. Returns a 401 response when the request is not
+    authorized, else None.
+
+    An empty ``webhook_secret`` DISABLES the endpoint (always 401) instead of
+    letting everyone in: the historical ``secret != settings.webhook_secret``
+    check silently turned auth off when the secret was "" (``"" == ""``), and
+    the server binds a network port — so a missing secret exposed /webhook and
+    the chat-dumping /history to anyone who could reach it. Comparison is
+    constant-time to avoid leaking the secret via timing.
+    """
+    expected = settings.webhook_secret
+    provided = request.headers.get("X-Webhook-Secret", "")
+    if not expected or not secrets.compare_digest(provided, expected):
         return web.json_response({"error": "unauthorized"}, status=401)
+    return None
+
+
+async def _handle_webhook(request: web.Request) -> web.Response:
+    if (unauthorized := _webhook_unauthorized(request)) is not None:
+        return unauthorized
 
     try:
         body = await request.json()
@@ -993,9 +1011,8 @@ async def _handle_webhook(request: web.Request) -> web.Response:
 
 
 async def _handle_history(request: web.Request) -> web.Response:
-    secret = request.headers.get("X-Webhook-Secret", "")
-    if secret != settings.webhook_secret:
-        return web.json_response({"error": "unauthorized"}, status=401)
+    if (unauthorized := _webhook_unauthorized(request)) is not None:
+        return unauthorized
 
     chat_param = request.query.get("chat", "")
     if not chat_param:
@@ -1050,9 +1067,21 @@ async def _start_webhook_server() -> None:
     runner = web.AppRunner(app)
     await runner.setup()
     webhook_port = int(os.environ.get("WEBHOOK_PORT", "8788"))
-    site = web.TCPSite(runner, "0.0.0.0", webhook_port)
+    # Bind localhost by default; external exposure is opt-in via WEBHOOK_HOST
+    # (e.g. 0.0.0.0). Together with the fail-closed secret check this keeps the
+    # userbot's chat-dumping /history off the public network unless explicitly
+    # opened AND a secret is set.
+    webhook_host = os.environ.get("WEBHOOK_HOST", "127.0.0.1")
+    site = web.TCPSite(runner, webhook_host, webhook_port)
     await site.start()
-    log.info("Webhook server listening on port %d", webhook_port)
+    if webhook_host not in ("127.0.0.1", "localhost", "::1") and not settings.webhook_secret:
+        log.warning(
+            "Webhook bound to %s with an empty WEBHOOK_SECRET — every /webhook "
+            "and /history request is rejected (fail-closed). Set WEBHOOK_SECRET "
+            "to serve external clients.",
+            webhook_host,
+        )
+    log.info("Webhook server listening on %s:%d", webhook_host, webhook_port)
 
 
 # --- ASO command handler ---
