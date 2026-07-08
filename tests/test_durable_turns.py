@@ -139,7 +139,10 @@ async def test_graph_recovery_runs_before_loading_next_turn(tmp_path: Path) -> N
     )
     agent = _minimal_agent(store)
 
-    with patch("kronos.graph.react_loop", new=AsyncMock(return_value=type("Result", (), {"content": "next ok"})())):
+    with (
+        patch("kronos.graph.get_model", return_value=MagicMock()),
+        patch("kronos.graph.react_loop", new=AsyncMock(return_value=type("Result", (), {"content": "next ok"})())),
+    ):
         reply = await agent.ainvoke(
             message="next",
             thread_id="thread",
@@ -168,7 +171,10 @@ async def test_ephemeral_peer_reaction_does_not_open_durable_turn(tmp_path: Path
     agent = _minimal_agent(store)
     store.begin_turn = AsyncMock(side_effect=AssertionError("ephemeral turn must not journal"))
 
-    with patch("kronos.graph.react_loop", new=AsyncMock(return_value=type("Result", (), {"content": "delta"})())):
+    with (
+        patch("kronos.graph.get_model", return_value=MagicMock()),
+        patch("kronos.graph.react_loop", new=AsyncMock(return_value=type("Result", (), {"content": "delta"})())),
+    ):
         reply = await agent.ainvoke(
             message="peer context",
             thread_id="thread",
