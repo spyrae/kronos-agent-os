@@ -211,6 +211,32 @@ def _schema(conn) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_handoffs_intake
             ON handoffs(to_agent, state, created_at);
+
+        -- Council sessions (roadmap 5.2): a structured multi-agent debate. The
+        -- initiator convenes N participants who each submit an independent
+        -- position; once all are in, the initiator synthesizes one answer.
+        CREATE TABLE IF NOT EXISTS council_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            topic_id INTEGER NOT NULL DEFAULT 0,
+            thread_id TEXT NOT NULL,
+            initiator TEXT NOT NULL,
+            question TEXT NOT NULL,
+            participants TEXT NOT NULL,
+            state TEXT NOT NULL CHECK (state IN ('gathering','synthesizing','done','failed')),
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_council_state
+            ON council_sessions(state, initiator);
+
+        CREATE TABLE IF NOT EXISTS council_positions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            agent_name TEXT NOT NULL,
+            position TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            UNIQUE (session_id, agent_name)
+        );
         """
     )
     columns = {
@@ -565,6 +591,115 @@ class SwarmStore:
             (to_agent,),
         )
         return [dict(row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Council sessions (roadmap 5.2)
+    # ------------------------------------------------------------------
+
+    def create_council(
+        self,
+        *,
+        chat_id: int,
+        topic_id: int | None,
+        thread_id: str,
+        initiator: str,
+        question: str,
+        participants: list[str],
+    ) -> int:
+        """Open a council gathering positions from participants. Returns its id."""
+        cursor = self._db.write(
+            """
+            INSERT INTO council_sessions
+                (chat_id, topic_id, thread_id, initiator, question,
+                 participants, state, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'gathering', ?)
+            """,
+            (
+                chat_id, topic_id or 0, thread_id, initiator, question,
+                ",".join(participants), time.time(),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    def pending_council_tasks(self, agent_name: str) -> list[dict]:
+        """Gathering sessions where this agent is a participant but hasn't
+        submitted a position yet."""
+        rows = self._db.read(
+            "SELECT * FROM council_sessions WHERE state = 'gathering' ORDER BY created_at"
+        )
+        result = []
+        for row in rows:
+            participants = [p for p in row["participants"].split(",") if p]
+            if agent_name not in participants:
+                continue
+            already = self._db.read_one(
+                "SELECT 1 FROM council_positions WHERE session_id = ? AND agent_name = ?",
+                (row["id"], agent_name),
+            )
+            if already is None:
+                result.append(dict(row))
+        return result
+
+    def submit_position(self, session_id: int, agent_name: str, position: str) -> None:
+        """Record an agent's independent position. Idempotent per participant."""
+        self._db.write(
+            "INSERT OR IGNORE INTO council_positions "
+            "(session_id, agent_name, position, created_at) VALUES (?, ?, ?, ?)",
+            (session_id, agent_name, position, time.time()),
+        )
+
+    def councils_awaiting_synthesis(self, initiator: str) -> list[dict]:
+        """Gathering sessions initiated by this agent (synthesis poll targets)."""
+        rows = self._db.read(
+            "SELECT * FROM council_sessions "
+            "WHERE state = 'gathering' AND initiator = ? ORDER BY created_at",
+            (initiator,),
+        )
+        return [dict(row) for row in rows]
+
+    def claim_synthesis(self, session_id: int, initiator: str) -> dict | None:
+        """If all participants have submitted and the session is still gathering,
+        atomically flip it to 'synthesizing' and return it. Otherwise None.
+
+        Runs under an IMMEDIATE transaction so only one synthesis fires.
+        """
+
+        def _tx(conn):
+            row = conn.execute(
+                "SELECT * FROM council_sessions "
+                "WHERE id = ? AND initiator = ? AND state = 'gathering'",
+                (session_id, initiator),
+            ).fetchone()
+            if row is None:
+                return None
+            participants = [p for p in row["participants"].split(",") if p]
+            (count,) = conn.execute(
+                "SELECT COUNT(*) FROM council_positions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if count < len(participants):
+                return None  # still gathering
+            conn.execute(
+                "UPDATE council_sessions SET state = 'synthesizing' WHERE id = ?",
+                (session_id,),
+            )
+            return dict(row)
+
+        return self._db.write_tx(_tx)
+
+    def get_positions(self, session_id: int) -> list[dict]:
+        rows = self._db.read(
+            "SELECT agent_name, position FROM council_positions "
+            "WHERE session_id = ? ORDER BY created_at",
+            (session_id,),
+        )
+        return [dict(row) for row in rows]
+
+    def complete_council(self, session_id: int, *, success: bool = True) -> None:
+        self._db.write(
+            "UPDATE council_sessions SET state = ? WHERE id = ?",
+            ("done" if success else "failed", session_id),
+        )
 
     # ------------------------------------------------------------------
     # Metrics

@@ -26,11 +26,12 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.analytics_alerts import run_analytics_alerts
     from kronos.cron.analytics_pulse import run_analytics_pulse
     from kronos.cron.analytics_weekly import run_analytics_weekly
-    from kronos.cron.expense_digest import run_expense_digest
-    from kronos.cron.expenses.processor import run_email_expenses
 
     # DISABLED 2026-07-07: group-digest paused — duplicate of news-monitor on Digest:News.
     # from kronos.cron.group_digest import run_group_digest
+    from kronos.cron.council import run_council_intake
+    from kronos.cron.expense_digest import run_expense_digest
+    from kronos.cron.expenses.processor import run_email_expenses
     from kronos.cron.handoff import run_handoff_intake
     from kronos.cron.heartbeat import run_heartbeat
     from kronos.cron.market_review import run_market_review
@@ -63,6 +64,9 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
 
     # Cross-agent hand-off intake — poll every 30s (roadmap 5.1)
     scheduler.add_periodic("handoff-intake", run_handoff_intake, interval_seconds=30)
+
+    # Council intake — contribute positions + synthesize, poll every 30s (5.2)
+    scheduler.add_periodic("council-intake", run_council_intake, interval_seconds=30)
 
     # News Monitor — daily at 00:00 UTC (was: kronos-news-monitor.timer)
     scheduler.add_daily("news-monitor", run_news_monitor, hour_utc=0)
@@ -160,5 +164,5 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
         nexus_jobs_registered = 4
 
-    total = 16 + nexus_jobs_registered  # +user-reminders +handoff-intake; signal-jobs, travel insights, people-scout and group-digest paused
+    total = 17 + nexus_jobs_registered  # +user-reminders +handoff-intake +council-intake; signal-jobs, travel insights, people-scout and group-digest paused
     log.info("%d cron jobs registered for agent '%s'", total, me)
