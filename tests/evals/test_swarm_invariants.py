@@ -296,3 +296,26 @@ def test_implicit_reply_cap_and_pass_cancellation(swarm) -> None:
     )
     assert cancelled.won is False
     assert cancelled.reason == "no active claim"
+
+
+@pytest.mark.asyncio
+async def test_first_peer_reaction_survives_low_monotonic_clock(monkeypatch):
+    # Regression: the Tier-3 cooldown compares against time.monotonic(), which
+    # is boot-relative on Linux. On a fresh runner/host whose monotonic clock is
+    # still below PEER_REACTION_COOLDOWN, the FIRST peer reaction must not be
+    # falsely treated as cooled-down (this passed on high-uptime dev machines
+    # but failed on a fresh CI runner).
+    monkeypatch.setattr(time, "monotonic", lambda: 5.0)
+    router = _router("kronos")
+    user_root = MagicMock(sender_id=USER_ID)
+    evt = _event(
+        text="peer answer right after restart",
+        sender_id=PEER_ID,
+        msg_id=777,
+        reply_msg=user_root,
+    )
+    with patch.object(router, "_should_react_to_peer", new=AsyncMock(return_value=True)):
+        decision = await router.decide(evt, client=MagicMock())
+
+    assert decision.should_respond is True
+    assert decision.tier == 3
