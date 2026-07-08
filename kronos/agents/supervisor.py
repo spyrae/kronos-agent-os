@@ -352,8 +352,16 @@ def build_supervisor(
     # Combine: delegation tools + supervisor-only tools + direct tools
     all_tools = delegation_tools + supervisor_tools + direct_tools
 
-    async def run(messages: list[BaseMessage], **react_loop_kwargs) -> AgentResult:
-        """Route request to appropriate sub-agent or respond directly."""
+    async def run(
+        messages: list[BaseMessage],
+        on_tool_event: Callable[[str, dict[str, Any]], None] | None = on_tool_event,
+        **react_loop_kwargs,
+    ) -> AgentResult:
+        """Route request to appropriate sub-agent or respond directly.
+
+        on_tool_event defaults to the build-time callback but can be overridden
+        per call (e.g. bridge live progress), so callers layer their own sink.
+        """
         return await react_loop(
             model=model,
             messages=list(messages),
