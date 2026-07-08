@@ -6,6 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
+from kronos.config import settings
 from kronos.engine import react_loop
 from kronos.graph import KronosAgent
 from kronos.session import SessionStore
@@ -139,7 +140,10 @@ async def test_graph_recovery_runs_before_loading_next_turn(tmp_path: Path) -> N
     )
     agent = _minimal_agent(store)
 
-    with patch("kronos.graph.react_loop", new=AsyncMock(return_value=type("Result", (), {"content": "next ok"})())):
+    with (
+        patch("kronos.graph.get_model", return_value=MagicMock()),
+        patch("kronos.graph.react_loop", new=AsyncMock(return_value=type("Result", (), {"content": "next ok"})())),
+    ):
         reply = await agent.ainvoke(
             message="next",
             thread_id="thread",
@@ -168,7 +172,10 @@ async def test_ephemeral_peer_reaction_does_not_open_durable_turn(tmp_path: Path
     agent = _minimal_agent(store)
     store.begin_turn = AsyncMock(side_effect=AssertionError("ephemeral turn must not journal"))
 
-    with patch("kronos.graph.react_loop", new=AsyncMock(return_value=type("Result", (), {"content": "delta"})())):
+    with (
+        patch("kronos.graph.get_model", return_value=MagicMock()),
+        patch("kronos.graph.react_loop", new=AsyncMock(return_value=type("Result", (), {"content": "delta"})())),
+    ):
         reply = await agent.ainvoke(
             message="peer context",
             thread_id="thread",
@@ -221,7 +228,8 @@ async def test_pending_approval_claims_exactly_once(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_agent_tool_executes_without_approval(tmp_path: Path) -> None:
+async def test_agent_tool_executes_without_approval(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "tool_approvals_enabled", False)
     db_path = tmp_path / "session.db"
     store = SessionStore(str(db_path))
     calls = 0
@@ -266,7 +274,8 @@ async def test_agent_tool_executes_without_approval(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_agent_tool_series_executes_without_approval(tmp_path: Path) -> None:
+async def test_agent_tool_series_executes_without_approval(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "tool_approvals_enabled", False)
     store = SessionStore(str(tmp_path / "session.db"))
     calls = 0
 
@@ -311,7 +320,8 @@ async def test_agent_tool_series_executes_without_approval(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_agent_different_tools_execute_without_approval(tmp_path: Path) -> None:
+async def test_agent_different_tools_execute_without_approval(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "tool_approvals_enabled", False)
     store = SessionStore(str(tmp_path / "session.db"))
     replace_calls = 0
     remove_calls = 0
@@ -362,7 +372,8 @@ async def test_agent_different_tools_execute_without_approval(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_agent_remove_tool_executes_without_approval(tmp_path: Path) -> None:
+async def test_agent_remove_tool_executes_without_approval(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "tool_approvals_enabled", False)
     store = SessionStore(str(tmp_path / "session.db"))
     calls = 0
 

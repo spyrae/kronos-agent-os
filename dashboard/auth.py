@@ -28,8 +28,14 @@ def create_session() -> str:
 
 
 def verify_credentials(username: str, password: str) -> bool:
-    """Check username and password."""
-    return username == DASHBOARD_USERNAME and password == DASHBOARD_PASSWORD
+    """Check username and password in constant time (avoids timing attacks).
+
+    Both comparisons are evaluated before the ``and`` so short-circuiting
+    doesn't leak which field mismatched via response timing.
+    """
+    user_ok = secrets.compare_digest(username.encode(), DASHBOARD_USERNAME.encode())
+    pass_ok = secrets.compare_digest(password.encode(), DASHBOARD_PASSWORD.encode())
+    return user_ok and pass_ok
 
 
 async def verify_token(

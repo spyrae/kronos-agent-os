@@ -147,8 +147,12 @@ class GroupRouter:
             for alias in data["aliases"]:
                 self._alias_to_agent[alias] = name
 
-        # Tier 3: track peer reactions to prevent loops / flood
-        self._last_peer_reaction: float = 0
+        # Tier 3: track peer reactions to prevent loops / flood.
+        # -inf, not 0: the cooldown compares against time.monotonic(), which on
+        # Linux counts from boot. With 0, a fresh process whose monotonic clock
+        # is still < PEER_REACTION_COOLDOWN (e.g. right after a restart) would
+        # falsely treat the FIRST reaction as cooled-down and never react.
+        self._last_peer_reaction: float = float("-inf")
         self._reacted_to_msgs: set[int] = set()
 
     # ------------------------------------------------------------------

@@ -3,8 +3,10 @@
 import asyncio
 import logging
 import shutil
+import signal
 from pathlib import Path
 
+from kronos import __version__
 from kronos.config import settings
 from kronos.cron.scheduler import Scheduler
 from kronos.cron.setup import setup_cron_jobs
@@ -88,7 +90,7 @@ def _ensure_data_dirs() -> None:
 
 async def main():
     """Start Kronos Agent OS: build agent, start bridge + cron scheduler."""
-    log.info("Starting Kronos Agent OS v0.1.0")
+    log.info("Starting Kronos Agent OS v%s", __version__)
     _ensure_data_dirs()
 
     session_store = SessionStore(settings.db_path, agent_name=settings.agent_name)
@@ -110,10 +112,43 @@ async def main():
         from kronos.bridge import run_bridge
         from kronos.discord_bridge import run_discord
 
-        # Run all services concurrently
-        await asyncio.gather(
-            run_bridge(agent),
-            run_discord(agent),
-            scheduler.run(),
-            run_dashboard(scheduler=scheduler, agent=agent),
+        # Run all services concurrently with graceful shutdown. A SIGTERM
+        # (systemd stop) or SIGINT (Ctrl-C) — or any service returning/crashing
+        # — stops the scheduler and cancels the rest so in-flight turns and MCP
+        # sessions unwind instead of being killed mid-flight.
+        stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, stop_event.set)
+            except NotImplementedError:
+                pass  # e.g. Windows / non-main thread — rely on cancellation
+
+        services = [
+            asyncio.create_task(run_bridge(agent), name="bridge"),
+            asyncio.create_task(run_discord(agent), name="discord"),
+            asyncio.create_task(scheduler.run(), name="scheduler"),
+            asyncio.create_task(
+                run_dashboard(scheduler=scheduler, agent=agent), name="dashboard"
+            ),
+        ]
+        stop_task = asyncio.create_task(stop_event.wait(), name="stop")
+
+        done, _pending = await asyncio.wait(
+            [*services, stop_task], return_when=asyncio.FIRST_COMPLETED
         )
+
+        # Signal received, or a service returned/crashed → tear everything down.
+        log.info("Shutting down services…")
+        scheduler.stop()
+        for task in (*services, stop_task):
+            task.cancel()
+        await asyncio.gather(*services, stop_task, return_exceptions=True)
+
+        # Re-raise a genuine service crash (not a clean signal) so systemd's
+        # Restart=on-failure can act on it.
+        for task in services:
+            if task in done and not task.cancelled():
+                exc = task.exception()
+                if exc is not None:
+                    raise exc

@@ -6,6 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
+from kronos.config import settings
 from kronos.engine import (
     AgentResult,
     create_agent,
@@ -309,8 +310,8 @@ class TestReactLoop:
         assert "ошибка" in result.content.lower()
 
     @pytest.mark.asyncio
-    async def test_tool_call_executes_without_approval(self):
-        """Risky tools execute immediately; approval callbacks are ignored."""
+    async def test_tool_call_pauses_for_approval(self):
+        """With approvals on (default), a risky tool pauses instead of executing."""
         calls = 0
         approval_requests = []
 
@@ -339,18 +340,51 @@ class TestReactLoop:
             on_tool_event=lambda event, payload: events.append((event, payload)),
         )
 
-        assert calls == 1
-        assert approval_requests == []
-        assert result.waiting_approval is False
-        assert result.approval_id is None
-        assert result.approval_tool_name is None
-        assert result.content == "executed ok"
-        assert [event for event, _ in events] == ["tool_call", "tool_result"]
-        tool_messages = [m for m in result.messages if isinstance(m, ToolMessage)]
-        assert [m.content for m in tool_messages] == ["executed"]
+        assert calls == 0  # paused, not executed
+        assert approval_requests == ["mcp_add_server"]
+        assert result.waiting_approval is True
+        assert result.approval_id == "apr_1"
+        assert result.approval_tool_name == "mcp_add_server"
+        assert "Approval ID" in result.content
+        assert "tool_approval_required" in [event for event, _ in events]
 
     @pytest.mark.asyncio
-    async def test_prior_tool_results_are_journaled_without_approval_wait(self):
+    async def test_disabling_approvals_executes_risky_tool_immediately(self, monkeypatch):
+        """TOOL_APPROVALS_ENABLED=false restores immediate execution for trusted deploys."""
+        monkeypatch.setattr(settings, "tool_approvals_enabled", False)
+        calls = 0
+        approval_requests = []
+
+        async def risky_tool() -> str:
+            nonlocal calls
+            calls += 1
+            return "executed"
+
+        tool = StructuredTool.from_function(
+            coroutine=risky_tool,
+            name="mcp_add_server",
+            description="mutates MCP servers",
+        )
+        model = _make_model([
+            _ai_with_tool_call("mcp_add_server"),
+            AIMessage(content="executed ok"),
+        ])
+
+        result = await react_loop(
+            model,
+            [HumanMessage(content="add server")],
+            tools=[tool],
+            needs_tool_approval=lambda tool, args: True,
+            request_tool_approval=lambda tool, tool_call: approval_requests.append(tool.name) or "apr_1",
+        )
+
+        assert calls == 1  # executed immediately, approval bypassed
+        assert approval_requests == []
+        assert result.waiting_approval is False
+        assert result.content == "executed ok"
+
+    @pytest.mark.asyncio
+    async def test_prior_tool_results_are_journaled_before_approval_pause(self):
         read_calls = 0
         risky_calls = 0
 
@@ -394,23 +428,24 @@ class TestReactLoop:
             on_message_delta=lambda delta: journaled.extend(delta),
         )
 
-        assert result.waiting_approval is False
-        assert result.content == "done"
+        # read-only get_status runs; risky mcp_remove_server pauses for approval
+        # before executing, and get_status's result is journaled before the pause.
+        assert result.waiting_approval is True
+        assert result.approval_tool_name == "mcp_remove_server"
         assert read_calls == 1
-        assert risky_calls == 1
+        assert risky_calls == 0
         tool_messages = [m for m in result.messages if isinstance(m, ToolMessage)]
         assert [(m.tool_call_id, m.content) for m in tool_messages] == [
             ("call_read", "read ok"),
-            ("call_risky", "risky ok"),
         ]
         journaled_tool_messages = [m for m in journaled if isinstance(m, ToolMessage)]
-        assert [m.tool_call_id for m in journaled_tool_messages] == ["call_read", "call_risky"]
+        assert [m.tool_call_id for m in journaled_tool_messages] == ["call_read"]
 
-    def test_default_approval_policy_is_disabled(self):
-        risky = _make_tool("send_telegram_message")
-        read_only = _make_tool("list_status_updates")
+    def test_default_approval_policy_is_enabled(self):
+        risky = _make_tool("send_telegram_message")  # send_ marker → approval
+        read_only = _make_tool("list_status_updates")  # list_ prefix → no approval
 
-        assert tool_requires_approval(risky, {}) is False
+        assert tool_requires_approval(risky, {}) is True
         assert tool_requires_approval(read_only, {}) is False
 
 

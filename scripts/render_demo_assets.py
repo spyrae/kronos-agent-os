@@ -10,10 +10,9 @@ from __future__ import annotations
 import html
 import shutil
 import subprocess
-import textwrap
 import tempfile
+import textwrap
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "docs" / "assets"

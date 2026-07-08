@@ -128,9 +128,12 @@ def test_personal_observer_schedule_avoids_existing_morning_conflicts(monkeypatc
     setup_cron_jobs(scheduler)
     used_hours = {name: hour for name, (_func, hour) in scheduler.daily.items()}
 
-    assert used_hours["personal-observer"] == 23
-    assert used_hours["personal-observer"] not in {
-        used_hours["news-monitor"],
-        used_hours["group-digest"],
-        used_hours["email-expenses"],
+    # personal-observer at 23:00 UTC must not collide with any other daily
+    # job's hour. Checking against every registered daily job (instead of a
+    # hardcoded list) keeps the test correct as jobs are paused/resumed —
+    # e.g. group-digest was paused 2026-07-07 and its key no longer exists.
+    other_daily_hours = {
+        hour for name, hour in used_hours.items() if name != "personal-observer"
     }
+    assert used_hours["personal-observer"] == 23
+    assert used_hours["personal-observer"] not in other_daily_hours

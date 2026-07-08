@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["TG_BOT_TOKEN"] = ""
 
 from telethon import TelegramClient
+
 from kronos.config import settings
 
 

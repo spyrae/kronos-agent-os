@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import random
+import secrets
 import tempfile
 import time
 from dataclasses import dataclass
@@ -49,13 +50,35 @@ if not DEFAULT_NOTIFY_CHAT and settings.telegram_swarm_chat_id:
         else settings.telegram_swarm_chat_id
     )
 
-# Agent lock — one request at a time
-_agent_lock = asyncio.Lock()
+# Per-thread serialization + bounded global concurrency. A single heavy ReAct
+# cycle (up to 25 turns × 120s tool timeout) must not block every other
+# chat/topic/DM/peer-reaction. Each thread_id runs its turns in order (history
+# consistency); the semaphore caps how many threads hit the LLM API at once.
+_agent_semaphore = asyncio.Semaphore(int(os.environ.get("AGENT_MAX_CONCURRENCY", "3")))
+_thread_locks: dict[str, asyncio.Lock] = {}
+
+
+def _thread_lock(thread_id: str) -> asyncio.Lock:
+    """Return the per-thread lock, creating it on first use.
+
+    Synchronous on purpose: with no await between the get and the set, the
+    asyncio event loop can't interleave two calls, so there's no race and no
+    guard lock is needed. thread_id space is bounded by active chats×topics
+    (tens for a personal swarm), so the dict is never evicted.
+    """
+    lock = _thread_locks.get(thread_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _thread_locks[thread_id] = lock
+    return lock
 
 # Agent reference (set in run_bridge)
 _agent: KronosAgent | None = None
 _client: TelegramClient | None = None
 _my_id: int | None = None
+# Monotonic-wall timestamp of the last incoming Telegram event, for /health
+# liveness (0.0 = nothing received yet).
+_last_event_ts: float = 0.0
 _my_username: str | None = None
 
 # Group routing (initialized in run_bridge after login)
@@ -896,7 +919,7 @@ async def _ask_agent(
     reply = None
 
     try:
-        async with _agent_lock:
+        async with _thread_lock(thread_id), _agent_semaphore:
             reply = await _agent.ainvoke(
                 message=message,
                 thread_id=thread_id,
@@ -963,10 +986,27 @@ async def _send_to_chat(
 # --- Webhook server (for cron scripts, same API as Kronos I) ---
 
 
-async def _handle_webhook(request: web.Request) -> web.Response:
-    secret = request.headers.get("X-Webhook-Secret", "")
-    if secret != settings.webhook_secret:
+def _webhook_unauthorized(request: web.Request) -> web.Response | None:
+    """Fail-closed webhook auth. Returns a 401 response when the request is not
+    authorized, else None.
+
+    An empty ``webhook_secret`` DISABLES the endpoint (always 401) instead of
+    letting everyone in: the historical ``secret != settings.webhook_secret``
+    check silently turned auth off when the secret was "" (``"" == ""``), and
+    the server binds a network port — so a missing secret exposed /webhook and
+    the chat-dumping /history to anyone who could reach it. Comparison is
+    constant-time to avoid leaking the secret via timing.
+    """
+    expected = settings.webhook_secret
+    provided = request.headers.get("X-Webhook-Secret", "")
+    if not expected or not secrets.compare_digest(provided, expected):
         return web.json_response({"error": "unauthorized"}, status=401)
+    return None
+
+
+async def _handle_webhook(request: web.Request) -> web.Response:
+    if (unauthorized := _webhook_unauthorized(request)) is not None:
+        return unauthorized
 
     try:
         body = await request.json()
@@ -993,9 +1033,8 @@ async def _handle_webhook(request: web.Request) -> web.Response:
 
 
 async def _handle_history(request: web.Request) -> web.Response:
-    secret = request.headers.get("X-Webhook-Secret", "")
-    if secret != settings.webhook_secret:
-        return web.json_response({"error": "unauthorized"}, status=401)
+    if (unauthorized := _webhook_unauthorized(request)) is not None:
+        return unauthorized
 
     chat_param = request.query.get("chat", "")
     if not chat_param:
@@ -1038,7 +1077,26 @@ async def _handle_history(request: web.Request) -> web.Response:
 
 
 async def _handle_health(request: web.Request) -> web.Response:
-    return web.json_response({"status": "ok", "agent": "kaos"})
+    """Live readiness: reflects the Telegram client and provider state instead
+    of a static 'ok' (a health-check every 15 min was checking a fiction)."""
+    from kronos.llm import active_provider_cooldowns
+
+    connected = bool(_client and _client.is_connected())
+    last_event_age = round(time.time() - _last_event_ts, 1) if _last_event_ts else None
+    cooldowns = active_provider_cooldowns()
+
+    # Healthy requires the Telegram client to be connected. Provider cooldowns
+    # are reported for visibility but don't fail health on their own (the
+    # fallback chain still has other providers).
+    healthy = connected
+    body = {
+        "status": "ok" if healthy else "degraded",
+        "agent": settings.agent_name,
+        "telegram_connected": connected,
+        "last_event_age_seconds": last_event_age,
+        "providers_in_cooldown": cooldowns,
+    }
+    return web.json_response(body, status=200 if healthy else 503)
 
 
 async def _start_webhook_server() -> None:
@@ -1050,9 +1108,21 @@ async def _start_webhook_server() -> None:
     runner = web.AppRunner(app)
     await runner.setup()
     webhook_port = int(os.environ.get("WEBHOOK_PORT", "8788"))
-    site = web.TCPSite(runner, "0.0.0.0", webhook_port)
+    # Bind localhost by default; external exposure is opt-in via WEBHOOK_HOST
+    # (e.g. 0.0.0.0). Together with the fail-closed secret check this keeps the
+    # userbot's chat-dumping /history off the public network unless explicitly
+    # opened AND a secret is set.
+    webhook_host = os.environ.get("WEBHOOK_HOST", "127.0.0.1")
+    site = web.TCPSite(runner, webhook_host, webhook_port)
     await site.start()
-    log.info("Webhook server listening on port %d", webhook_port)
+    if webhook_host not in ("127.0.0.1", "localhost", "::1") and not settings.webhook_secret:
+        log.warning(
+            "Webhook bound to %s with an empty WEBHOOK_SECRET — every /webhook "
+            "and /history request is rejected (fail-closed). Set WEBHOOK_SECRET "
+            "to serve external clients.",
+            webhook_host,
+        )
+    log.info("Webhook server listening on %s:%d", webhook_host, webhook_port)
 
 
 # --- ASO command handler ---
@@ -1182,8 +1252,10 @@ async def run_bridge(agent: KronosAgent) -> None:
         topic_id = await _approval_callback_topic_id(event, pending)
         approved = action == "approve"
         await event.answer("Approved" if approved else "Rejected")
+        # Serialize the resolve against new messages on the same thread.
+        approval_thread = str(pending["thread_id"]) if pending else f"approval:{approval_id}"
         try:
-            async with _agent_lock:
+            async with _thread_lock(approval_thread), _agent_semaphore:
                 reply = await _agent.resolve_tool_approval(
                     approval_id,
                     approved=approved,
@@ -1220,6 +1292,8 @@ async def run_bridge(agent: KronosAgent) -> None:
 
     @_client.on(events.NewMessage(incoming=True))
     async def handle_message(event):
+        global _last_event_ts
+        _last_event_ts = time.time()
         # Log ALL incoming events for debugging
         log.info(
             "[EVENT] chat=%s private=%s reply_to=%s text=%s",

@@ -7,6 +7,5 @@ import sys
 
 from kronos.cli import main
 
-
 if __name__ == "__main__":
     raise SystemExit(main(["demo-seed", *sys.argv[1:]]))

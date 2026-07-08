@@ -22,6 +22,5 @@ os.environ["USERBOT_SESSION"] = "userbot"
 
 from kronos.cron.group_digest import run_group_digest
 
-
 if __name__ == "__main__":
     asyncio.run(run_group_digest())
