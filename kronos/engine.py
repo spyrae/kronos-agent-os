@@ -20,6 +20,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
+from kronos.config import settings
 from kronos.tools.error_handler import classify_tool_error
 
 log = logging.getLogger("kronos.engine")
@@ -81,9 +82,9 @@ DEFAULT_APPROVAL_NAME_MARKERS = (
     "update",
 )
 
-# Tool-call approval prompts are intentionally disabled for trusted local
-# deployments: tools execute immediately, including historically risky tools.
-TOOL_APPROVALS_ENABLED = False
+# Whether risky tool calls pause for human approval is a config gate
+# (settings.tool_approvals_enabled, ON by default). Read at call time so env
+# overrides and tests take effect without reimporting the module.
 
 DEFAULT_COMPACT_OUTPUT_NAME_MARKERS = (
     "brave",
@@ -120,7 +121,7 @@ class AgentResult:
 
 def tool_requires_approval(tool: BaseTool, args: dict) -> bool:
     """Return whether a tool call should pause for human approval."""
-    if not TOOL_APPROVALS_ENABLED:
+    if not settings.tool_approvals_enabled:
         return False
 
     metadata = getattr(tool, "metadata", None) or {}
@@ -369,7 +370,7 @@ async def react_loop(
             log.warning("Tool result cache write failed (non-fatal): %s", e)
 
     async def requires_approval(tool: BaseTool, tool_call: dict) -> bool:
-        if not TOOL_APPROVALS_ENABLED:
+        if not settings.tool_approvals_enabled:
             return False
 
         predicate = needs_tool_approval or tool_requires_approval

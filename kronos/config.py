@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     enable_mcp_gateway_management: bool = False
     enable_dynamic_mcp_servers: bool = False
     enable_server_ops: bool = False
+    # Human-in-the-loop approval for risky tool calls (deploy/delete/MCP
+    # mutations/add_expense — see engine.DEFAULT_APPROVAL_*). ON by default so a
+    # fresh PyPI install never runs destructive tools unattended; trusted
+    # single-user deployments opt out with TOOL_APPROVALS_ENABLED=false.
+    # Only gates the interactive agent path; cron jobs invoke tools directly.
+    tool_approvals_enabled: bool = True
 
     # Memory — per-agent isolation (resolved in model_post_init from agent_name
     # when left empty). Explicit env overrides still win.
