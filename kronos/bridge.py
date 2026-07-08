@@ -76,6 +76,9 @@ def _thread_lock(thread_id: str) -> asyncio.Lock:
 _agent: KronosAgent | None = None
 _client: TelegramClient | None = None
 _my_id: int | None = None
+# Monotonic-wall timestamp of the last incoming Telegram event, for /health
+# liveness (0.0 = nothing received yet).
+_last_event_ts: float = 0.0
 _my_username: str | None = None
 
 # Group routing (initialized in run_bridge after login)
@@ -1074,7 +1077,26 @@ async def _handle_history(request: web.Request) -> web.Response:
 
 
 async def _handle_health(request: web.Request) -> web.Response:
-    return web.json_response({"status": "ok", "agent": "kaos"})
+    """Live readiness: reflects the Telegram client and provider state instead
+    of a static 'ok' (a health-check every 15 min was checking a fiction)."""
+    from kronos.llm import active_provider_cooldowns
+
+    connected = bool(_client and _client.is_connected())
+    last_event_age = round(time.time() - _last_event_ts, 1) if _last_event_ts else None
+    cooldowns = active_provider_cooldowns()
+
+    # Healthy requires the Telegram client to be connected. Provider cooldowns
+    # are reported for visibility but don't fail health on their own (the
+    # fallback chain still has other providers).
+    healthy = connected
+    body = {
+        "status": "ok" if healthy else "degraded",
+        "agent": settings.agent_name,
+        "telegram_connected": connected,
+        "last_event_age_seconds": last_event_age,
+        "providers_in_cooldown": cooldowns,
+    }
+    return web.json_response(body, status=200 if healthy else 503)
 
 
 async def _start_webhook_server() -> None:
@@ -1270,6 +1292,8 @@ async def run_bridge(agent: KronosAgent) -> None:
 
     @_client.on(events.NewMessage(incoming=True))
     async def handle_message(event):
+        global _last_event_ts
+        _last_event_ts = time.time()
         # Log ALL incoming events for debugging
         log.info(
             "[EVENT] chat=%s private=%s reply_to=%s text=%s",

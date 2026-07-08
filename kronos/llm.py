@@ -531,6 +531,16 @@ def resolve_provider_config(provider: str) -> ProviderConfig | None:
     )
 
 
+def active_provider_cooldowns() -> dict[str, float]:
+    """Providers currently in cooldown → seconds remaining. Empty = all healthy."""
+    now = time.time()
+    return {
+        provider: round(until - now, 1)
+        for provider, until in _state._cooldowns.items()
+        if until > now
+    }
+
+
 def reset_provider_state() -> None:
     """Clear cached model instances and cooldowns. Intended for tests."""
     global _callback_cache, _callback_signature
