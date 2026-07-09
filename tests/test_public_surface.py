@@ -194,11 +194,15 @@ def test_dashboard_ui_declares_node_engine():
     assert package["devDependencies"]["@vitejs/plugin-react"].startswith("^4.")
 
 
-def test_dashboard_ui_displays_current_release_version():
+def test_dashboard_ui_version_is_not_hardcoded():
+    """The sidebar version comes from /api/health (importlib.metadata) —
+    a hardcoded vX.Y.Z string in the UI drifts from pyproject on release."""
+    import re
+
     app = (ROOT / "dashboard-ui" / "src" / "App.tsx").read_text(encoding="utf-8")
 
-    assert "v0.1.0 · Kronos Agent OS" in app
-    assert "v0.2.0" not in app
+    assert not re.search(r"v\d+\.\d+\.\d+", app)
+    assert "'/api/health'" in app and "version" in app
 
 
 def test_python_package_has_public_metadata():
