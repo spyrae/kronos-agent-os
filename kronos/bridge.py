@@ -1008,6 +1008,7 @@ async def _ask_agent(
     source_kind: str = "user",
     persist_user_turn: bool = True,
     extra_system_context: str = "",
+    force_tier: str | None = None,
 ) -> str | None:
     """Send message to KronosAgent and return response text.
 
@@ -1046,6 +1047,7 @@ async def _ask_agent(
                 persist_user_turn=persist_user_turn,
                 extra_system_context=extra_system_context,
                 on_tool_event=reporter.on_event,
+                force_tier=force_tier,
             )
     except Exception as e:
         log.error("Agent error: %s", e)
@@ -1242,6 +1244,46 @@ async def _start_webhook_server() -> None:
             webhook_host,
         )
     log.info("Webhook server listening on %s:%d", webhook_host, webhook_port)
+
+
+# --- /stats command handler (roadmap 6.2) ---
+
+
+async def _handle_stats_command(text: str) -> str | None:
+    """Handle /stats [today|week]. Returns reply text, or None if not /stats."""
+    if not text.startswith("/stats"):
+        return None
+
+    from kronos.security.cost_stats import cost_report, swarm_cost_by_agent
+
+    parts = text.split()
+    period = "week" if len(parts) > 1 and parts[1].lower().startswith("week") else "today"
+    period_ru = "неделя" if period == "week" else "сегодня"
+
+    report = cost_report(period)
+    total = report["total"]
+    status = get_guardian().get_status()
+
+    lines = [f"📊 Расходы ({period_ru}) — {settings.agent_name}"]
+    if total["requests"] == 0:
+        lines.append("Запросов пока нет.")
+    else:
+        for tier, stats in sorted(report["by_tier"].items()):
+            lines.append(f"• {tier}: {stats['requests']} зпр · ${stats['cost']:.4f}")
+        lines.append(f"• Итого: {total['requests']} зпр · ${total['cost']:.4f}")
+
+    daily = status["daily_cost"]
+    limit = status["daily_limit"] or 0
+    pct = (daily / limit * 100) if limit else 0
+    lines.append(f"\nДневной бюджет: ${daily:.2f} / ${limit:.2f} ({pct:.0f}%)")
+
+    swarm = swarm_cost_by_agent(period)
+    if len(swarm) > 1:
+        lines.append(f"\nПо агентам ({period_ru}):")
+        for agent, cost in sorted(swarm.items(), key=lambda kv: -kv[1]):
+            lines.append(f"• {agent}: ${cost:.4f}")
+
+    return "\n".join(lines)
 
 
 # --- ASO command handler ---
@@ -1767,6 +1809,8 @@ async def run_bridge(agent: KronosAgent) -> None:
             if not observer_reply:
                 return
             reply = observer_reply
+        elif (stats_reply := await _handle_stats_command(clean_text)) is not None:
+            reply = stats_reply
         elif _is_osint_command(clean_text) and not is_dm:
             log.info("Ignoring /osint command outside DM")
             return
@@ -1789,6 +1833,9 @@ async def run_bridge(agent: KronosAgent) -> None:
                     return
                 reply = osint_reply
             else:
+                # Soft cost degradation: once daily spend crosses the degrade
+                # threshold, force the lite tier instead of blocking.
+                degrade_tier = "lite" if guardian.should_degrade() else None
                 # Call agent with new contract: raw user text as message,
                 # group metadata as transient extra_system_context only.
                 reply = await _ask_agent(
@@ -1799,6 +1846,7 @@ async def run_bridge(agent: KronosAgent) -> None:
                     source_kind=invoke_source_kind,
                     persist_user_turn=invoke_persist,
                     extra_system_context=group_extra_context,
+                    force_tier=degrade_tier,
                 )
 
         # Peer-reaction "PASS" protocol: the agent is instructed to reply

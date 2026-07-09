@@ -135,6 +135,9 @@ async def test_non_capture_dm_calls_agent_as_before(monkeypatch):
         def check_budget(self, session_id=""):
             return True, ""
 
+        def should_degrade(self):
+            return False
+
     monkeypatch.setattr(bridge, "_ask_agent", fake_ask_agent)
     monkeypatch.setattr(bridge, "record_capture", lambda *args, **kwargs: record_calls.append((args, kwargs)))
     monkeypatch.setattr(bridge, "get_guardian", lambda: FakeGuardian())

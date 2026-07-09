@@ -15,6 +15,10 @@ log = logging.getLogger("kronos.security.cost_guardian")
 DEFAULT_DAILY_LIMIT_USD = 5.0
 DEFAULT_SESSION_LIMIT_USD = 1.0
 
+# Once daily spend crosses this fraction of the limit, degrade to the lite tier
+# (soft) instead of blocking — the hard block stays at 100%.
+DEGRADE_RATIO = 0.8
+
 
 @dataclass
 class CostGuardian:
@@ -68,6 +72,15 @@ class CostGuardian:
         """Record a cost for a session."""
         if session_id:
             self._session_costs[session_id] = self._session_costs.get(session_id, 0) + cost_usd
+
+    def should_degrade(self) -> bool:
+        """True once daily spend crosses DEGRADE_RATIO — prefer the lite tier.
+
+        Soft degradation: keep answering (cheaper) instead of blocking, until
+        the hard daily limit in check_budget kicks in.
+        """
+        daily_cost = get_daily_cost().get("cost_usd", 0)
+        return daily_cost >= self.daily_limit * DEGRADE_RATIO
 
     def get_status(self) -> dict:
         """Get current cost status."""

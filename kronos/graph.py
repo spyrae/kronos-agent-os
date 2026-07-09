@@ -269,11 +269,13 @@ class KronosAgent:
         source_message: str,
         react_loop_kwargs: dict[str, Any],
         on_tool_event: ToolEventCallback | None = None,
+        force_tier: str | None = None,
     ) -> AgentResult:
         """Run either the supervisor or direct model loop.
 
         The agent-level callback handles audit/logging; a per-call callback
         (e.g. live progress in the bridge) is layered on top so both fire.
+        force_tier overrides tier classification (cost-guardian degradation).
         """
         emit = self._emit_tool_event
         if on_tool_event is not None:
@@ -284,7 +286,7 @@ class KronosAgent:
         if self._supervisor:
             return await self._supervisor(messages, on_tool_event=emit, **react_loop_kwargs)
 
-        tier = classify_tier(source_message)
+        tier = force_tier or classify_tier(source_message)
         model = get_model(tier)
         return await react_loop(
             model=model,
@@ -404,6 +406,7 @@ class KronosAgent:
         persist_user_turn: bool = True,
         extra_system_context: str = "",
         on_tool_event: ToolEventCallback | None = None,
+        force_tier: str | None = None,
     ) -> str:
         """Process a message and return the response text.
 
@@ -512,6 +515,7 @@ class KronosAgent:
                     source_message=message,
                     react_loop_kwargs=react_loop_kwargs,
                     on_tool_event=on_tool_event,
+                    force_tier=force_tier,
                 )
                 response_text = result.content
             except Exception as e:
