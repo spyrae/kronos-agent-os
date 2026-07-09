@@ -343,3 +343,17 @@ def test_deploy_docs_document_renamed_install_contract() -> None:
     assert "cp systemd/kaos@.service" not in setup_agents
     assert "KAOS_MANAGE_SYSTEMD=true bash scripts/deploy.sh --first-run" in setup_agents
     assert "deploy root: <install-dir>" in deployment
+
+
+def test_deploy_update_rebuilds_dashboard_ui_before_restart() -> None:
+    """rsync excludes dist/, so the update branch must rebuild the dashboard
+    bundle from synced sources before restarting — otherwise UI changes never
+    reach the host. Must degrade gracefully when npm is absent."""
+    text = DEPLOY.read_text(encoding="utf-8")
+    update_branch = text[text.index("Deploying to target host...") :]
+
+    build = update_branch.index("npm ci --no-audit --no-fund")
+    assert "npm run build" in update_branch
+    assert update_branch.index("pip install") < build < update_branch.index("Restarting all agents")
+    assert "command -v npm" in update_branch
+    assert "WARNING: npm not found" in update_branch

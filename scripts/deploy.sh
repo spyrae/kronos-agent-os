@@ -288,6 +288,20 @@ else
     # so PDF/DOCX ingest (roadmap 6.1) works on the host.
     app/.venv/bin/python -m pip install -e "app/.[documents]" --quiet 2>/dev/null || true
 
+    # Rebuild the dashboard UI: rsync excludes dist/ (the pattern also matches
+    # Python build dirs), so the served bundle must be rebuilt from the synced
+    # sources — otherwise UI changes never reach the host. Best-effort: the
+    # dashboard is optional and a stale bundle keeps serving on failure.
+    if [ -f app/dashboard-ui/package.json ]; then
+      if command -v npm >/dev/null 2>&1; then
+        echo "Building dashboard UI..."
+        (cd app/dashboard-ui && npm ci --no-audit --no-fund --silent && npm run build --silent) \
+          || echo "WARNING: dashboard UI build failed — previous bundle keeps serving."
+      else
+        echo "WARNING: npm not found — dashboard UI bundle not rebuilt."
+      fi
+    fi
+
     # Restart all agents (systemd unit names from KAOS_SERVICES, which may
     # differ from the agent_name list used for the safety checks above).
     echo "Restarting all agents..."
