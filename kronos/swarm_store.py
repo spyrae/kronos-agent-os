@@ -61,6 +61,17 @@ DEFAULT_MAX_IMPLICIT_REPLIES = 2
 
 
 def _schema(conn) -> None:
+    # Migrate BEFORE the main script: on a pre-fingerprint session_messages
+    # table the script's fingerprint index aborts executescript mid-way, so
+    # every statement after it (incl. the swarm 2.0 tables) is never created
+    # and get_swarm() raises on startup.
+    columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(session_messages)").fetchall()
+    }
+    if columns and "fingerprint" not in columns:
+        conn.execute("ALTER TABLE session_messages ADD COLUMN fingerprint TEXT")
+
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS swarm_messages (
@@ -256,19 +267,6 @@ def _schema(conn) -> None:
             ON memory_requests(to_agent, state, created_at);
         """
     )
-    columns = {
-        row[1]
-        for row in conn.execute("PRAGMA table_info(session_messages)").fetchall()
-    }
-    if "fingerprint" not in columns:
-        conn.execute("ALTER TABLE session_messages ADD COLUMN fingerprint TEXT")
-        conn.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_session_messages_fingerprint
-                ON session_messages(fingerprint)
-                WHERE fingerprint IS NOT NULL
-            """
-        )
 
 
 @dataclass

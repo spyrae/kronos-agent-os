@@ -227,3 +227,60 @@ class TestRetention:
         remaining = swarm.get_recent_messages(chat_id=1, topic_id=None)
         assert len(remaining) == 1
         assert remaining[0]["text"] == "new"
+
+
+class TestSchemaMigration:
+    def test_pre_fingerprint_db_still_gets_swarm2_tables(self, tmp_path, monkeypatch):
+        """Regression: a swarm.db created before the fingerprint column made
+        executescript abort on the fingerprint index, so the swarm 2.0 tables
+        (handoffs / councils / memory_requests) were never created and
+        get_swarm() raised on startup."""
+        import sqlite3
+
+        swarm_path = tmp_path / "swarm.db"
+        with sqlite3.connect(swarm_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE session_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    agent_name TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO session_messages (agent_name, thread_id, role, content, created_at) "
+                "VALUES ('kronos', '1', 'user', 'old row', 1.0)"
+            )
+
+        from kronos.config import settings as _settings
+        monkeypatch.setattr(_settings, "swarm_db_path", str(swarm_path))
+        monkeypatch.setattr(_settings, "db_dir", str(tmp_path / "agent"))
+
+        from kronos import db as _db
+        _db._instances.clear()
+        import kronos.swarm_store as ss
+        ss._singleton = None
+
+        store = ss.get_swarm()  # must not raise
+
+        with sqlite3.connect(swarm_path) as conn:
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(session_messages)")}
+
+        assert {"handoffs", "council_sessions", "council_positions", "memory_requests"} <= tables
+        assert "fingerprint" in columns
+
+        handoff_id = store.create_handoff(
+            chat_id=1, topic_id=0, thread_id="1",
+            from_agent="kronos", to_agent="nexus", context="works now",
+        )
+        assert handoff_id > 0
+
+        _db._instances.clear()
+        ss._singleton = None
