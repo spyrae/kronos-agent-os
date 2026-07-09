@@ -5,6 +5,7 @@ from dashboard.api import config
 
 @pytest.mark.asyncio
 async def test_capabilities_report_safe_defaults(monkeypatch):
+    monkeypatch.setattr(config.settings, "tool_approvals_enabled", True)
     monkeypatch.setattr(config.settings, "enable_dynamic_tools", False)
     monkeypatch.setattr(config.settings, "require_dynamic_tool_sandbox", True)
     monkeypatch.setattr(config.settings, "enable_mcp_gateway_management", False)
@@ -14,6 +15,9 @@ async def test_capabilities_report_safe_defaults(monkeypatch):
     result = await config.get_capabilities()
     capabilities = {item["key"]: item for item in result["capabilities"]}
 
+    assert capabilities["tool_approvals"]["status"] == "enabled"
+    assert capabilities["tool_approvals"]["risk"] == "protective"
+    assert capabilities["tool_approvals"]["required_env"] == "TOOL_APPROVALS_ENABLED=true"
     assert capabilities["dynamic_tools"]["status"] == "blocked"
     assert capabilities["dynamic_tools"]["required_env"] == "ENABLE_DYNAMIC_TOOLS=true"
     assert capabilities["dynamic_tool_sandbox"]["status"] == "enabled"
@@ -28,6 +32,7 @@ async def test_capabilities_report_safe_defaults(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_capabilities_reflect_enabled_flags(monkeypatch):
+    monkeypatch.setattr(config.settings, "tool_approvals_enabled", False)
     monkeypatch.setattr(config.settings, "enable_dynamic_tools", True)
     monkeypatch.setattr(config.settings, "require_dynamic_tool_sandbox", False)
     monkeypatch.setattr(config.settings, "enable_mcp_gateway_management", True)
@@ -37,6 +42,7 @@ async def test_capabilities_reflect_enabled_flags(monkeypatch):
     result = await config.get_capabilities()
     capabilities = {item["key"]: item for item in result["capabilities"]}
 
+    assert capabilities["tool_approvals"]["status"] == "blocked"
     assert capabilities["dynamic_tools"]["status"] == "enabled"
     assert capabilities["dynamic_tool_sandbox"]["status"] == "blocked"
     assert capabilities["mcp_gateway_management"]["status"] == "enabled"

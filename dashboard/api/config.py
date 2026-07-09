@@ -153,6 +153,14 @@ def _capability(
 def _build_capabilities() -> list[dict]:
     return [
         _capability(
+            key="tool_approvals",
+            name="Tool approval prompts",
+            enabled=settings.tool_approvals_enabled,
+            risk="protective",
+            description="Pauses risky tool calls in interactive chat until a human approves.",
+            required_env="TOOL_APPROVALS_ENABLED=true",
+        ),
+        _capability(
             key="dynamic_tools",
             name="Dynamic tools",
             enabled=settings.enable_dynamic_tools,
