@@ -123,7 +123,17 @@ export default function GraphPage() {
         </div>
       </div>
 
-      {view === 'visual' ? (
+      {nodes.length === 0 ? (
+        <div style={{ ...card, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 360 }}>
+          <div style={{ textAlign: 'center', color: '#555' }}>
+            <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>{'\u{1F578}\u{FE0F}'}</div>
+            <div style={{ fontSize: '0.95rem' }}>No graph data</div>
+            <div style={{ fontSize: '0.75rem', color: '#444', marginTop: '0.3rem' }}>
+              The supervisor topology appears once the agent is attached and has sub-agents registered
+            </div>
+          </div>
+        </div>
+      ) : view === 'visual' ? (
         <div style={{ display: 'grid', gridTemplateColumns: selectedNode ? '1fr 280px' : '1fr', gap: '1rem' }}>
           {/* Graph */}
           <div style={{ ...card, overflow: 'auto', padding: '0.75rem' }}>

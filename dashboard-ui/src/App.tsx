@@ -140,12 +140,13 @@ const ICON_COLORS: Record<string, string> = {
 
 function Layout({ children }: { children: React.ReactNode }) {
   const [uptime, setUptime] = useState(0);
+  const [version, setVersion] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState('');
 
   useEffect(() => {
-    const fetchUptime = () => api<{ uptime_seconds: number }>('/api/health')
-      .then(r => setUptime(r.uptime_seconds)).catch(() => {});
+    const fetchUptime = () => api<{ uptime_seconds: number; version?: string }>('/api/health')
+      .then(r => { setUptime(r.uptime_seconds); if (r.version) setVersion(r.version); }).catch(() => {});
     fetchUptime();
     const interval = setInterval(fetchUptime, 30000);
     return () => clearInterval(interval);
@@ -280,7 +281,7 @@ function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Footer */}
         <div style={{ padding: '0.75rem 0.5rem', borderTop: '1px solid #1a1a1a', marginTop: '0.5rem' }}>
-          <div style={{ fontSize: '0.65rem', color: '#333', marginBottom: '0.5rem' }}>v0.1.0 · Kronos Agent OS</div>
+          <div style={{ fontSize: '0.65rem', color: '#333', marginBottom: '0.5rem' }}>{version ? `v${version} · ` : ''}Kronos Agent OS</div>
           <button
             onClick={() => { localStorage.removeItem('kronos_token'); window.location.reload(); }}
             style={{

@@ -63,7 +63,7 @@ export default function AgentsPage() {
                   <span style={{ fontWeight: 600, fontSize: '1rem', color: '#fff' }}>{a.name.replace(/_/g, '-')}</span>
                 </div>
                 <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                  <StatusBadge status={a.enabled ? 'running' : 'stopped'} label={a.enabled ? 'Running' : 'Stopped'} />
+                  <StatusBadge status={a.enabled ? 'running' : 'stopped'} label={a.enabled ? 'Enabled' : 'Disabled'} />
                   <button onClick={() => toggle(a.name)} style={{
                     padding: '0.25rem 0.65rem', borderRadius: 4, border: 'none', cursor: 'pointer',
                     fontSize: '0.72rem', fontWeight: 600,

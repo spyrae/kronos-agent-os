@@ -20,9 +20,12 @@ class LoginRequest(BaseModel):
 
 @router.get("/api/health")
 async def health():
+    from kronos import __version__
+
     return {
         "status": "ok",
         "agent": settings.agent_name,
+        "version": __version__,
         "uptime_seconds": int(time.time() - _start_time),
     }
 

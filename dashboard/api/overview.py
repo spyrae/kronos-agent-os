@@ -222,7 +222,13 @@ def _recent_tool_activity(tool_events: list[dict], fallback_entries: list[dict],
 
     activity = []
     for entry in reversed(tool_events[-100:]):
-        description = entry.get("result_summary") or entry.get("args_summary") or entry.get("tool") or ""
+        summary = entry.get("result_summary") or entry.get("args_summary") or ""
+        tool = entry.get("tool") or ""
+        # Always lead with the tool name — a bare "ok" or "{}" is unreadable.
+        if tool and summary and summary not in ("{}", "null"):
+            description = f"{tool} — {summary}"
+        else:
+            description = tool or summary
         activity.append({
             "id": _activity_id(entry),
             "type": str(entry.get("event", "tool")).upper(),
@@ -275,8 +281,27 @@ def _memory_status() -> dict:
     qdrant_present = qdrant_dir.exists()
     initialized = db_dir.exists() or fts_db.exists() or kg_db.exists() or qdrant_present
 
+    # Align with /api/memory/status semantics: SQLite-only recall (vector
+    # store unavailable) is "degraded", not "ready" — the two pages must not
+    # contradict. get_memory() is a cached singleton: cheap after first call.
+    try:
+        from kronos.memory.store import get_memory
+
+        get_memory()
+        vector_available = True
+    except Exception:
+        vector_available = False
+
+    if not initialized:
+        status = "not_initialized"
+    elif not vector_available:
+        status = "degraded"
+    else:
+        status = "ready"
+
     return {
-        "status": "ready" if initialized else "not_initialized",
+        "status": status,
+        "vector_available": vector_available,
         "db_dir": str(db_dir),
         "fts_facts": fts_facts,
         "kg_entities": kg_entities,

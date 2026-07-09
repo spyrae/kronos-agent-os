@@ -46,6 +46,7 @@ interface ControlRoom {
     kg_entities: number;
     kg_relations: number;
     qdrant_present: boolean;
+    vector_available?: boolean;
   };
   coordination: {
     status: string;
@@ -184,7 +185,7 @@ export default function OverviewPage() {
               <div style={{ marginTop: '0.45rem', fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>{control.runtime.agent}</div>
               <div style={{ marginTop: '0.65rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.45rem' }}>
                 <MiniStat label="Uptime" value={formatUptime(control.runtime.uptime_seconds)} accent="#06b6d4" />
-                <MiniStat label="Tools" value={control.runtime.tool_events ?? 0} />
+                <MiniStat label="Tool events" value={control.runtime.tool_events ?? 0} />
               </div>
             </div>
 
@@ -261,7 +262,7 @@ export default function OverviewPage() {
                 <MiniStat label="Facts" value={control.memory.fts_facts} />
                 <MiniStat label="Entities" value={control.memory.kg_entities} />
                 <MiniStat label="Relations" value={control.memory.kg_relations} />
-                <MiniStat label="Vector" value={control.memory.qdrant_present ? 'Ready' : 'Empty'} accent={control.memory.qdrant_present ? '#4ade80' : '#777'} />
+                <MiniStat label="Vector" value={control.memory.vector_available ? 'Ready' : 'Unavailable'} accent={control.memory.vector_available ? '#4ade80' : '#777'} />
               </div>
               <div style={{ marginTop: '0.65rem', color: '#555', fontSize: '0.72rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{compactPath(control.memory.db_dir)}</div>
             </div>
