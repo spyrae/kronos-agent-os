@@ -284,8 +284,9 @@ else
       echo "Skipping systemd unit install (KAOS_MANAGE_SYSTEMD=false)."
     fi
 
-    # Reinstall package (in case deps changed)
-    app/.venv/bin/python -m pip install -e "app/." --quiet 2>/dev/null || true
+    # Reinstall package (in case deps changed). Includes the [documents] extra
+    # so PDF/DOCX ingest (roadmap 6.1) works on the host.
+    app/.venv/bin/python -m pip install -e "app/.[documents]" --quiet 2>/dev/null || true
 
     # Restart all agents (systemd unit names from KAOS_SERVICES, which may
     # differ from the agent_name list used for the safety checks above).

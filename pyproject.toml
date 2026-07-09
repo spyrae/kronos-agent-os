@@ -101,6 +101,11 @@ seo_geo = [
     "google-api-python-client>=2.140",
     "google-auth>=2.34",
 ]
+documents = [
+    # PDF/DOCX ingest (roadmap 6.1). Optional — .txt/.md work without them.
+    "pypdf>=4.0",
+    "python-docx>=1.1",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",

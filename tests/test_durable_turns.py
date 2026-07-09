@@ -446,3 +446,28 @@ async def test_ainvoke_forwards_per_call_tool_events(tmp_path: Path, monkeypatch
     assert reply == "done"
     assert ("tool_call", "do_thing") in events
     assert ("tool_result", "do_thing") in events
+
+
+async def test_force_tier_overrides_classification(tmp_path: Path, monkeypatch) -> None:
+    # roadmap 6.2: cost-guardian degradation forces the lite tier regardless of
+    # what classify_tier would otherwise pick for the message.
+    monkeypatch.setattr(settings, "tool_approvals_enabled", False)
+    store = SessionStore(str(tmp_path / "session.db"))
+    agent = _minimal_agent(store)
+    captured: dict[str, str] = {}
+    model = _make_model([AIMessage(content="ok")])
+
+    def fake_get_model(tier):
+        captured["tier"] = tier
+        return model
+
+    with patch("kronos.graph.get_model", side_effect=fake_get_model):
+        await agent.ainvoke(
+            message="сделай глубокий аналитический разбор рынка",
+            thread_id="thread",
+            user_id="u",
+            session_id="s",
+            force_tier="lite",
+        )
+
+    assert captured["tier"] == "lite"

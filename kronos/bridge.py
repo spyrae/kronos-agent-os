@@ -495,6 +495,88 @@ def _compose_image_agent_message(caption: str, image_analysis: str) -> str:
     )
 
 
+# --- Document ingest (roadmap 6.1) ---
+
+_DOC_EXTENSIONS = (".pdf", ".docx", ".txt", ".md", ".markdown")
+
+
+def _document_info(event) -> tuple[str, str]:
+    """(filename, mime_type) for a document attachment, or ("", "")."""
+    doc = getattr(getattr(event.message, "media", None), "document", None)
+    if doc is None:
+        return "", ""
+    from telethon.tl.types import DocumentAttributeFilename
+
+    filename = ""
+    for attr in getattr(doc, "attributes", []):
+        if isinstance(attr, DocumentAttributeFilename):
+            filename = attr.file_name
+            break
+    return filename, str(getattr(doc, "mime_type", "") or "")
+
+
+def _is_document_message(event) -> bool:
+    """A non-image, non-voice document we can ingest (by extension or mime)."""
+    if not getattr(event.message, "media", None):
+        return False
+    if _is_image_message(event) or _is_voice_message(event):
+        return False
+    filename, mime = _document_info(event)
+    low = filename.lower()
+    return (
+        low.endswith(_DOC_EXTENSIONS)
+        or "pdf" in mime
+        or "wordprocessingml" in mime
+        or mime.startswith("text/")
+    )
+
+
+async def _download_document_bytes(event) -> bytes:
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp_path = tmp.name
+        await event.message.download_media(file=tmp_path)
+        with open(tmp_path, "rb") as f:
+            return f.read()
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+async def _extract_document_message(event) -> tuple[str, str]:
+    """Download + extract text; archive raw text to notes/inbox. (text, error)."""
+    from kronos.documents.extract import extract_text
+    from kronos.workspace import ws
+
+    filename, mime = _document_info(event)
+    data = await _download_document_bytes(event)
+    text, error = extract_text(data, filename, mime)
+    if error:
+        return "", error
+
+    # Archive raw text to the inbox for later processing / provenance.
+    try:
+        ws.inbox_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        safe = "".join(c for c in (filename or "document") if c.isalnum() or c in "-_.") or "document"
+        (ws.inbox_dir / f"{stamp}-{safe}.txt").write_text(text, encoding="utf-8")
+    except Exception as e:
+        log.warning("Failed to archive document to inbox: %s", e)
+
+    return text, ""
+
+
+def _compose_document_agent_message(caption: str, filename: str, text: str) -> str:
+    caption = caption.strip()
+    user_request = caption or f"Пользователь прислал документ «{filename}»."
+    return (
+        f"{user_request}\n\n"
+        f"[Документ: {filename}]\n{text}\n\n"
+        "Дай краткое саммари документа и выдели ключевые факты и action items."
+    )
+
+
 def _message_timestamp(event) -> str:
     value = getattr(getattr(event, "message", None), "date", None)
     if hasattr(value, "isoformat"):
@@ -1008,6 +1090,7 @@ async def _ask_agent(
     source_kind: str = "user",
     persist_user_turn: bool = True,
     extra_system_context: str = "",
+    force_tier: str | None = None,
 ) -> str | None:
     """Send message to KronosAgent and return response text.
 
@@ -1046,6 +1129,7 @@ async def _ask_agent(
                 persist_user_turn=persist_user_turn,
                 extra_system_context=extra_system_context,
                 on_tool_event=reporter.on_event,
+                force_tier=force_tier,
             )
     except Exception as e:
         log.error("Agent error: %s", e)
@@ -1244,6 +1328,84 @@ async def _start_webhook_server() -> None:
     log.info("Webhook server listening on %s:%d", webhook_host, webhook_port)
 
 
+# --- /persona command handler (roadmap 6.3) ---
+
+
+async def _handle_persona_command(text: str) -> str | None:
+    """Handle /persona [list | approve <id> | reject <id>]. Returns reply or None."""
+    if not text.startswith("/persona"):
+        return None
+
+    from kronos import evolution
+
+    parts = text.split()
+    action = parts[1].lower() if len(parts) > 1 else "list"
+    agent = settings.agent_name
+
+    if action == "list":
+        pending = evolution.list_pending(agent)
+        if not pending:
+            return "🧬 Нет предложений эволюции персоны."
+        lines = ["🧬 Предложения эволюции персоны:"]
+        for proposal in pending:
+            lines.append(f"#{proposal['id']} → {proposal['target']}: {proposal['rationale'][:80]}")
+        lines.append("\n/persona approve <id> · /persona reject <id>")
+        return "\n".join(lines)
+
+    if action in ("approve", "reject") and len(parts) > 2 and parts[2].isdigit():
+        pid = int(parts[2])
+        decided = evolution.decide_proposal(pid, agent, approved=(action == "approve"))
+        if decided is None:
+            return f"Предложение #{pid} не найдено или уже обработано."
+        if action == "reject":
+            return f"❌ Отклонил предложение #{pid}."
+        path = evolution.apply_proposal(decided)
+        get_swarm().incr_metric("persona_proposals_approved")
+        return f"✅ Применил предложение #{pid} к {decided['target'].upper()}\n{path}"
+
+    return "Использование: /persona [list | approve <id> | reject <id>]"
+
+
+# --- /stats command handler (roadmap 6.2) ---
+
+
+async def _handle_stats_command(text: str) -> str | None:
+    """Handle /stats [today|week]. Returns reply text, or None if not /stats."""
+    if not text.startswith("/stats"):
+        return None
+
+    from kronos.security.cost_stats import cost_report, swarm_cost_by_agent
+
+    parts = text.split()
+    period = "week" if len(parts) > 1 and parts[1].lower().startswith("week") else "today"
+    period_ru = "неделя" if period == "week" else "сегодня"
+
+    report = cost_report(period)
+    total = report["total"]
+    status = get_guardian().get_status()
+
+    lines = [f"📊 Расходы ({period_ru}) — {settings.agent_name}"]
+    if total["requests"] == 0:
+        lines.append("Запросов пока нет.")
+    else:
+        for tier, stats in sorted(report["by_tier"].items()):
+            lines.append(f"• {tier}: {stats['requests']} зпр · ${stats['cost']:.4f}")
+        lines.append(f"• Итого: {total['requests']} зпр · ${total['cost']:.4f}")
+
+    daily = status["daily_cost"]
+    limit = status["daily_limit"] or 0
+    pct = (daily / limit * 100) if limit else 0
+    lines.append(f"\nДневной бюджет: ${daily:.2f} / ${limit:.2f} ({pct:.0f}%)")
+
+    swarm = swarm_cost_by_agent(period)
+    if len(swarm) > 1:
+        lines.append(f"\nПо агентам ({period_ru}):")
+        for agent, cost in sorted(swarm.items(), key=lambda kv: -kv[1]):
+            lines.append(f"• {agent}: ${cost:.4f}")
+
+    return "\n".join(lines)
+
+
 # --- ASO command handler ---
 
 
@@ -1436,8 +1598,9 @@ async def run_bridge(agent: KronosAgent) -> None:
         is_dm = event.is_private
         voice = _is_voice_message(event)
         image = _is_image_message(event)
+        document = _is_document_message(event)
 
-        if not text and not voice and not image:
+        if not text and not voice and not image and not document:
             return
 
         # Swarm ledger ingress: record every observed group message before
@@ -1647,6 +1810,14 @@ async def run_bridge(agent: KronosAgent) -> None:
                 )
                 await _send_to_chat(event.chat_id, reply, topic_id=_extract_topic_id(event))
                 return
+        elif document:
+            clean_text = _strip_mention(text) if not is_dm else text
+            document_text, doc_error = await _extract_document_message(event)
+            if doc_error:
+                await _send_to_chat(
+                    event.chat_id, f"📄 {doc_error}", topic_id=_extract_topic_id(event)
+                )
+                return
         else:
             clean_text = _strip_mention(text) if not is_dm else text
 
@@ -1655,7 +1826,15 @@ async def run_bridge(agent: KronosAgent) -> None:
         # into session history — it disappears after the current LLM call.
         # This is what prevents peer text from being echoed back verbatim.
         group_extra_context = ""
-        invoke_message = _compose_image_agent_message(clean_text, image_analysis) if image else clean_text
+        if image:
+            invoke_message = _compose_image_agent_message(clean_text, image_analysis)
+        elif document:
+            doc_filename, _ = _document_info(event)
+            invoke_message = _compose_document_agent_message(
+                clean_text, doc_filename, document_text
+            )
+        else:
+            invoke_message = clean_text
         invoke_source_kind = "user"
         invoke_persist = True
 
@@ -1767,6 +1946,10 @@ async def run_bridge(agent: KronosAgent) -> None:
             if not observer_reply:
                 return
             reply = observer_reply
+        elif (persona_reply := await _handle_persona_command(clean_text)) is not None:
+            reply = persona_reply
+        elif (stats_reply := await _handle_stats_command(clean_text)) is not None:
+            reply = stats_reply
         elif _is_osint_command(clean_text) and not is_dm:
             log.info("Ignoring /osint command outside DM")
             return
@@ -1789,6 +1972,9 @@ async def run_bridge(agent: KronosAgent) -> None:
                     return
                 reply = osint_reply
             else:
+                # Soft cost degradation: once daily spend crosses the degrade
+                # threshold, force the lite tier instead of blocking.
+                degrade_tier = "lite" if guardian.should_degrade() else None
                 # Call agent with new contract: raw user text as message,
                 # group metadata as transient extra_system_context only.
                 reply = await _ask_agent(
@@ -1799,6 +1985,7 @@ async def run_bridge(agent: KronosAgent) -> None:
                     source_kind=invoke_source_kind,
                     persist_user_turn=invoke_persist,
                     extra_system_context=group_extra_context,
+                    force_tier=degrade_tier,
                 )
 
         # Peer-reaction "PASS" protocol: the agent is instructed to reply
