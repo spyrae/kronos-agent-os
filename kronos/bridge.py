@@ -495,6 +495,88 @@ def _compose_image_agent_message(caption: str, image_analysis: str) -> str:
     )
 
 
+# --- Document ingest (roadmap 6.1) ---
+
+_DOC_EXTENSIONS = (".pdf", ".docx", ".txt", ".md", ".markdown")
+
+
+def _document_info(event) -> tuple[str, str]:
+    """(filename, mime_type) for a document attachment, or ("", "")."""
+    doc = getattr(getattr(event.message, "media", None), "document", None)
+    if doc is None:
+        return "", ""
+    from telethon.tl.types import DocumentAttributeFilename
+
+    filename = ""
+    for attr in getattr(doc, "attributes", []):
+        if isinstance(attr, DocumentAttributeFilename):
+            filename = attr.file_name
+            break
+    return filename, str(getattr(doc, "mime_type", "") or "")
+
+
+def _is_document_message(event) -> bool:
+    """A non-image, non-voice document we can ingest (by extension or mime)."""
+    if not getattr(event.message, "media", None):
+        return False
+    if _is_image_message(event) or _is_voice_message(event):
+        return False
+    filename, mime = _document_info(event)
+    low = filename.lower()
+    return (
+        low.endswith(_DOC_EXTENSIONS)
+        or "pdf" in mime
+        or "wordprocessingml" in mime
+        or mime.startswith("text/")
+    )
+
+
+async def _download_document_bytes(event) -> bytes:
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp_path = tmp.name
+        await event.message.download_media(file=tmp_path)
+        with open(tmp_path, "rb") as f:
+            return f.read()
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+async def _extract_document_message(event) -> tuple[str, str]:
+    """Download + extract text; archive raw text to notes/inbox. (text, error)."""
+    from kronos.documents.extract import extract_text
+    from kronos.workspace import ws
+
+    filename, mime = _document_info(event)
+    data = await _download_document_bytes(event)
+    text, error = extract_text(data, filename, mime)
+    if error:
+        return "", error
+
+    # Archive raw text to the inbox for later processing / provenance.
+    try:
+        ws.inbox_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        safe = "".join(c for c in (filename or "document") if c.isalnum() or c in "-_.") or "document"
+        (ws.inbox_dir / f"{stamp}-{safe}.txt").write_text(text, encoding="utf-8")
+    except Exception as e:
+        log.warning("Failed to archive document to inbox: %s", e)
+
+    return text, ""
+
+
+def _compose_document_agent_message(caption: str, filename: str, text: str) -> str:
+    caption = caption.strip()
+    user_request = caption or f"Пользователь прислал документ «{filename}»."
+    return (
+        f"{user_request}\n\n"
+        f"[Документ: {filename}]\n{text}\n\n"
+        "Дай краткое саммари документа и выдели ключевые факты и action items."
+    )
+
+
 def _message_timestamp(event) -> str:
     value = getattr(getattr(event, "message", None), "date", None)
     if hasattr(value, "isoformat"):
@@ -1478,8 +1560,9 @@ async def run_bridge(agent: KronosAgent) -> None:
         is_dm = event.is_private
         voice = _is_voice_message(event)
         image = _is_image_message(event)
+        document = _is_document_message(event)
 
-        if not text and not voice and not image:
+        if not text and not voice and not image and not document:
             return
 
         # Swarm ledger ingress: record every observed group message before
@@ -1689,6 +1772,14 @@ async def run_bridge(agent: KronosAgent) -> None:
                 )
                 await _send_to_chat(event.chat_id, reply, topic_id=_extract_topic_id(event))
                 return
+        elif document:
+            clean_text = _strip_mention(text) if not is_dm else text
+            document_text, doc_error = await _extract_document_message(event)
+            if doc_error:
+                await _send_to_chat(
+                    event.chat_id, f"📄 {doc_error}", topic_id=_extract_topic_id(event)
+                )
+                return
         else:
             clean_text = _strip_mention(text) if not is_dm else text
 
@@ -1697,7 +1788,15 @@ async def run_bridge(agent: KronosAgent) -> None:
         # into session history — it disappears after the current LLM call.
         # This is what prevents peer text from being echoed back verbatim.
         group_extra_context = ""
-        invoke_message = _compose_image_agent_message(clean_text, image_analysis) if image else clean_text
+        if image:
+            invoke_message = _compose_image_agent_message(clean_text, image_analysis)
+        elif document:
+            doc_filename, _ = _document_info(event)
+            invoke_message = _compose_document_agent_message(
+                clean_text, doc_filename, document_text
+            )
+        else:
+            invoke_message = clean_text
         invoke_source_kind = "user"
         invoke_persist = True
 
