@@ -63,10 +63,12 @@ def create_app(scheduler=None, agent=None) -> FastAPI:
         redoc_url=None,
     )
 
-    # CORS for local dev
+    # CORS: the UI is served same-origin by this app; cross-origin is only
+    # needed for local dev (vite on another localhost port). Never wildcard —
+    # the API is authenticated and must not be callable from arbitrary sites.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
         allow_methods=["*"],
         allow_headers=["*"],
     )
