@@ -11,6 +11,7 @@ import GraphPage from './pages/GraphPage';
 import SwarmPage from './pages/SwarmPage';
 import ConfigPage from './pages/ConfigPage';
 import MemoryPage from './pages/MemoryPage';
+import MonitoringPage from './pages/MonitoringPage';
 import PerformancePage from './pages/PerformancePage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import AuditTrailPage from './pages/AuditTrailPage';
@@ -107,6 +108,7 @@ const NAV_SECTIONS: NavSection[] = [
   {
     title: 'OPERATIONS',
     items: [
+      { path: '/monitoring', label: 'Jobs & Tasks', icon: 'J' },
       { path: '/performance', label: 'Performance', icon: 'P' },
       { path: '/analytics', label: 'Analytics', icon: 'N' },
       { path: '/audit', label: 'Audit Trail', icon: 'T' },
@@ -129,7 +131,7 @@ const NAV_SECTIONS: NavSection[] = [
 
 const ICON_COLORS: Record<string, string> = {
   '~': '#f97316', A: '#3b82f6', M: '#8b5cf6', L: '#4ade80',
-  P: '#f59e0b', N: '#06b6d4', T: '#ec4899',
+  J: '#0ea5e9', P: '#f59e0b', N: '#06b6d4', T: '#ec4899',
   X: '#f97316',
   '!': '#ef4444', S: '#6366f1', K: '#14b8a6', G: '#a78bfa', Q: '#22c55e', W: '#f472b6', C: '#64748b',
 };
@@ -310,6 +312,7 @@ export default function App() {
           <Route path="/agents" element={<AgentsPage />} />
           <Route path="/memory" element={<MemoryPage />} />
           <Route path="/logs" element={<LogsPage />} />
+          <Route path="/monitoring" element={<MonitoringPage />} />
           <Route path="/performance" element={<PerformancePage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/audit" element={<AuditTrailPage />} />

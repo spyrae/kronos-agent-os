@@ -34,6 +34,10 @@ interface RequestEntry {
   ts: string; tier: string; duration_ms: number; input_preview: string; output_preview: string; approx_cost_usd: number;
 }
 
+interface ScheduledTask {
+  id: number; kind: string; message: string; run_at: number; recur_seconds: number; thread_id: string;
+}
+
 function statusFor(status: string): 'running' | 'stopped' | 'error' | 'warning' {
   if (status === 'running' || status === 'enabled' || status === 'ok') return 'running';
   if (status === 'error') return 'error';
@@ -53,6 +57,7 @@ export default function MonitoringPage() {
   const [requests, setRequests] = useState<RequestEntry[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [history, setHistory] = useState<JobRun[]>([]);
+  const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [selectedJob, setSelectedJob] = useState('all');
   const [toast, setToast] = useState('');
 
@@ -63,6 +68,7 @@ export default function MonitoringPage() {
     api<{ requests: RequestEntry[] }>('/api/monitoring/requests?limit=20').then(r => setRequests(r.requests)).catch(() => {});
     api<{ jobs: Job[] }>('/api/monitoring/jobs').then(r => setJobs(r.jobs)).catch(() => {});
     api<{ runs: JobRun[] }>(`/api/monitoring/jobs/history?job=${selectedJob}&limit=80`).then(r => setHistory(r.runs)).catch(() => {});
+    api<{ tasks: ScheduledTask[] }>('/api/monitoring/scheduled-tasks').then(r => setTasks(r.tasks)).catch(() => {});
   };
 
   useEffect(() => {
@@ -81,6 +87,20 @@ export default function MonitoringPage() {
       showToast(e.message || 'Job action failed');
     }
   };
+
+  const cancelTask = async (task: ScheduledTask) => {
+    if (!window.confirm(`Cancel ${task.kind} #${task.id}?`)) return;
+    try {
+      await api(`/api/monitoring/scheduled-tasks/${task.id}/cancel`, { method: 'POST' });
+      showToast(`Cancelled #${task.id}`);
+      load();
+    } catch (e: any) {
+      showToast(e.message || 'Cancel failed');
+    }
+  };
+
+  const formatEpoch = (epoch: number) =>
+    new Date(epoch * 1000).toLocaleString([], { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 
   const card: CSSProperties = {
     background: '#111', border: '1px solid #1a1a1a', borderRadius: 8, padding: '1rem',
@@ -138,6 +158,50 @@ export default function MonitoringPage() {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* User-scheduled reminders and follow-ups (roadmap 4.2/4.3) */}
+      <div style={{ ...card, marginBottom: '1rem' }}>
+        <SectionHeader title="Reminders & Follow-ups" action={<span style={{ color: '#888', fontSize: '0.75rem' }}>{tasks.length} pending</span>} />
+        {tasks.length === 0 ? (
+          <div style={{ padding: '1.25rem', textAlign: 'center', color: '#555', fontSize: '0.8rem' }}>
+            No pending tasks — schedule one from chat: “напомни завтра в 9 про…”
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', minWidth: 700, borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #222' }}>
+                  {['#', 'Kind', 'Message', 'Due', 'Repeats', 'Thread', ''].map(header => (
+                    <th key={header} style={{ padding: '0.55rem 0.6rem', textAlign: 'left', color: '#555', fontWeight: 600, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{header}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {tasks.map(task => (
+                  <tr key={task.id} style={{ borderBottom: '1px solid #171717' }}>
+                    <td style={{ padding: '0.6rem', color: '#666', fontFamily: 'monospace' }}>#{task.id}</td>
+                    <td style={{ padding: '0.6rem' }}>
+                      <span style={{
+                        fontSize: '0.68rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em',
+                        color: task.kind === 'followup' ? '#06b6d4' : '#f97316',
+                        background: task.kind === 'followup' ? '#06b6d418' : '#f9731618',
+                        borderRadius: 6, padding: '0.15rem 0.5rem',
+                      }}>{task.kind}</span>
+                    </td>
+                    <td style={{ padding: '0.6rem', color: '#ddd', maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.message}</td>
+                    <td style={{ padding: '0.6rem', color: '#888' }}>{formatEpoch(task.run_at)}</td>
+                    <td style={{ padding: '0.6rem', color: '#888' }}>{task.recur_seconds ? `every ${Math.round(task.recur_seconds / 3600)}h` : 'once'}</td>
+                    <td style={{ padding: '0.6rem', color: '#666', fontFamily: 'monospace', fontSize: '0.72rem' }}>{task.thread_id}</td>
+                    <td style={{ padding: '0.6rem', textAlign: 'right' }}>
+                      <button onClick={() => cancelTask(task)} style={actionButton('#ef4444')}>Cancel</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 360px', gap: '1rem', marginBottom: '1rem' }}>

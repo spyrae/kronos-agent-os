@@ -92,3 +92,45 @@ async def test_job_history_filters_by_job(tmp_path, monkeypatch):
     assert result["total"] == 1
     assert result["runs"][0]["status"] == "error"
     assert result["runs"][0]["error"] == "boom"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_tasks_listed_and_cancelled(tmp_path, monkeypatch):
+    from kronos.config import settings
+
+    db_dir = tmp_path / "kronos"
+    db_dir.mkdir(parents=True)
+    monkeypatch.setattr(settings, "db_dir", str(db_dir))
+    monkeypatch.setattr(settings, "agent_name", "kronos")
+
+    import kronos.db as _db
+
+    _db._instances.clear()
+    try:
+        from kronos import scheduled_tasks as tasks_store
+
+        task_id = tasks_store.add_task(
+            agent_name="kronos",
+            chat_id=1,
+            topic_id=None,
+            thread_id="1",
+            run_at=4102444800.0,
+            message="ping me",
+            kind="reminder",
+        )
+
+        listed = await monitoring.get_scheduled_tasks()
+        assert listed["total"] == 1
+        assert listed["tasks"][0]["id"] == task_id
+        assert listed["tasks"][0]["kind"] == "reminder"
+
+        result = await monitoring.cancel_scheduled_task(task_id)
+        assert result["ok"] is True
+        assert (await monitoring.get_scheduled_tasks())["total"] == 0
+
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException):
+            await monitoring.cancel_scheduled_task(task_id)
+    finally:
+        _db._instances.clear()

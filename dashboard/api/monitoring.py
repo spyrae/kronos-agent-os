@@ -255,3 +255,25 @@ async def get_cost_history(days: int = Query(7, le=90)):
         for date in sorted(daily.keys())[-days:]
     ]
     return {"days": result}
+
+
+# --- User-scheduled tasks: reminders + follow-ups (roadmap 4.2/4.3) ---
+
+
+@router.get("/scheduled-tasks")
+async def get_scheduled_tasks():
+    """Pending reminders and follow-ups created via chat, soonest first."""
+    from kronos import scheduled_tasks as tasks_store
+
+    tasks = tasks_store.list_pending(settings.agent_name)
+    return {"tasks": tasks, "total": len(tasks)}
+
+
+@router.post("/scheduled-tasks/{task_id}/cancel")
+async def cancel_scheduled_task(task_id: int):
+    """Cancel a pending reminder/follow-up."""
+    from kronos import scheduled_tasks as tasks_store
+
+    if not tasks_store.cancel_task(task_id, settings.agent_name):
+        raise HTTPException(404, "Task not found or already finished")
+    return {"ok": True, "id": task_id}
