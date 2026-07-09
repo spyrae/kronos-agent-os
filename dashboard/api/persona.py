@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from dashboard.auth import verify_token
+from kronos import evolution
+from kronos.config import settings
 from kronos.persona import build_system_prompt
 from kronos.workspace import ws
 
@@ -69,3 +71,37 @@ async def preview_prompt():
     """Preview the assembled system prompt."""
     prompt = build_system_prompt()
     return {"prompt": prompt, "length": len(prompt)}
+
+
+# --- Self-improvement proposals (roadmap 6.3) ---
+# Same semantics as the Telegram /persona command: approve applies the
+# proposal to the workspace file and counts the swarm metric.
+
+
+class ProposalDecision(BaseModel):
+    approved: bool
+
+
+@router.get("/proposals")
+async def list_proposals():
+    """Pending persona evolution proposals for this agent."""
+    pending = evolution.list_pending(settings.agent_name)
+    return {"proposals": pending, "pending": len(pending)}
+
+
+@router.post("/proposals/{proposal_id}/decision")
+async def decide_proposal(proposal_id: int, body: ProposalDecision):
+    """Approve (and apply) or reject a persona evolution proposal."""
+    decided = evolution.decide_proposal(
+        proposal_id, settings.agent_name, approved=body.approved
+    )
+    if decided is None:
+        raise HTTPException(404, "Proposal not found or already decided")
+    if not body.approved:
+        return {"ok": True, "id": proposal_id, "status": "rejected"}
+
+    path = evolution.apply_proposal(decided)
+    from kronos.swarm_store import get_swarm
+
+    get_swarm().incr_metric("persona_proposals_approved")
+    return {"ok": True, "id": proposal_id, "status": "approved", "applied_to": path}

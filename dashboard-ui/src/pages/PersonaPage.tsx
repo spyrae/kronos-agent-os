@@ -5,6 +5,7 @@ import CodeMirror from '@uiw/react-codemirror';
 import { markdown } from '@codemirror/lang-markdown';
 
 interface PersonaFile { name: string; size: number; preview: string; }
+interface Proposal { id: number; target: string; rationale: string; proposal: string; created_at: number; }
 
 const FILE_ICONS: Record<string, string> = {
   IDENTITY: '\u{1F9E0}', SOUL: '\u2728', USER: '\u{1F464}', STYLE: '\u{1F3A8}',
@@ -17,10 +18,32 @@ export default function PersonaPage() {
   const [content, setContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [deciding, setDeciding] = useState<number | null>(null);
+
+  const loadProposals = () => {
+    api<{ proposals: Proposal[] }>('/api/persona/proposals').then(r => setProposals(r.proposals)).catch(() => {});
+  };
 
   useEffect(() => {
     api<{ files: PersonaFile[] }>('/api/persona/files').then(r => setFiles(r.files)).catch(() => {});
+    loadProposals();
   }, []);
+
+  const decideProposal = async (id: number, approved: boolean) => {
+    if (approved && !window.confirm(`Apply proposal #${id} to the workspace file?`)) return;
+    setDeciding(id);
+    try {
+      await api(`/api/persona/proposals/${id}/decision`, { method: 'POST', body: JSON.stringify({ approved }) });
+      loadProposals();
+      // Approved proposals mutate workspace files — refresh the file list/editor.
+      if (approved) {
+        api<{ files: PersonaFile[] }>('/api/persona/files').then(r => setFiles(r.files)).catch(() => {});
+        if (selected) loadFile(selected);
+      }
+    } catch { /* */ }
+    setDeciding(null);
+  };
 
   const loadFile = async (name: string) => {
     const r = await api<{ content: string }>(`/api/persona/files/${name}`);
@@ -46,6 +69,54 @@ export default function PersonaPage() {
   return (
     <div>
       <h1 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '1.25rem' }}>Persona Editor</h1>
+
+      {/* Self-improvement proposals (roadmap 6.3) */}
+      {proposals.length > 0 && (
+        <div style={{ ...card, marginBottom: '1rem', borderColor: '#f9731633' }}>
+          <SectionHeader title={`Evolution Proposals (${proposals.length})`} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {proposals.map(p => (
+              <div key={p.id} style={{
+                background: '#0a0a0a', border: '1px solid #1a1a1a', borderRadius: 10, padding: '0.85rem 1rem',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.72rem', color: '#666', fontFamily: 'monospace' }}>#{p.id}</span>
+                    <span style={{
+                      fontSize: '0.7rem', fontWeight: 600, color: '#f97316',
+                      background: '#f9731618', borderRadius: 6, padding: '0.15rem 0.5rem',
+                      textTransform: 'uppercase', letterSpacing: '0.04em',
+                    }}>{p.target}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      onClick={() => decideProposal(p.id, true)}
+                      disabled={deciding === p.id}
+                      style={{
+                        padding: '0.35rem 0.9rem', borderRadius: 8, border: 'none', cursor: 'pointer',
+                        background: '#166534', color: '#fff', fontSize: '0.75rem', fontWeight: 600,
+                      }}
+                    >{deciding === p.id ? '...' : 'Approve & apply'}</button>
+                    <button
+                      onClick={() => decideProposal(p.id, false)}
+                      disabled={deciding === p.id}
+                      style={{
+                        padding: '0.35rem 0.9rem', borderRadius: 8, border: '1px solid #7f1d1d', cursor: 'pointer',
+                        background: 'transparent', color: '#ef4444', fontSize: '0.75rem', fontWeight: 600,
+                      }}
+                    >Reject</button>
+                  </div>
+                </div>
+                <div style={{ fontSize: '0.8rem', color: '#bbb', marginBottom: '0.35rem' }}>{p.rationale}</div>
+                <pre style={{
+                  fontSize: '0.74rem', color: '#777', whiteSpace: 'pre-wrap', margin: 0,
+                  maxHeight: '7.5rem', overflow: 'auto', fontFamily: '"JetBrains Mono", monospace',
+                }}>{p.proposal}</pre>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: '1rem' }}>
         {/* File list */}
