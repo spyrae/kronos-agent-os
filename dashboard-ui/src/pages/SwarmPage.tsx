@@ -46,15 +46,32 @@ function formatDate(value: string) {
   return date.toLocaleString([], { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+interface Handoff { id: number; from_agent: string; to_agent: string; context: string; state: string; created_at: number; }
+interface CouncilPosition { agent_name: string; position: string; }
+interface Council { id: number; initiator: string; question: string; participants: string; state: string; created_at: number; positions?: CouncilPosition[]; }
+interface MemoryRequest { id: number; from_agent: string; to_agent: string; query: string; state: string; created_at: number; }
+interface Collaboration { handoffs: Handoff[]; councils: Council[]; memory_requests: MemoryRequest[]; total: number; }
+
+const formatEpoch = (epoch: number) =>
+  new Date(epoch * 1000).toLocaleString([], { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+const collabState = (state: string): 'running' | 'stopped' | 'error' | 'warning' => {
+  if (state === 'done') return 'running';
+  if (state === 'failed') return 'error';
+  return 'warning'; // pending / accepted / gathering / synthesizing
+};
+
 export default function SwarmPage() {
   const [runs, setRuns] = useState<SwarmRun[]>([]);
   const [selectedId, setSelectedId] = useState('');
+  const [collab, setCollab] = useState<Collaboration | null>(null);
 
   useEffect(() => {
     api<{ runs: SwarmRun[] }>('/api/swarm/runs').then(r => {
       setRuns(r.runs);
       if (!selectedId && r.runs.length > 0) setSelectedId(r.runs[0].id);
     }).catch(() => {});
+    api<Collaboration>('/api/swarm/collaboration').then(setCollab).catch(() => {});
   }, []);
 
   const selected = runs.find(run => run.id === selectedId) || runs[0];
@@ -173,6 +190,67 @@ export default function SwarmPage() {
           </div>
         )}
       </div>
+
+      {/* Swarm 2.0 collaboration (roadmap 5): hand-offs, councils, memory requests */}
+      {collab && collab.total > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem', marginTop: '1rem' }}>
+          <div style={card}>
+            <SectionHeader title={`Hand-offs (${collab.handoffs.length})`} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', maxHeight: 300, overflow: 'auto' }}>
+              {collab.handoffs.length === 0 && <div style={{ color: '#555', fontSize: '0.78rem', padding: '0.75rem' }}>No hand-offs yet</div>}
+              {collab.handoffs.map(h => (
+                <div key={h.id} style={{ background: '#0a0a0a', border: '1px solid #171717', borderRadius: 8, padding: '0.6rem 0.7rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.3rem' }}>
+                    <span style={{ color: '#ddd', fontSize: '0.78rem', fontWeight: 650 }}>{h.from_agent} → {h.to_agent}</span>
+                    <StatusBadge status={collabState(h.state)} label={h.state} />
+                  </div>
+                  <div style={{ color: '#888', fontSize: '0.74rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.context}</div>
+                  <div style={{ color: '#555', fontSize: '0.66rem', marginTop: '0.25rem' }}>{formatEpoch(h.created_at)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={card}>
+            <SectionHeader title={`Councils (${collab.councils.length})`} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', maxHeight: 300, overflow: 'auto' }}>
+              {collab.councils.length === 0 && <div style={{ color: '#555', fontSize: '0.78rem', padding: '0.75rem' }}>No council sessions yet</div>}
+              {collab.councils.map(c => (
+                <div key={c.id} style={{ background: '#0a0a0a', border: '1px solid #171717', borderRadius: 8, padding: '0.6rem 0.7rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.3rem' }}>
+                    <span style={{ color: '#ddd', fontSize: '0.78rem', fontWeight: 650 }}>{c.initiator} convened {c.participants}</span>
+                    <StatusBadge status={collabState(c.state)} label={c.state} />
+                  </div>
+                  <div style={{ color: '#bbb', fontSize: '0.76rem', marginBottom: '0.3rem' }}>{c.question}</div>
+                  {(c.positions || []).map(p => (
+                    <div key={p.agent_name} style={{ color: '#777', fontSize: '0.72rem', padding: '0.15rem 0 0.15rem 0.6rem', borderLeft: '2px solid #222', marginBottom: '0.2rem' }}>
+                      <span style={{ color: '#999', fontWeight: 600 }}>{p.agent_name}:</span> {p.position.slice(0, 140)}
+                    </div>
+                  ))}
+                  <div style={{ color: '#555', fontSize: '0.66rem', marginTop: '0.25rem' }}>{formatEpoch(c.created_at)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={card}>
+            <SectionHeader title={`Memory Requests (${collab.memory_requests.length})`} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', maxHeight: 300, overflow: 'auto' }}>
+              {collab.memory_requests.length === 0 && <div style={{ color: '#555', fontSize: '0.78rem', padding: '0.75rem' }}>No memory requests yet</div>}
+              {collab.memory_requests.map(m => (
+                <div key={m.id} style={{ background: '#0a0a0a', border: '1px solid #171717', borderRadius: 8, padding: '0.6rem 0.7rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.3rem' }}>
+                    <span style={{ color: '#ddd', fontSize: '0.78rem', fontWeight: 650 }}>{m.from_agent} asks {m.to_agent}</span>
+                    <StatusBadge status={collabState(m.state)} label={m.state} />
+                  </div>
+                  <div style={{ color: '#888', fontSize: '0.74rem' }}>{m.query}</div>
+                  <div style={{ color: '#555', fontSize: '0.66rem', marginTop: '0.25rem' }}>{formatEpoch(m.created_at)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

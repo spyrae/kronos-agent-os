@@ -146,3 +146,50 @@ async def list_swarm_runs():
         "total": len(runs),
         "demo": all(run.get("demo") for run in runs),
     }
+
+
+# --- Swarm 2.0 collaboration: hand-offs, councils, memory requests (roadmap 5) ---
+
+
+@router.get("/collaboration")
+async def swarm_collaboration():
+    """Recent cross-agent hand-offs, council sessions, and memory requests."""
+    handoffs = _rows(
+        """
+        SELECT id, from_agent, to_agent, context, state, created_at
+        FROM handoffs ORDER BY created_at DESC LIMIT 20
+        """
+    )
+    councils = _rows(
+        """
+        SELECT id, initiator, question, participants, state, created_at
+        FROM council_sessions ORDER BY created_at DESC LIMIT 20
+        """
+    )
+    if councils:
+        positions = _rows(
+            """
+            SELECT session_id, agent_name, position, created_at
+            FROM council_positions
+            WHERE session_id IN ({placeholders})
+            ORDER BY created_at ASC
+            """.format(placeholders=",".join("?" for _ in councils)),
+            tuple(c["id"] for c in councils),
+        )
+        by_session: dict[int, list[dict]] = {}
+        for pos in positions:
+            by_session.setdefault(pos["session_id"], []).append(pos)
+        for c in councils:
+            c["positions"] = by_session.get(c["id"], [])
+    memory_requests = _rows(
+        """
+        SELECT id, from_agent, to_agent, query, state, created_at
+        FROM memory_requests ORDER BY created_at DESC LIMIT 20
+        """
+    )
+    return {
+        "handoffs": handoffs,
+        "councils": councils,
+        "memory_requests": memory_requests,
+        "total": len(handoffs) + len(councils) + len(memory_requests),
+    }

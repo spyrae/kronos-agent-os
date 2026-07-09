@@ -62,3 +62,55 @@ async def test_swarm_runs_builds_from_claims_and_messages(tmp_path, monkeypatch)
     assert run["metrics"]["duplicate_replies_avoided"] == 4
     assert any(role["status"] == "winner" for role in run["roles"])
     assert run["final"] == "final synthesis"
+
+
+@pytest.mark.asyncio
+async def test_collaboration_empty_without_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(swarm.settings, "swarm_db_path", str(tmp_path / "missing.db"))
+
+    result = await swarm.swarm_collaboration()
+
+    assert result == {"handoffs": [], "councils": [], "memory_requests": [], "total": 0}
+
+
+@pytest.mark.asyncio
+async def test_collaboration_lists_handoffs_councils_and_memory_requests(tmp_path, monkeypatch):
+    db_path = tmp_path / "swarm.db"
+    monkeypatch.setattr(swarm.settings, "swarm_db_path", str(db_path))
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript("""
+            CREATE TABLE handoffs (
+                id INTEGER PRIMARY KEY, chat_id INTEGER, topic_id INTEGER,
+                thread_id TEXT, from_agent TEXT, to_agent TEXT, context TEXT,
+                state TEXT, created_at REAL, accepted_at REAL
+            );
+            CREATE TABLE council_sessions (
+                id INTEGER PRIMARY KEY, chat_id INTEGER, topic_id INTEGER,
+                thread_id TEXT, initiator TEXT, question TEXT, participants TEXT,
+                state TEXT, created_at REAL
+            );
+            CREATE TABLE council_positions (
+                id INTEGER PRIMARY KEY, session_id INTEGER, agent_name TEXT,
+                position TEXT, created_at REAL
+            );
+            CREATE TABLE memory_requests (
+                id INTEGER PRIMARY KEY, chat_id INTEGER, topic_id INTEGER,
+                thread_id TEXT, from_agent TEXT, to_agent TEXT, query TEXT,
+                state TEXT, created_at REAL
+            );
+            INSERT INTO handoffs VALUES (1, 10, 0, '10', 'kronos', 'nexus', 'analytics question', 'done', 100.0, 101.0);
+            INSERT INTO council_sessions VALUES (7, 10, 0, '10', 'kronos', 'ship or wait?', 'nexus,lacuna', 'done', 100.0);
+            INSERT INTO council_positions VALUES (1, 7, 'nexus', 'ship', 100.5);
+            INSERT INTO council_positions VALUES (2, 7, 'lacuna', 'wait', 100.6);
+            INSERT INTO memory_requests VALUES (3, 10, 0, '10', 'impulse', 'kronos', 'what about X', 'pending', 102.0);
+        """)
+
+    result = await swarm.swarm_collaboration()
+
+    assert result["total"] == 3
+    assert result["handoffs"][0]["from_agent"] == "kronos"
+    assert result["handoffs"][0]["state"] == "done"
+    council = result["councils"][0]
+    assert council["question"] == "ship or wait?"
+    assert [p["agent_name"] for p in council["positions"]] == ["nexus", "lacuna"]
+    assert result["memory_requests"][0]["query"] == "what about X"
