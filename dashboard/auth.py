@@ -38,6 +38,17 @@ def verify_credentials(username: str, password: str) -> bool:
     return user_ok and pass_ok
 
 
+def verify_session_token(token: str) -> bool:
+    """Check that a session token exists and has not expired."""
+    if not token:
+        return False
+    expiry = _sessions.get(token)
+    if not expiry or expiry < time.time():
+        _sessions.pop(token, None)
+        return False
+    return True
+
+
 async def verify_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> str:
@@ -46,10 +57,7 @@ async def verify_token(
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     token = credentials.credentials
-    expiry = _sessions.get(token)
-
-    if not expiry or expiry < time.time():
-        _sessions.pop(token, None)
+    if not verify_session_token(token):
         raise HTTPException(status_code=401, detail="Session expired")
 
     return token

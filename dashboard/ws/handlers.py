@@ -5,6 +5,7 @@ import logging
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from dashboard.auth import verify_session_token
 from kronos.logging import add_pii_filter
 
 # Connected WebSocket clients for log streaming
@@ -41,7 +42,17 @@ def install_log_handler() -> None:
 
 
 async def ws_logs(websocket: WebSocket) -> None:
-    """WebSocket endpoint for live log streaming."""
+    """WebSocket endpoint for live log streaming.
+
+    Requires a valid dashboard session token via the ``token`` query
+    parameter — logs carry message texts and tool arguments, so the stream
+    must not be readable by unauthenticated clients. The check runs before
+    ``accept()``, rejecting the handshake outright.
+    """
+    if not verify_session_token(websocket.query_params.get("token", "")):
+        await websocket.close(code=4401)
+        return
+
     await websocket.accept()
     log_clients.add(websocket)
     try:

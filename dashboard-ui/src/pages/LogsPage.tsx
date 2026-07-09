@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { getToken } from '../api/client';
 import { StatusBadge } from '../components/Charts';
 
 export default function LogsPage() {
@@ -9,7 +10,7 @@ export default function LogsPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/logs`;
+    const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/logs?token=${encodeURIComponent(getToken())}`;
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => setConnected(true);
