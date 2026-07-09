@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
 import { getToken, setToken, api } from './api/client';
+import FleetPage from './pages/FleetPage';
 import OverviewPage from './pages/OverviewPage';
 import PersonaPage from './pages/PersonaPage';
 import LogsPage from './pages/LogsPage';
@@ -100,6 +101,7 @@ const NAV_SECTIONS: NavSection[] = [
     title: 'MONITORING',
     items: [
       { path: '/', label: 'Overview', icon: '~' },
+      { path: '/fleet', label: 'Fleet', icon: 'F' },
       { path: '/agents', label: 'Agents', icon: 'A' },
       { path: '/memory', label: 'Memory Explorer', icon: 'M' },
       { path: '/logs', label: 'Live Logs', icon: 'L' },
@@ -130,7 +132,7 @@ const NAV_SECTIONS: NavSection[] = [
 ];
 
 const ICON_COLORS: Record<string, string> = {
-  '~': '#f97316', A: '#3b82f6', M: '#8b5cf6', L: '#4ade80',
+  '~': '#f97316', F: '#22d3ee', A: '#3b82f6', M: '#8b5cf6', L: '#4ade80',
   J: '#0ea5e9', P: '#f59e0b', N: '#06b6d4', T: '#ec4899',
   X: '#f97316',
   '!': '#ef4444', S: '#6366f1', K: '#14b8a6', G: '#a78bfa', Q: '#22c55e', W: '#f472b6', C: '#64748b',
@@ -310,6 +312,7 @@ export default function App() {
       <Layout>
         <Routes>
           <Route path="/" element={<OverviewPage />} />
+          <Route path="/fleet" element={<FleetPage />} />
           <Route path="/agents" element={<AgentsPage />} />
           <Route path="/memory" element={<MemoryPage />} />
           <Route path="/logs" element={<LogsPage />} />

@@ -17,6 +17,7 @@ from dashboard.api.agents import router as agents_router
 from dashboard.api.anomalies import router as anomalies_router
 from dashboard.api.audit_trail import router as audit_trail_router
 from dashboard.api.config import router as config_router
+from dashboard.api.fleet import router as fleet_router
 from dashboard.api.graph import router as graph_router
 from dashboard.api.graph import set_agent
 from dashboard.api.health import router as health_router
@@ -88,6 +89,7 @@ def create_app(scheduler=None, agent=None) -> FastAPI:
     app.include_router(config_router)
     app.include_router(memory_router)
     app.include_router(swarm_router)
+    app.include_router(fleet_router)
     app.include_router(sandbox_router)
 
     # WebSocket
