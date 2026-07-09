@@ -37,6 +37,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.market_review import run_market_review
     from kronos.cron.memory_ask import run_memory_intake
     from kronos.cron.news_monitor import run_news_monitor
+    from kronos.cron.persona_evolve import run_persona_evolution
     from kronos.cron.personal_observer import run_daily_scope, run_personal_observer
     from kronos.cron.reminders import run_due_reminders
     from kronos.cron.self_improve import run_self_improve
@@ -112,6 +113,10 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # Skill Improve — weekly Sunday 20:00 UTC (was: kronos-skill-improve.timer)
     scheduler.add_weekly("skill-improve", run_skill_improve, weekday=6, hour_utc=20)
 
+    # Persona Evolution — weekly Sunday 21:00 UTC. Proposes a SOUL/IDENTITY edit
+    # from the week's feedback; applied only on /persona approve (roadmap 6.3).
+    scheduler.add_weekly("persona-evolution", run_persona_evolution, weekday=6, hour_utc=21)
+
     # People Scout — weekly Sunday 02:00 UTC (was: kronos-people-scout.timer).
     # DISABLED 2026-07-05: paused — LinkedIn profile discovery is not needed for
     # now. The runner, focus rotation, criteria and SEEN.md tracking stay intact.
@@ -168,5 +173,5 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
         nexus_jobs_registered = 4
 
-    total = 18 + nexus_jobs_registered  # +user-reminders +handoff/council/memory intake; signal-jobs, travel insights, people-scout and group-digest paused
+    total = 19 + nexus_jobs_registered  # +reminders +handoff/council/memory intake +persona-evolution; signal-jobs, travel insights, people-scout and group-digest paused
     log.info("%d cron jobs registered for agent '%s'", total, me)

@@ -1328,6 +1328,44 @@ async def _start_webhook_server() -> None:
     log.info("Webhook server listening on %s:%d", webhook_host, webhook_port)
 
 
+# --- /persona command handler (roadmap 6.3) ---
+
+
+async def _handle_persona_command(text: str) -> str | None:
+    """Handle /persona [list | approve <id> | reject <id>]. Returns reply or None."""
+    if not text.startswith("/persona"):
+        return None
+
+    from kronos import evolution
+
+    parts = text.split()
+    action = parts[1].lower() if len(parts) > 1 else "list"
+    agent = settings.agent_name
+
+    if action == "list":
+        pending = evolution.list_pending(agent)
+        if not pending:
+            return "🧬 Нет предложений эволюции персоны."
+        lines = ["🧬 Предложения эволюции персоны:"]
+        for proposal in pending:
+            lines.append(f"#{proposal['id']} → {proposal['target']}: {proposal['rationale'][:80]}")
+        lines.append("\n/persona approve <id> · /persona reject <id>")
+        return "\n".join(lines)
+
+    if action in ("approve", "reject") and len(parts) > 2 and parts[2].isdigit():
+        pid = int(parts[2])
+        decided = evolution.decide_proposal(pid, agent, approved=(action == "approve"))
+        if decided is None:
+            return f"Предложение #{pid} не найдено или уже обработано."
+        if action == "reject":
+            return f"❌ Отклонил предложение #{pid}."
+        path = evolution.apply_proposal(decided)
+        get_swarm().incr_metric("persona_proposals_approved")
+        return f"✅ Применил предложение #{pid} к {decided['target'].upper()}\n{path}"
+
+    return "Использование: /persona [list | approve <id> | reject <id>]"
+
+
 # --- /stats command handler (roadmap 6.2) ---
 
 
@@ -1908,6 +1946,8 @@ async def run_bridge(agent: KronosAgent) -> None:
             if not observer_reply:
                 return
             reply = observer_reply
+        elif (persona_reply := await _handle_persona_command(clean_text)) is not None:
+            reply = persona_reply
         elif (stats_reply := await _handle_stats_command(clean_text)) is not None:
             reply = stats_reply
         elif _is_osint_command(clean_text) and not is_dm:
