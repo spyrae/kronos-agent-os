@@ -74,15 +74,15 @@ async def test_valid_select_passes_sql_via_stdin(registry, captured_ssh):
 async def test_injection_payload_never_reaches_shell(registry, captured_ssh):
     # Passes the SELECT/keyword/dot filters, but tries to break out of the
     # old `"{query}"` quoting to run a host command.
-    payload = "SELECT body FROM swarm_messages WHERE body = 'x'; touch /tmp/pwned; --'"
+    payload = "SELECT body FROM swarm_messages WHERE body = 'x'; touch HACKED; --'"
     out = await _run(payload)
 
     assert out == "(fake output)"
     call = captured_ssh[0]
     # The whole payload is confined to stdin; the shell command is fixed.
     assert call["input_data"] == payload
-    assert "touch /tmp/pwned" not in call["command"]
-    assert "/tmp/pwned" not in call["command"]
+    assert "touch HACKED" not in call["command"]
+    assert "HACKED" not in call["command"]
 
 
 async def test_dot_command_blocked(registry, captured_ssh):

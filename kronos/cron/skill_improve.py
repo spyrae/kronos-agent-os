@@ -6,6 +6,7 @@ proposes minimal improvements to SKILL.md files with versioned backups.
 
 import json
 import logging
+import re
 import time
 from collections import defaultdict
 from datetime import datetime
@@ -33,8 +34,6 @@ SKILL_KEYWORDS = {
 
 
 def _tokenize_skill_text(text: str) -> set[str]:
-    import re
-
     return {
         token
         for token in re.findall(r"[a-zA-Zа-яА-Я0-9]{4,}", text.lower())
@@ -110,6 +109,12 @@ async def run_skill_improve() -> None:
     from langchain_core.messages import HumanMessage
 
     for skill_name, interactions in candidates.items():
+        # skill_name is derived from matched interaction text and feeds a
+        # filesystem path below. Require a plain slug so a crafted name can
+        # never traverse out of the skills directory (path injection).
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", skill_name):
+            log.warning("Skipping skill with unsafe name: %r", skill_name)
+            continue
         from kronos.workspace import ws
         skill = skill_store.get(skill_name)
         skill_path = skill.path if skill else ws.skill_path(skill_name)
