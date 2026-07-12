@@ -471,3 +471,71 @@ async def test_force_tier_overrides_classification(tmp_path: Path, monkeypatch) 
         )
 
     assert captured["tier"] == "lite"
+
+
+@pytest.mark.asyncio
+async def test_approval_exemption_binds_to_exact_args(tmp_path: Path, monkeypatch) -> None:
+    # An approval must exempt only the EXACT call the user approved. Binding to
+    # the tool name alone let an approved restart_service("web") wave through
+    # restart_service("db") during the same resume.
+    monkeypatch.setattr(settings, "tool_approvals_enabled", True)
+    store = SessionStore(str(tmp_path / "session.db"))
+    agent = _minimal_agent(store)
+
+    class _Tool:
+        name = "restart_service"
+        metadata = {"needs_approval": True}
+
+    tool = _Tool()
+    kwargs = agent._build_durable_react_loop_kwargs(
+        turn_id="t1",
+        thread_id="thread",
+        approved_tool_name="restart_service",
+        approved_tool_args={"name": "web"},
+    )
+    scope = kwargs["needs_tool_approval"]
+
+    # The exact approved call resumes without re-prompting…
+    assert await scope(tool, {"name": "web"}) is False
+    # …but the same tool with different args must ask again.
+    assert await scope(tool, {"name": "db"}) is True
+
+
+@pytest.mark.asyncio
+async def test_stale_approval_expires_instead_of_resuming(tmp_path: Path) -> None:
+    from kronos.session import APPROVAL_TTL_SECONDS
+
+    db_path = tmp_path / "session.db"
+    store = SessionStore(str(db_path))
+    turn_id = await store.begin_turn("thread", "mutate")
+    approval_id = await store.create_pending_approval(
+        turn_id=turn_id,
+        thread_id="thread",
+        tool_call_id="call_1",
+        tool_name="restart_service",
+        args={"name": "web"},
+    )
+
+    # Age the request well past the TTL.
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE pending_approvals SET requested_at = datetime('now', ?) "
+            "WHERE approval_id = ?",
+            (f"-{APPROVAL_TTL_SECONDS + 120} seconds", approval_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    claimed = await store.claim_pending_approval(
+        approval_id=approval_id,
+        decision="approved",
+        decided_by="42",
+    )
+
+    # Not resumed, and left as expired rather than pending.
+    assert claimed is None
+    pending = await store.get_pending_approval(approval_id)
+    assert pending is not None
+    assert pending["status"] == "expired"

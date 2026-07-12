@@ -9,6 +9,7 @@ import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import aiosqlite
 from langchain_core.messages import (
@@ -25,6 +26,24 @@ log = logging.getLogger("kronos.session")
 # Keep small — large history causes LLM to copy prior patterns
 # (including hallucinated tool calls) instead of using tools.
 MAX_HISTORY = 30
+
+# A pending tool approval older than this is treated as stale: claiming it
+# returns nothing and marks it expired. Stops a long-forgotten "restart the
+# server?" prompt from firing hours later, in a context that no longer holds.
+APPROVAL_TTL_SECONDS = 3600
+
+
+def _approval_is_stale(requested_at: object) -> bool:
+    """True if a pending approval's requested_at is older than the TTL."""
+    if not requested_at:
+        return False
+    try:
+        requested_dt = datetime.fromisoformat(str(requested_at))
+    except (ValueError, TypeError):
+        return False
+    if requested_dt.tzinfo is None:
+        requested_dt = requested_dt.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - requested_dt).total_seconds() > APPROVAL_TTL_SECONDS
 
 
 def _session_fts_fingerprint(
@@ -406,6 +425,18 @@ class SessionStore:
             )
             row = await cursor.fetchone()
             if not row:
+                await db.commit()
+                return None
+
+            # Expire stale approvals instead of resuming them: a pending row
+            # older than the TTL must not fire a (possibly mutating) tool long
+            # after the prompt was shown, in a context that no longer holds.
+            if _approval_is_stale(row[7]):
+                await db.execute(
+                    "UPDATE pending_approvals SET status = 'expired' "
+                    "WHERE approval_id = ? AND status = 'pending'",
+                    (approval_id,),
+                )
                 await db.commit()
                 return None
 

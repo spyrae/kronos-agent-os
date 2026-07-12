@@ -11,6 +11,7 @@ Memory integration (Mem0):
 """
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -214,6 +215,7 @@ class KronosAgent:
         turn_id: str,
         thread_id: str,
         approved_tool_name: str | None = None,
+        approved_tool_args: dict | None = None,
     ) -> dict[str, Any]:
         """Build journal/cache/approval callbacks for a durable turn."""
         if not self._session_store:
@@ -252,9 +254,21 @@ class KronosAgent:
             "request_tool_approval": request_tool_approval,
         }
         if approved_tool_name:
+            # The exemption must match the EXACT call the user approved, not
+            # just the tool name. Binding to the name alone let an approved
+            # restart_service("x") wave through restart_service("y") during the
+            # resume. Compare canonical (sorted) args so only the approved call
+            # skips a fresh approval; any other args re-prompt.
+            approved_args_key = json.dumps(
+                approved_tool_args or {}, sort_keys=True, default=str
+            )
 
             async def approval_scope(tool: BaseTool, args: dict) -> bool:
-                if tool.name == approved_tool_name:
+                same_call = tool.name == approved_tool_name and (
+                    json.dumps(args or {}, sort_keys=True, default=str)
+                    == approved_args_key
+                )
+                if same_call:
                     return False
                 return tool_requires_approval(tool, args)
 
@@ -363,6 +377,7 @@ class KronosAgent:
             turn_id=turn_id,
             thread_id=thread_id,
             approved_tool_name=tool_name if approved else None,
+            approved_tool_args=(pending.get("args", {}) or {}) if approved else None,
         )
         audit_token = set_tool_audit_context(
             agent=settings.agent_name,
