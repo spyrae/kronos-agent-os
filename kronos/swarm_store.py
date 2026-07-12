@@ -48,9 +48,17 @@ CLAIM_STATE_SENT = "sent"
 CLAIM_STATE_CANCELLED = "cancelled"
 CLAIM_STATE_EXPIRED = "expired"
 
-# Claims older than this many seconds without transitioning to ``sent`` are
-# considered expired (agent crashed / lost power). Lazy cleanup.
+# A ``claimed`` row older than this many seconds (arbitration won but the
+# agent never started executing) is considered stale — the agent crashed
+# between claiming and winning. Lazy cleanup.
 CLAIM_EXPIRY_SECONDS = 120
+
+# Once an agent wins arbitration it flips its claim to ``executing`` and holds
+# that lease while the (possibly slow) LLM/tool run and Telegram delivery
+# happen. The lease is deliberately generous so a long invoke is NOT mistaken
+# for a dead agent and answered a second time by a peer. If the process really
+# dies mid-run, the lease still expires and another agent may pick up.
+EXECUTING_LEASE_SECONDS = 600
 
 # Retention for swarm_messages (used by a cron job, not enforced here).
 MESSAGE_RETENTION_DAYS = 90
@@ -71,6 +79,47 @@ def _schema(conn) -> None:
     }
     if columns and "fingerprint" not in columns:
         conn.execute("ALTER TABLE session_messages ADD COLUMN fingerprint TEXT")
+
+    # reply_claims gained an 'executing' state (a lease held between winning
+    # arbitration and confirmed delivery). SQLite can't ALTER a CHECK
+    # constraint, so recreate the table when the legacy constraint is present.
+    # reply_claims is an ephemeral ledger (claims live minutes), so copying
+    # rows forward is safe. Runs before the main script below, whose
+    # CREATE TABLE / CREATE INDEX IF NOT EXISTS then no-op / rebuild indexes.
+    claims_ddl = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='reply_claims'"
+    ).fetchone()
+    if claims_ddl and claims_ddl[0] and "'executing'" not in claims_ddl[0]:
+        conn.executescript(
+            """
+            ALTER TABLE reply_claims RENAME TO reply_claims_legacy;
+            CREATE TABLE reply_claims (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                topic_id INTEGER NOT NULL DEFAULT 0,
+                root_msg_id INTEGER NOT NULL,
+                trigger_msg_id INTEGER NOT NULL,
+                agent_name TEXT NOT NULL,
+                tier INTEGER NOT NULL,
+                eta_ts REAL NOT NULL,
+                state TEXT NOT NULL CHECK (
+                    state IN ('claimed','executing','sent','cancelled','expired')
+                ),
+                reason TEXT,
+                reply_msg_id INTEGER,
+                created_at REAL NOT NULL,
+                UNIQUE (chat_id, topic_id, trigger_msg_id, agent_name)
+            );
+            INSERT INTO reply_claims
+                (id, chat_id, topic_id, root_msg_id, trigger_msg_id, agent_name,
+                 tier, eta_ts, state, reason, reply_msg_id, created_at)
+                SELECT id, chat_id, topic_id, root_msg_id, trigger_msg_id,
+                       agent_name, tier, eta_ts, state, reason, reply_msg_id,
+                       created_at
+                FROM reply_claims_legacy;
+            DROP TABLE reply_claims_legacy;
+            """
+        )
 
     conn.executescript(
         """
@@ -102,7 +151,7 @@ def _schema(conn) -> None:
             agent_name TEXT NOT NULL,
             tier INTEGER NOT NULL,
             eta_ts REAL NOT NULL,
-            state TEXT NOT NULL CHECK (state IN ('claimed','sent','cancelled','expired')),
+            state TEXT NOT NULL CHECK (state IN ('claimed','executing','sent','cancelled','expired')),
             reason TEXT,
             reply_msg_id INTEGER,
             created_at REAL NOT NULL,
@@ -438,40 +487,47 @@ class SwarmStore:
         now = time.time()
 
         def _tx(conn):
-            # Lazy-expire stale claims
+            # Lazy-expire stale rows: a ``claimed`` row past CLAIM_EXPIRY (won
+            # nothing yet) and an ``executing`` lease past EXECUTING_LEASE (the
+            # agent likely died mid-run) both become ``expired``.
             conn.execute(
                 """
                 UPDATE reply_claims
                 SET state = 'expired'
-                WHERE state = 'claimed'
-                  AND (? - created_at) > ?
+                WHERE (state = 'claimed' AND (? - created_at) > ?)
+                   OR (state = 'executing' AND (? - created_at) > ?)
                 """,
-                (now, CLAIM_EXPIRY_SECONDS),
+                (now, CLAIM_EXPIRY_SECONDS, now, EXECUTING_LEASE_SECONDS),
             )
 
             # Tier 1 bypasses arbitration & cap.
             if tier == 1:
                 return ClaimOutcome(True, "tier-1 explicit")
 
-            # Anti-flood cap across all agents.
+            # Anti-flood cap across all agents. An ``executing`` winner already
+            # occupies a reply slot, so it counts alongside ``sent``.
             (sent_count,) = conn.execute(
                 """
                 SELECT COUNT(*) FROM reply_claims
                 WHERE chat_id = ? AND topic_id = ? AND root_msg_id = ?
-                  AND state = 'sent' AND tier > 1
+                  AND state IN ('executing', 'sent') AND tier > 1
                 """,
                 (chat_id, topic_id or 0, root_msg_id),
             ).fetchone()
             if sent_count >= max_implicit_replies:
                 return ClaimOutcome(False, f"cap reached ({sent_count}>={max_implicit_replies})")
 
-            # Winner lookup.
+            # Winner lookup across still-active rows (claimed OR executing). An
+            # agent already ``executing`` outranks any fresh ``claimed`` peer
+            # regardless of eta — it already holds the slot and is running — so
+            # a late arrival with an earlier eta cannot steal a live invoke.
             winner = conn.execute(
                 """
                 SELECT agent_name FROM reply_claims
                 WHERE chat_id = ? AND topic_id = ? AND root_msg_id = ?
-                  AND state = 'claimed'
-                ORDER BY tier ASC, eta_ts ASC, agent_name ASC
+                  AND state IN ('claimed', 'executing')
+                ORDER BY (state = 'executing') DESC,
+                         tier ASC, eta_ts ASC, agent_name ASC
                 LIMIT 1
                 """,
                 (chat_id, topic_id or 0, root_msg_id),
@@ -484,6 +540,45 @@ class SwarmStore:
 
         return self._db.write_tx(_tx)
 
+    def begin_executing(
+        self,
+        *,
+        chat_id: int,
+        topic_id: int | None,
+        trigger_msg_id: int,
+        agent_name: str,
+    ) -> bool:
+        """Acquire the executing lease immediately before a (slow) invoke.
+
+        Flips this agent's winning claim from ``claimed`` to ``executing`` and
+        renews created_at, so the EXECUTING_LEASE window starts now. This is
+        what stops a peer from seeing the 120s ``claimed`` expiry mid-invoke,
+        assuming the agent is dead, and answering the same message twice.
+
+        Kept separate from ``can_send_claim`` so the lease covers only the
+        invoke+delivery — not the media pre-processing between them, whose
+        failure paths should fall back to the shorter ``claimed`` expiry.
+
+        Returns True if the lease was acquired; False means the claim was no
+        longer ``claimed`` (already sent/cancelled/expired).
+        """
+        now = time.time()
+
+        def _tx(conn):
+            cur = conn.execute(
+                """
+                UPDATE reply_claims
+                SET state = 'executing', created_at = ?
+                WHERE chat_id = ? AND topic_id = ?
+                  AND trigger_msg_id = ? AND agent_name = ?
+                  AND state = 'claimed'
+                """,
+                (now, chat_id, topic_id or 0, trigger_msg_id, agent_name),
+            )
+            return cur.rowcount > 0
+
+        return self._db.write_tx(_tx)
+
     def mark_sent(
         self,
         *,
@@ -493,12 +588,16 @@ class SwarmStore:
         agent_name: str,
         reply_msg_id: int | None,
     ) -> None:
+        # Compare-and-set: only an in-flight claim (owner/tier-1 stay 'claimed';
+        # a tier-2/3 winner is 'executing') may transition to 'sent'. This never
+        # resurrects a row that was already cancelled or expired.
         self._db.write(
             """
             UPDATE reply_claims
             SET state = 'sent', reply_msg_id = ?
             WHERE chat_id = ? AND topic_id = ?
               AND trigger_msg_id = ? AND agent_name = ?
+              AND state IN ('claimed', 'executing')
             """,
             (reply_msg_id, chat_id, topic_id or 0, trigger_msg_id, agent_name),
         )
@@ -518,7 +617,7 @@ class SwarmStore:
             SET state = 'cancelled', reason = COALESCE(NULLIF(?, ''), reason)
             WHERE chat_id = ? AND topic_id = ?
               AND trigger_msg_id = ? AND agent_name = ?
-              AND state = 'claimed'
+              AND state IN ('claimed', 'executing')
             """,
             (reason, chat_id, topic_id or 0, trigger_msg_id, agent_name),
         )

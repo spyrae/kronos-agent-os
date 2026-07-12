@@ -1975,6 +1975,17 @@ async def run_bridge(agent: KronosAgent) -> None:
                 # Soft cost degradation: once daily spend crosses the degrade
                 # threshold, force the lite tier instead of blocking.
                 degrade_tier = "lite" if guardian.should_degrade() else None
+                # Acquire the executing lease right before the (possibly slow)
+                # invoke: this flips our winning claim to 'executing' so a peer
+                # can't see the 120s 'claimed' expiry mid-run and answer the
+                # same message. Owner/DM/command paths keep the short expiry.
+                if not is_dm and swarm is not None and decision is not None:
+                    swarm.begin_executing(
+                        chat_id=event.chat_id,
+                        topic_id=topic_id_inbound,
+                        trigger_msg_id=event.message.id,
+                        agent_name=settings.agent_name,
+                    )
                 # Call agent with new contract: raw user text as message,
                 # group metadata as transient extra_system_context only.
                 reply = await _ask_agent(
