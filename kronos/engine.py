@@ -21,6 +21,7 @@ from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolM
 from langchain_core.tools import BaseTool
 
 from kronos.config import settings
+from kronos.security.sanitize import wrap_untrusted
 from kronos.tools.error_handler import classify_tool_error
 
 log = logging.getLogger("kronos.engine")
@@ -215,6 +216,21 @@ def _default_should_compact_tool_output(tool: BaseTool) -> bool:
     return any(marker in name for marker in DEFAULT_COMPACT_OUTPUT_NAME_MARKERS)
 
 
+def _tool_output_is_untrusted(tool: BaseTool) -> bool:
+    """Whether a tool returns attacker-controllable external content.
+
+    Such output (web pages, fetched documents, third-party API bodies) must be
+    handed to the model as DATA, not trusted text, so an instruction injected
+    into it is not obeyed. Opt in per tool via ``metadata['untrusted_output']``
+    or an ``untrusted_output`` attribute — the same pattern as ``needs_approval``.
+    """
+    metadata = getattr(tool, "metadata", None) or {}
+    flag = metadata.get("untrusted_output")
+    if flag is None:
+        flag = getattr(tool, "untrusted_output", None)
+    return bool(flag)
+
+
 async def _maybe_await(value: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
@@ -267,6 +283,11 @@ async def execute_tool(
             result = tool.invoke(args)
 
         content, raw_content = await _tool_model_output(tool, result)
+        if _tool_output_is_untrusted(tool):
+            # Attacker-controllable content — frame it as data so an injected
+            # instruction inside it is not executed. raw_content (kept for the
+            # audit journal) stays the unwrapped original.
+            content = wrap_untrusted(content, label=f"tool:{tool.name}")
 
     except TimeoutError:
         content = f"[ERROR] Tool '{tool.name}' timed out after {TOOL_TIMEOUT_SECONDS}s"

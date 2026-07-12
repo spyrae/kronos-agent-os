@@ -78,6 +78,22 @@ async def browser_evaluate(js_code: str) -> str:
     return await engine.evaluate(js_code)
 
 
+_BROWSER_TOOLS: list[BaseTool] = [
+    browser_navigate,
+    browser_snapshot,
+    browser_screenshot,
+    browser_click,
+    browser_type,
+    browser_evaluate,
+]
+
+# Everything a browser returns is derived from an attacker-controllable web
+# page, so flag the output as untrusted. The engine wraps such results as data
+# before the model sees them (see engine._tool_output_is_untrusted).
+for _t in _BROWSER_TOOLS:
+    _t.metadata = {**(_t.metadata or {}), "untrusted_output": True}
+
+
 def get_browser_tools() -> list[BaseTool]:
     """Get all browser tools. Returns empty list if playwright not available."""
     try:
@@ -86,11 +102,4 @@ def get_browser_tools() -> list[BaseTool]:
         log.info("Browser tools disabled: playwright not installed")
         return []
 
-    return [
-        browser_navigate,
-        browser_snapshot,
-        browser_screenshot,
-        browser_click,
-        browser_type,
-        browser_evaluate,
-    ]
+    return list(_BROWSER_TOOLS)
