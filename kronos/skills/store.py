@@ -195,6 +195,18 @@ class SkillStore:
                 review_required=review_required,
             )
 
+    @property
+    def skills_roots(self) -> list[Path]:
+        """Directories a skill file may legitimately live under.
+
+        Used to confirm a resolved skill path has not traversed outside the
+        skills tree before reading or writing alongside it.
+        """
+        roots = [self._skills_dir]
+        if self._shared_skills_dir is not None:
+            roots.append(self._shared_skills_dir)
+        return roots
+
     def list_skills(self) -> list[Skill]:
         return list(self._skills.values())
 

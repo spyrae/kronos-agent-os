@@ -6,6 +6,7 @@ proposes minimal improvements to SKILL.md files with versioned backups.
 
 import json
 import logging
+import os
 import re
 import time
 from collections import defaultdict
@@ -109,19 +110,23 @@ async def run_skill_improve() -> None:
     from langchain_core.messages import HumanMessage
 
     for skill_name, interactions in candidates.items():
-        # skill_name is derived from matched interaction text and feeds a
-        # filesystem path below. Require a plain slug so a crafted name can
-        # never traverse out of the skills directory (path injection).
-        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", skill_name):
-            log.warning("Skipping skill with unsafe name: %r", skill_name)
-            continue
         from kronos.workspace import ws
         skill = skill_store.get(skill_name)
         skill_path = skill.path if skill else ws.skill_path(skill_name)
         if not skill_path.exists():
             continue
 
-        current_content = skill_path.read_text(encoding="utf-8")
+        # Containment guard: skill_name is derived from matched interaction
+        # text, so confirm the resolved path stays inside a known skills root
+        # before we read or write alongside it — otherwise a crafted name
+        # could traverse out of the skills tree (path injection).
+        resolved = skill_path.resolve()
+        roots = [str(root.resolve()) for root in skill_store.skills_roots]
+        if not any(os.path.commonpath([root, str(resolved)]) == root for root in roots):
+            log.warning("Skipping skill outside skills root: %s", resolved)
+            continue
+
+        current_content = resolved.read_text(encoding="utf-8")
         recent = interactions[-10:]
         interactions_text = "\n".join(
             f"- [{e.get('tier', '?')}] {e.get('input_preview', '')[:80]}"
@@ -168,7 +173,7 @@ async def run_skill_improve() -> None:
         # could steer the rewrite, which then becomes system context for every
         # future call. Save the suggestion next to the skill for human review;
         # the active SKILL.md is never overwritten automatically.
-        proposal_path = skill_path.parent / "SKILL.proposed.md"
+        proposal_path = resolved.parent / "SKILL.proposed.md"
         proposal_path.write_text(reply, encoding="utf-8")
         improvements.append(
             f"**{skill_name}** — предложение на review: {proposal_path.name}"
