@@ -287,6 +287,39 @@ async def execute_tool(
     )
 
 
+def _deferred_tool_messages(
+    tool_calls: list[dict], awaiting: dict
+) -> list["ToolMessage"]:
+    """Placeholder results for tool_calls that follow the one now awaiting approval.
+
+    When the loop returns mid-batch for approval, every OTHER tool_call in the
+    same AIMessage still needs a ToolMessage — otherwise the resumed history
+    has an assistant turn whose tool_calls aren't all answered, which is a hard
+    protocol error on the next LLM call. The awaiting call is filled in on
+    resume; the ones after it get these deferred placeholders now, and the
+    model re-issues them if it still needs the results.
+    """
+    awaiting_id = awaiting.get("id", "")
+    deferred: list[ToolMessage] = []
+    seen_awaiting = False
+    for tc in tool_calls:
+        if tc.get("id", "") == awaiting_id:
+            seen_awaiting = True
+            continue
+        if seen_awaiting:
+            deferred.append(
+                ToolMessage(
+                    content=(
+                        "[deferred] A prior tool call in this batch is awaiting "
+                        "approval, so this call was not executed. Re-issue it if "
+                        "you still need the result."
+                    ),
+                    tool_call_id=tc.get("id", ""),
+                )
+            )
+    return deferred
+
+
 async def react_loop(
     model: BaseChatModel,
     messages: list[BaseMessage],
@@ -467,6 +500,18 @@ async def react_loop(
                                 messages.extend(tool_messages)
                                 call_messages.extend(tool_messages)
                                 await emit_message_delta(tool_messages)
+                            # Tool calls after this one in the same response are
+                            # not executed in this pass. Emit deferred results
+                            # for them so the resumed history has a ToolMessage
+                            # for every tool_call except the one being approved
+                            # (which is filled in on resume) — otherwise the
+                            # next LLM call fails with an unanswered-tool_call
+                            # protocol error.
+                            deferred = _deferred_tool_messages(response.tool_calls, tc)
+                            if deferred:
+                                messages.extend(deferred)
+                                call_messages.extend(deferred)
+                                await emit_message_delta(deferred)
                             content = (
                                 "⚠️ Нужно подтверждение перед выполнением tool-call.\n"
                                 f"Tool: `{tool_name}`\n"

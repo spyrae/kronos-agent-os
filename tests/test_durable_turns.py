@@ -471,3 +471,132 @@ async def test_force_tier_overrides_classification(tmp_path: Path, monkeypatch) 
         )
 
     assert captured["tier"] == "lite"
+
+
+@pytest.mark.asyncio
+async def test_approval_exemption_binds_to_exact_args(tmp_path: Path, monkeypatch) -> None:
+    # An approval must exempt only the EXACT call the user approved. Binding to
+    # the tool name alone let an approved restart_service("web") wave through
+    # restart_service("db") during the same resume.
+    monkeypatch.setattr(settings, "tool_approvals_enabled", True)
+    store = SessionStore(str(tmp_path / "session.db"))
+    agent = _minimal_agent(store)
+
+    class _Tool:
+        name = "restart_service"
+        metadata = {"needs_approval": True}
+
+    tool = _Tool()
+    kwargs = agent._build_durable_react_loop_kwargs(
+        turn_id="t1",
+        thread_id="thread",
+        approved_tool_name="restart_service",
+        approved_tool_args={"name": "web"},
+    )
+    scope = kwargs["needs_tool_approval"]
+
+    # The exact approved call resumes without re-prompting…
+    assert await scope(tool, {"name": "web"}) is False
+    # …but the same tool with different args must ask again.
+    assert await scope(tool, {"name": "db"}) is True
+
+
+@pytest.mark.asyncio
+async def test_stale_approval_expires_instead_of_resuming(tmp_path: Path) -> None:
+    from kronos.session import APPROVAL_TTL_SECONDS
+
+    db_path = tmp_path / "session.db"
+    store = SessionStore(str(db_path))
+    turn_id = await store.begin_turn("thread", "mutate")
+    approval_id = await store.create_pending_approval(
+        turn_id=turn_id,
+        thread_id="thread",
+        tool_call_id="call_1",
+        tool_name="restart_service",
+        args={"name": "web"},
+    )
+
+    # Age the request well past the TTL.
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE pending_approvals SET requested_at = datetime('now', ?) "
+            "WHERE approval_id = ?",
+            (f"-{APPROVAL_TTL_SECONDS + 120} seconds", approval_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    claimed = await store.claim_pending_approval(
+        approval_id=approval_id,
+        decision="approved",
+        decided_by="42",
+    )
+
+    # Not resumed, and left as expired rather than pending.
+    assert claimed is None
+    pending = await store.get_pending_approval(approval_id)
+    assert pending is not None
+    assert pending["status"] == "expired"
+
+
+@pytest.mark.asyncio
+async def test_approval_midbatch_defers_following_tool_calls(monkeypatch) -> None:
+    # When a tool call in the middle of a batch needs approval, the loop
+    # returns immediately. Every OTHER tool_call in that AIMessage must still
+    # get a ToolMessage, or the resumed history has unanswered tool_calls — a
+    # hard LLM protocol error. The approved call is answered on resume; the
+    # ones after it get deferred placeholders now.
+    monkeypatch.setattr(settings, "tool_approvals_enabled", True)
+
+    async def safe_tool() -> str:
+        return "did-safe"
+
+    async def risky_tool() -> str:
+        return "did-risky"
+
+    async def after_tool() -> str:
+        return "did-after"
+
+    tools = [
+        StructuredTool.from_function(coroutine=safe_tool, name="safe", description="safe"),
+        StructuredTool.from_function(coroutine=risky_tool, name="risky", description="risky"),
+        StructuredTool.from_function(coroutine=after_tool, name="after", description="after"),
+    ]
+    response = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "safe", "args": {}, "id": "c_safe"},
+            {"name": "risky", "args": {}, "id": "c_risky"},
+            {"name": "after", "args": {}, "id": "c_after"},
+        ],
+    )
+    model = _make_model([response])
+
+    async def needs_approval(tool, args):
+        return tool.name == "risky"
+
+    async def request_approval(tool, tool_call):
+        return "appr-xyz"
+
+    result = await react_loop(
+        model,
+        [HumanMessage(content="do batch")],
+        tools=tools,
+        needs_tool_approval=needs_approval,
+        request_tool_approval=request_approval,
+    )
+
+    assert result.waiting_approval is True
+    assert result.approval_id == "appr-xyz"
+
+    tms = {m.tool_call_id: m for m in result.messages if isinstance(m, ToolMessage)}
+    # Ran before the approval → real result.
+    assert tms["c_safe"].content == "did-safe"
+    # After the approval → deferred placeholder, not executed.
+    assert "deferred" in tms["c_after"].content.lower()
+    # The approval call itself is answered on resume, not here.
+    assert "c_risky" not in tms
+    # Every tool_call is accounted for (c_risky on resume) → protocol-valid.
+    assert set(tms) | {"c_risky"} == {"c_safe", "c_risky", "c_after"}

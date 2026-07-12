@@ -6,7 +6,8 @@ proposes minimal improvements to SKILL.md files with versioned backups.
 
 import json
 import logging
-import shutil
+import os
+import re
 import time
 from collections import defaultdict
 from datetime import datetime
@@ -34,8 +35,6 @@ SKILL_KEYWORDS = {
 
 
 def _tokenize_skill_text(text: str) -> set[str]:
-    import re
-
     return {
         token
         for token in re.findall(r"[a-zA-Zа-яА-Я0-9]{4,}", text.lower())
@@ -117,7 +116,17 @@ async def run_skill_improve() -> None:
         if not skill_path.exists():
             continue
 
-        current_content = skill_path.read_text(encoding="utf-8")
+        # Containment guard: skill_name is derived from matched interaction
+        # text, so confirm the resolved path stays inside a known skills root
+        # before we read or write alongside it — otherwise a crafted name
+        # could traverse out of the skills tree (path injection).
+        resolved = skill_path.resolve()
+        roots = [str(root.resolve()) for root in skill_store.skills_roots]
+        if not any(os.path.commonpath([root, str(resolved)]) == root for root in roots):
+            log.warning("Skipping skill outside skills root: %s", resolved)
+            continue
+
+        current_content = resolved.read_text(encoding="utf-8")
         recent = interactions[-10:]
         interactions_text = "\n".join(
             f"- [{e.get('tier', '?')}] {e.get('input_preview', '')[:80]}"
@@ -158,20 +167,29 @@ async def run_skill_improve() -> None:
         if "без изменений" in reply.lower():
             continue
 
-        # Backup current version
-        versions_dir = skill_path.parent / ".versions"
-        versions_dir.mkdir(exist_ok=True)
-        existing = list(versions_dir.glob("SKILL.v*.md"))
-        next_version = len(existing) + 1
-        shutil.copy2(skill_path, versions_dir / f"SKILL.v{next_version}.md")
-
-        # Write updated skill
-        skill_path.write_text(reply, encoding="utf-8")
-        improvements.append(f"**{skill_name}** — updated (v{next_version} backup)")
-        log.info("Skill improved: %s (v%d backup)", skill_name, next_version)
+        # Do NOT auto-activate. An LLM rewriting its own live SKILL.md from
+        # interaction logs is persistent self-modification and a channel for
+        # locking in prompt injection — a hostile interaction in the audit log
+        # could steer the rewrite, which then becomes system context for every
+        # future call. Save the suggestion next to the skill for human review;
+        # the active SKILL.md is never overwritten automatically.
+        proposal_path = resolved.parent / "SKILL.proposed.md"
+        proposal_path.write_text(reply, encoding="utf-8")
+        improvements.append(
+            f"**{skill_name}** — предложение на review: {proposal_path.name}"
+        )
+        log.info(
+            "Skill improvement proposed (NOT applied): %s → %s",
+            skill_name,
+            proposal_path,
+        )
 
     if improvements:
-        text = "🔧 Skill Improvement\n\n" + "\n".join(f"• {i}" for i in improvements)
+        text = (
+            "🔧 Skill Improvement — предложения на ручном review "
+            "(активные skill-файлы НЕ изменены):\n\n"
+            + "\n".join(f"• {i}" for i in improvements)
+        )
         send_bot_api(text, topic_id=TOPIC_GENERAL)
     else:
         log.info("No skill improvements needed")

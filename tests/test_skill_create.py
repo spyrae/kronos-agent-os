@@ -156,3 +156,66 @@ def test_skill_improve_matches_auto_created_skill_by_metadata():
     ]
 
     assert _match_skill("Please run the competitive intelligence workflow again", skills) == "research-workflow"
+
+
+@pytest.mark.asyncio
+async def test_skill_improve_proposes_without_overwriting_active(
+    skill_workspace, tmp_path, monkeypatch
+):
+    """The weekly improver must never overwrite a live SKILL.md.
+
+    It writes a SKILL.proposed.md next to the skill for human review; the
+    active file stays byte-for-byte unchanged. This is the guard against
+    persistent self-modification / prompt-injection lock-in.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    import kronos.cron.skill_improve as skill_improve
+    import kronos.swarm_store as swarm_store
+    from kronos.config import settings
+
+    # Active skill on disk with known content.
+    active = skill_workspace.skill_path("deep-research")
+    active.parent.mkdir(parents=True, exist_ok=True)
+    original = "# deep-research\nORIGINAL ACTIVE CONTENT — do not touch\n"
+    active.write_text(original, encoding="utf-8")
+
+    # Audit log with enough recent interactions that match "deep-research".
+    # Keep the text free of other skills' keywords ("market" → investment).
+    now = datetime.now(UTC)
+    entries = [
+        {"ts": (now - timedelta(hours=i)).isoformat(), "tier": "T1",
+         "input_preview": f"research this topic deeply, iteration {i}"}
+        for i in range(skill_improve.MIN_INTERACTIONS)
+    ]
+    data_dir = tmp_path / "data"
+    (data_dir / "logs").mkdir(parents=True)
+    (data_dir / "logs" / "audit.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in entries), encoding="utf-8"
+    )
+    monkeypatch.setattr(settings, "db_path", str(data_dir / "session.db"))
+
+    class FakeSwarm:
+        def get_satisfaction_rate(self, agent_name, days):
+            return {"positive": 3, "negative": 0, "satisfaction_rate": 100}
+
+    monkeypatch.setattr(swarm_store, "get_swarm", lambda: FakeSwarm())
+    monkeypatch.setattr(
+        skill_improve, "get_model",
+        lambda _tier: FakeModel("# deep-research\nPROPOSED REWRITE\n"),
+    )
+    sent = []
+    monkeypatch.setattr(
+        skill_improve, "send_bot_api",
+        lambda text, topic_id=None: sent.append((text, topic_id)),
+    )
+
+    await skill_improve.run_skill_improve()
+
+    # Active file untouched…
+    assert active.read_text(encoding="utf-8") == original
+    # …and the suggestion landed in a proposal file for review.
+    proposal = active.parent / "SKILL.proposed.md"
+    assert proposal.exists()
+    assert "PROPOSED REWRITE" in proposal.read_text(encoding="utf-8")
+    assert sent and "НЕ изменены" in sent[0][0]
