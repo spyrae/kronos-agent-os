@@ -3,7 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
 from kronos.config import settings
@@ -518,3 +518,30 @@ class TestCreateAgent:
         await agent(original)
 
         assert len(original) == original_len  # not mutated
+
+
+@pytest.mark.asyncio
+async def test_loop_detector_nudges_then_aborts_runaway_loop():
+    # The model keeps calling the same tool with the same args forever. The
+    # loop detector should nudge it first, then abort via circuit breaker
+    # instead of burning every turn.
+    tool = _make_tool("stuck", result="same")
+    same_call = _ai_with_tool_call("stuck", args={"x": 1})
+    model = _make_model([same_call] * 40)  # past CIRCUIT_BREAKER_THRESHOLD (30)
+
+    result = await react_loop(
+        model,
+        [HumanMessage(content="go")],
+        tools=[tool],
+        max_turns=40,
+    )
+
+    # Aborted early via circuit breaker, not after all 40 turns.
+    assert result.tool_calls_count < 40
+    assert "CIRCUIT BREAKER" in result.content
+    # A loop nudge was injected along the way to try to break out first.
+    nudges = [
+        m for m in result.messages
+        if isinstance(m, SystemMessage) and "LOOP DETECTED" in str(m.content)
+    ]
+    assert nudges

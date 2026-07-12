@@ -17,8 +17,12 @@ from kronos.config import settings
 
 log = logging.getLogger("kronos.cron.scheduler")
 
-# Persistence file for last_run timestamps (survives restarts)
-_STATE_FILE = Path(__file__).resolve().parents[2] / "data" / "cron_state.json"
+def _state_file() -> Path:
+    # Per-agent last_run persistence, next to the agent's session DB — NOT a
+    # swarm-shared file. A shared data/cron_state.json let 6 agents clobber each
+    # other's timestamps and lose updates racing on one JSON (an agent could
+    # suppress another's job). Only swarm.db is shared across the swarm.
+    return Path(settings.db_path).parent / "cron_state.json"
 
 
 def _history_file() -> Path:
@@ -72,10 +76,11 @@ class Scheduler:
 
     def _load_state(self) -> None:
         """Restore last_run timestamps from disk."""
-        if not _STATE_FILE.exists():
+        state_file = _state_file()
+        if not state_file.exists():
             return
         try:
-            state = json.loads(_STATE_FILE.read_text())
+            state = json.loads(state_file.read_text())
             for name, ts in state.items():
                 if name in self.jobs:
                     self.jobs[name].last_run = float(ts)
@@ -84,11 +89,14 @@ class Scheduler:
             log.warning("Failed to load cron state: %s", e)
 
     def _save_state(self) -> None:
-        """Persist last_run timestamps to disk."""
+        """Persist last_run timestamps to disk (atomic write)."""
         state = {name: job.last_run for name, job in self.jobs.items() if job.last_run > 0}
+        state_file = _state_file()
         try:
-            _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            _STATE_FILE.write_text(json.dumps(state))
+            state_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = state_file.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(state))
+            tmp.replace(state_file)
         except Exception as e:
             log.warning("Failed to save cron state: %s", e)
 

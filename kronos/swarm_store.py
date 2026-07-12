@@ -1226,6 +1226,21 @@ class SwarmStore:
         log.info("Pruned %d swarm_messages older than %d days", deleted, older_than_days)
         return deleted
 
+    def clear_thread_messages(self, *, chat_id: int, topic_id: int | None) -> int:
+        """Delete the shared message ledger for one chat/topic (a /clear).
+
+        So a cleared conversation is also gone from the cross-agent record.
+        Does NOT touch shared_user_facts — learned facts are cross-conversation
+        and are cleared by a separate 'forget' action, not by /clear.
+        """
+        cursor = self._db.write(
+            "DELETE FROM swarm_messages WHERE chat_id = ? AND topic_id = ?",
+            (chat_id, topic_id or 0),
+        )
+        deleted = cursor.rowcount if cursor is not None else 0
+        log.info("Cleared %d swarm_messages for chat=%s topic=%s", deleted, chat_id, topic_id or 0)
+        return deleted
+
 
 _singleton: SwarmStore | None = None
 

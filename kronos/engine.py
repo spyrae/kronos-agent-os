@@ -21,6 +21,7 @@ from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolM
 from langchain_core.tools import BaseTool
 
 from kronos.config import settings
+from kronos.security.loop_detector import LoopDetector, LoopLevel, get_nudge_message
 from kronos.security.sanitize import wrap_untrusted
 from kronos.tools.error_handler import classify_tool_error
 
@@ -444,6 +445,12 @@ async def react_loop(
             log.warning("Tool approval request failed for %s: %s", tool.name, e)
             return None
 
+    # Detect runaway tool loops across turns (same call repeated, ping-pong,
+    # polling with no progress). Nudges the model to change course, and aborts
+    # via circuit breaker if it stays stuck — a cost/safety backstop.
+    loop_detector = LoopDetector()
+    last_nudge_level = LoopLevel.OK
+
     for turn in range(max_turns):
         # Call LLM
         try:
@@ -582,10 +589,35 @@ async def react_loop(
                 })
 
             tool_messages.append(tm)
+            loop_detector.record(
+                tool_name, tc.get("args", {}) or {}, tool_message_raw_content(tm)
+            )
 
         messages.extend(tool_messages)
         call_messages.extend(tool_messages)
         await emit_message_delta(tool_messages)
+
+        # Loop backstop: nudge on WARNING/CRITICAL (once per escalation) so the
+        # next turn changes course; abort on CIRCUIT_BREAKER with a partial
+        # result instead of burning turns/budget on a stuck loop.
+        level, desc = loop_detector.check()
+        if level == LoopLevel.CIRCUIT_BREAKER:
+            final = AIMessage(content=get_nudge_message(level, desc))
+            messages.append(final)
+            await emit_message_delta([final])
+            log.warning("React loop circuit breaker: %s", desc)
+            return AgentResult(
+                messages=messages,
+                content=final.content,
+                tool_calls_count=total_tool_calls,
+            )
+        if level in (LoopLevel.WARNING, LoopLevel.CRITICAL) and level != last_nudge_level:
+            nudge = SystemMessage(content=get_nudge_message(level, desc))
+            messages.append(nudge)
+            call_messages.append(nudge)
+            await emit_message_delta([nudge])
+            last_nudge_level = level
+            log.info("React loop nudge (%s): %s", level, desc)
 
     # Max turns exhausted
     log.warning("React loop exhausted after %d turns", max_turns)

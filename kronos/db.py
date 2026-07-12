@@ -109,44 +109,29 @@ class SafeDB:
 
     def write(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         """Execute a single write in an IMMEDIATE transaction."""
-        with self._lock:
-            try:
-                self._conn.execute("BEGIN IMMEDIATE")
-                cursor = self._conn.execute(sql, params)
-                self._conn.execute("COMMIT")
-                return cursor
-            except sqlite3.OperationalError as e:
-                log.warning("SafeDB write failed on %s: %s", self._db_path.name, e)
-                self._rollback_safe()
-                self._conn.execute("BEGIN IMMEDIATE")
-                cursor = self._conn.execute(sql, params)
-                self._conn.execute("COMMIT")
-                return cursor
+        return self.write_tx(lambda conn: conn.execute(sql, params))
 
     def write_many(self, operations: list[tuple[str, tuple]]) -> None:
         """Execute multiple writes in a single IMMEDIATE transaction."""
-        with self._lock:
-            try:
-                self._conn.execute("BEGIN IMMEDIATE")
-                for sql, params in operations:
-                    self._conn.execute(sql, params)
-                self._conn.execute("COMMIT")
-            except sqlite3.OperationalError as e:
-                log.warning("SafeDB write_many failed on %s: %s", self._db_path.name, e)
-                self._rollback_safe()
-                self._conn.execute("BEGIN IMMEDIATE")
-                for sql, params in operations:
-                    self._conn.execute(sql, params)
-                self._conn.execute("COMMIT")
+
+        def _do(conn: sqlite3.Connection) -> None:
+            for sql, params in operations:
+                conn.execute(sql, params)
+
+        self.write_tx(_do)
 
     def write_tx(self, fn) -> any:
         """Execute a function within a locked IMMEDIATE transaction.
 
-        Uses BEGIN IMMEDIATE to acquire write lock upfront,
-        preventing "database is locked" during FTS5 operations.
+        Uses BEGIN IMMEDIATE to acquire the write lock upfront, preventing
+        "database is locked" during FTS5 operations.
 
-        fn receives the connection and should do reads+writes.
-        Commit happens after fn returns; rollback on error.
+        fn receives the connection and should do reads+writes. Commit happens
+        after fn returns. On ANY error the transaction is rolled back before it
+        propagates — a leaked BEGIN would wedge the connection's write lock for
+        every later write. A transient OperationalError ("database is locked")
+        is retried once; other errors (IntegrityError, a raise inside fn) roll
+        back and propagate without a retry that would just fail again.
 
         Usage:
             def update(conn):
@@ -157,17 +142,26 @@ class SafeDB:
         """
         with self._lock:
             try:
-                self._conn.execute("BEGIN IMMEDIATE")
-                result = fn(self._conn)
-                self._conn.execute("COMMIT")
-                return result
+                return self._run_tx(fn)
             except sqlite3.OperationalError as e:
-                log.warning("SafeDB write_tx failed on %s: %s", self._db_path.name, e)
-                self._rollback_safe()
-                self._conn.execute("BEGIN IMMEDIATE")
-                result = fn(self._conn)
-                self._conn.execute("COMMIT")
-                return result
+                log.warning("SafeDB write_tx retry on %s: %s", self._db_path.name, e)
+                return self._run_tx(fn)
+
+    def _run_tx(self, fn):
+        """Run fn in one IMMEDIATE transaction, rolling back on any error.
+
+        Always leaves the connection with no open transaction — whether fn
+        commits, raises IntegrityError, or the callback itself raises — so the
+        write lock is never leaked. Must be called under ``self._lock``.
+        """
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            result = fn(self._conn)
+            self._conn.execute("COMMIT")
+            return result
+        except Exception:
+            self._rollback_safe()
+            raise
 
     def _rollback_safe(self) -> None:
         """Rollback and verify connection is alive. Reconnect if dead."""
