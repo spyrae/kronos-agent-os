@@ -11,6 +11,7 @@ import asyncio
 import logging
 import os
 import re
+import shlex
 
 import asyncssh
 import yaml
@@ -109,10 +110,15 @@ async def _ssh_run(
     command: str,
     username: str = "deploy",
     timeout: int = _SSH_TIMEOUT,
+    input_data: str | None = None,
 ) -> str:
     """Execute a command over SSH and return stdout.
 
     Uses key-based auth from the agent's SSH key (~/.ssh/id_ed25519 or id_rsa).
+
+    ``input_data`` is fed to the remote command's stdin (and stdin is then
+    closed). Use it to pass untrusted payloads — e.g. an SQL query — WITHOUT
+    interpolating them into ``command``, which would be a shell-injection hole.
     """
     try:
         async with asyncssh.connect(
@@ -122,7 +128,7 @@ async def _ssh_run(
             connect_timeout=timeout,
         ) as conn:
             result = await asyncio.wait_for(
-                conn.run(command, check=False),
+                conn.run(command, check=False, input=input_data),
                 timeout=timeout,
             )
             output = (result.stdout or "").strip()
@@ -303,15 +309,26 @@ async def server_query_swarm(
     if not normalized.startswith("SELECT"):
         return "[BLOCKED] Only SELECT queries are allowed on swarm.db."
 
-    # Block dangerous keywords even in SELECT
+    # Reject sqlite3 dot-commands (.shell, .system, .import, .output, .load…).
+    # They run against the host shell / filesystem even on a read-only
+    # database, so they must never reach the sqlite3 CLI via stdin.
+    if re.search(r"(?m)^\s*\.", query):
+        return "[BLOCKED] Dot-commands are not allowed."
+
+    # Block dangerous keywords as an extra layer (the read-only DB below
+    # already refuses any write at the engine level).
     dangerous = ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "ATTACH", "DETACH"]
     for keyword in dangerous:
         if keyword in normalized:
             return f"[BLOCKED] Query contains forbidden keyword: {keyword}"
 
     db_path = f"{srv['data_path']}/swarm.db"
-    cmd = f'sqlite3 -header -column "{db_path}" "{query}" 2>&1 | head -100'
-    return await _ssh_run(srv["host"], cmd, srv["username"])
+    # The SQL is passed via stdin (never interpolated into the shell command),
+    # and the database is opened read-only so the engine itself rejects any
+    # mutation. This closes the shell-injection hole where a crafted query
+    # could break out of the quotes and run arbitrary commands on the host.
+    cmd = f"sqlite3 -readonly -header -column {shlex.quote(db_path)} 2>&1 | head -100"
+    return await _ssh_run(srv["host"], cmd, srv["username"], input_data=query)
 
 
 @tool
