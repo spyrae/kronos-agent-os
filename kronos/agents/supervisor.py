@@ -12,8 +12,10 @@ Routes requests to:
 No LangGraph — uses LLM tool-calling for routing decisions.
 """
 
+import json
 import logging
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -123,6 +125,31 @@ def _make_delegation_tool(agent_name: str, description: str, agent_fn: Callable)
         name=tool_name,
         description=description,
     )
+
+
+def _disabled_delegation_tool_names() -> set[str]:
+    """Delegation-tool names (``delegate_to_X``) the operator disabled in the
+    dashboard registry (``agent_registry.json``).
+
+    Opt-out only: an agent absent from the registry — or a missing/unreadable
+    registry — disables nothing, so a stale/incomplete registry never silently
+    removes agents. The path matches dashboard/api/agents.py exactly, so the
+    dashboard toggle finally has a runtime consumer.
+    """
+    registry_file = Path(settings.db_path).parent / "agent_registry.json"
+    try:
+        if not registry_file.exists():
+            return set()
+        registry = json.loads(registry_file.read_text(encoding="utf-8"))
+    except Exception as e:
+        log.warning("Could not read agent registry (%s); enabling all agents", e)
+        return set()
+    disabled: set[str] = set()
+    for key, cfg in registry.items():
+        if isinstance(cfg, dict) and cfg.get("enabled") is False:
+            base = key[: -len("_agent")] if key.endswith("_agent") else key
+            disabled.add(f"delegate_to_{base}")
+    return disabled
 
 
 def build_supervisor(
@@ -306,6 +333,17 @@ def build_supervisor(
             log.info("Server Ops agent disabled (ENABLE_SERVER_OPS=false)")
     except Exception as e:
         log.warning("Server Ops agent failed to create: %s", e)
+
+    # Honor dashboard agent toggles: drop any agent the operator disabled in
+    # the registry. Filter each list independently by the delegate_to_X name so
+    # it is robust even if tools/descriptions ever fall out of lockstep.
+    disabled_tools = _disabled_delegation_tool_names()
+    if disabled_tools:
+        delegation_tools = [t for t in delegation_tools if t.name not in disabled_tools]
+        descriptions = [
+            d for d in descriptions if not any(name in d for name in disabled_tools)
+        ]
+        log.info("Agent registry disabled: %s", ", ".join(sorted(disabled_tools)))
 
     if not delegation_tools:
         log.warning("No sub-agents created, supervisor disabled")
