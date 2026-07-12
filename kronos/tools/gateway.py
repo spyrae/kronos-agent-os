@@ -65,6 +65,38 @@ class MCPGateway:
         if self._dynamic_config:
             log.info("Loaded %d dynamic MCP servers from registry", len(self._dynamic_config))
 
+    def _apply_overrides(self, combined: dict) -> dict:
+        """Apply dashboard MCP overrides (mcp_overrides.json): drop servers the
+        operator disabled and merge custom servers they added.
+
+        This is the same file dashboard/api/mcp.py writes; the runtime used to
+        ignore it, so the UI toggle / add-server had no effect. A missing or
+        unreadable overrides file changes nothing (fail-safe).
+        """
+        overrides_file = Path(settings.db_path).parent / "mcp_overrides.json"
+        try:
+            if not overrides_file.exists():
+                return combined
+            overrides = json.loads(overrides_file.read_text(encoding="utf-8"))
+        except Exception as e:
+            log.warning("Could not read MCP overrides (%s); using base config", e)
+            return combined
+        result = dict(combined)
+        for name, override in overrides.items():
+            if not isinstance(override, dict):
+                continue
+            if override.get("disabled"):
+                result.pop(name, None)
+            elif name not in result and override.get("command"):
+                # Custom server added via the dashboard.
+                result[name] = {
+                    "transport": override.get("transport", "stdio"),
+                    "command": override["command"],
+                    "args": override.get("args", []),
+                    "env": override.get("env", {}),
+                }
+        return result
+
     async def start(self) -> list[BaseTool]:
         """Start all MCP servers and return tools.
 
@@ -72,7 +104,7 @@ class MCPGateway:
         static (mcp_servers.py) + dynamic (registry) servers.
         """
         self._static_config = build_mcp_config()
-        combined = {**self._static_config, **self._dynamic_config}
+        combined = self._apply_overrides({**self._static_config, **self._dynamic_config})
 
         if not combined:
             log.warning("No MCP servers configured")
@@ -155,7 +187,7 @@ class MCPGateway:
                 "Set ENABLE_MCP_GATEWAY_MANAGEMENT=true in a trusted local environment."
             )
 
-        combined = {**self._static_config, **self._dynamic_config}
+        combined = self._apply_overrides({**self._static_config, **self._dynamic_config})
         if not combined:
             return "No servers configured."
 
