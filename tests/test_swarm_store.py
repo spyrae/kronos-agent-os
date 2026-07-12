@@ -162,6 +162,124 @@ class TestArbitration:
         assert self._can_send(swarm, "reviewer", tier=1).won is True
 
 
+class TestExecutingLease:
+    """The executing-state lease that protects a long invoke from being
+    re-answered by a peer (the swarm-lease fix)."""
+
+    def _claim(self, swarm, agent: str, tier: int, eta_offset: float, *, msg_id: int):
+        swarm.claim_reply(
+            chat_id=100, topic_id=None, root_msg_id=1, trigger_msg_id=msg_id,
+            agent_name=agent, tier=tier, eta_ts=time.time() + eta_offset,
+        )
+
+    def _can_send(self, swarm, agent: str, tier: int, **kw):
+        return swarm.can_send_claim(
+            chat_id=100, topic_id=None, root_msg_id=1,
+            agent_name=agent, tier=tier, **kw,
+        )
+
+    def _state(self, swarm, msg_id: int):
+        row = swarm._db.read_one(
+            "SELECT state FROM reply_claims WHERE root_msg_id = 1 AND trigger_msg_id = ?",
+            (msg_id,),
+        )
+        return row["state"] if row else None
+
+    def _age(self, swarm, msg_id: int, seconds_ago: float):
+        swarm._db.write(
+            "UPDATE reply_claims SET created_at = ? WHERE trigger_msg_id = ?",
+            (time.time() - seconds_ago, msg_id),
+        )
+
+    def _acquire(self, swarm, agent: str, tier: int, *, msg_id: int):
+        """Simulate the bridge: win arbitration, then take the lease."""
+        assert self._can_send(swarm, agent, tier).won is True
+        swarm.begin_executing(
+            chat_id=100, topic_id=None, trigger_msg_id=msg_id, agent_name=agent,
+        )
+
+    def test_begin_executing_takes_the_lease(self, swarm):
+        self._claim(swarm, "kronos", tier=2, eta_offset=0.1, msg_id=1)
+        self._acquire(swarm, "kronos", tier=2, msg_id=1)
+        assert self._state(swarm, 1) == "executing"
+
+    def test_long_invoke_not_stolen_after_claim_expiry(self, swarm):
+        # kronos wins and starts a long invoke; its lease is aged past the
+        # 120s CLAIM_EXPIRY (but within the 600s executing lease). A peer
+        # arriving now must NOT treat the running winner as dead.
+        from kronos.swarm_store import CLAIM_EXPIRY_SECONDS
+
+        self._claim(swarm, "kronos", tier=2, eta_offset=0.1, msg_id=1)
+        self._acquire(swarm, "kronos", tier=2, msg_id=1)
+        self._age(swarm, 1, CLAIM_EXPIRY_SECONDS + 60)
+
+        # analyst even has an EARLIER eta — under the old 'claimed'-expiry
+        # behaviour kronos would be expired and analyst would win (the bug).
+        self._claim(swarm, "analyst", tier=2, eta_offset=-5.0, msg_id=2)
+        out = self._can_send(swarm, "analyst", tier=2)
+        assert out.won is False
+        assert self._state(swarm, 1) == "executing"  # winner survived
+
+    def test_dead_agent_lease_expires_and_peer_wins(self, swarm):
+        # If the winner really died mid-run, its executing lease eventually
+        # expires and another agent may pick up.
+        from kronos.swarm_store import EXECUTING_LEASE_SECONDS
+
+        self._claim(swarm, "kronos", tier=2, eta_offset=0.1, msg_id=1)
+        self._acquire(swarm, "kronos", tier=2, msg_id=1)
+        self._age(swarm, 1, EXECUTING_LEASE_SECONDS + 60)
+
+        self._claim(swarm, "analyst", tier=2, eta_offset=0.2, msg_id=2)
+        assert self._can_send(swarm, "analyst", tier=2).won is True
+        assert self._state(swarm, 1) == "expired"
+
+    def test_executing_counts_toward_cap(self, swarm):
+        # A winner still executing (not yet 'sent') already occupies a reply
+        # slot, so with cap=1 a peer is rejected by the cap.
+        self._claim(swarm, "kronos", tier=2, eta_offset=0.1, msg_id=1)
+        self._acquire(swarm, "kronos", tier=2, msg_id=1)
+        self._claim(swarm, "analyst", tier=2, eta_offset=0.2, msg_id=2)
+        out = self._can_send(swarm, "analyst", tier=2, max_implicit_replies=1)
+        assert out.won is False
+        assert "cap" in out.reason.lower()
+
+    def test_mark_sent_from_executing(self, swarm):
+        self._claim(swarm, "kronos", tier=2, eta_offset=0.1, msg_id=1)
+        self._acquire(swarm, "kronos", tier=2, msg_id=1)
+        swarm.mark_sent(
+            chat_id=100, topic_id=None, trigger_msg_id=1,
+            agent_name="kronos", reply_msg_id=777,
+        )
+        assert self._state(swarm, 1) == "sent"
+
+    def test_mark_sent_is_cas_from_active_only(self, swarm):
+        # A cancelled claim must not be resurrected to 'sent'.
+        self._claim(swarm, "kronos", tier=2, eta_offset=0.1, msg_id=1)
+        swarm.cancel_claim(
+            chat_id=100, topic_id=None, trigger_msg_id=1,
+            agent_name="kronos", reason="stood down",
+        )
+        swarm.mark_sent(
+            chat_id=100, topic_id=None, trigger_msg_id=1,
+            agent_name="kronos", reply_msg_id=555,
+        )
+        assert self._state(swarm, 1) == "cancelled"
+
+    def test_cancel_releases_executing_lease(self, swarm):
+        # A winner that acquired the lease but then decides to PASS releases
+        # the slot so a peer can proceed.
+        self._claim(swarm, "kronos", tier=2, eta_offset=0.1, msg_id=1)
+        self._acquire(swarm, "kronos", tier=2, msg_id=1)
+        assert self._state(swarm, 1) == "executing"
+        swarm.cancel_claim(
+            chat_id=100, topic_id=None, trigger_msg_id=1,
+            agent_name="kronos", reason="peer-reaction self-pass",
+        )
+        assert self._state(swarm, 1) == "cancelled"
+        self._claim(swarm, "analyst", tier=2, eta_offset=0.2, msg_id=2)
+        assert self._can_send(swarm, "analyst", tier=2).won is True
+
+
 class TestSharedUserFacts:
     def test_add_and_search(self, swarm):
         swarm.add_shared_fact(
@@ -281,6 +399,69 @@ class TestSchemaMigration:
             from_agent="kronos", to_agent="nexus", context="works now",
         )
         assert handoff_id > 0
+
+        _db._instances.clear()
+        ss._singleton = None
+
+    def test_reply_claims_check_migrated_to_include_executing(self, tmp_path, monkeypatch):
+        """A swarm.db whose reply_claims predates the 'executing' lease state is
+        migrated so the new state is insertable and existing rows survive."""
+        import sqlite3
+
+        swarm_path = tmp_path / "swarm.db"
+        with sqlite3.connect(swarm_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE reply_claims (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    topic_id INTEGER NOT NULL DEFAULT 0,
+                    root_msg_id INTEGER NOT NULL,
+                    trigger_msg_id INTEGER NOT NULL,
+                    agent_name TEXT NOT NULL,
+                    tier INTEGER NOT NULL,
+                    eta_ts REAL NOT NULL,
+                    state TEXT NOT NULL CHECK (state IN ('claimed','sent','cancelled','expired')),
+                    reason TEXT,
+                    reply_msg_id INTEGER,
+                    created_at REAL NOT NULL,
+                    UNIQUE (chat_id, topic_id, trigger_msg_id, agent_name)
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO reply_claims (chat_id, topic_id, root_msg_id, "
+                "trigger_msg_id, agent_name, tier, eta_ts, state, created_at) "
+                "VALUES (7, 0, 1, 1, 'kronos', 2, 1.0, 'sent', 1.0)"
+            )
+
+        from kronos.config import settings as _settings
+        monkeypatch.setattr(_settings, "swarm_db_path", str(swarm_path))
+        monkeypatch.setattr(_settings, "db_dir", str(tmp_path / "agent"))
+
+        from kronos import db as _db
+        _db._instances.clear()
+        import kronos.swarm_store as ss
+        ss._singleton = None
+
+        ss.get_swarm()  # runs the CHECK migration on load
+
+        with sqlite3.connect(swarm_path) as conn:
+            ddl = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='reply_claims'"
+            ).fetchone()[0]
+            assert "'executing'" in ddl
+            preserved = conn.execute(
+                "SELECT agent_name, state FROM reply_claims WHERE trigger_msg_id = 1"
+            ).fetchone()
+            assert preserved == ("kronos", "sent")
+            # 'executing' no longer violates the CHECK constraint.
+            conn.execute(
+                "INSERT INTO reply_claims (chat_id, topic_id, root_msg_id, "
+                "trigger_msg_id, agent_name, tier, eta_ts, state, created_at) "
+                "VALUES (7, 0, 1, 2, 'nexus', 2, 1.0, 'executing', 1.0)"
+            )
+            conn.commit()
 
         _db._instances.clear()
         ss._singleton = None
