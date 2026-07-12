@@ -13,6 +13,17 @@ router = APIRouter(prefix="/api/skills", tags=["skills"], dependencies=[Depends(
 log = logging.getLogger("kronos.dashboard.skills")
 
 
+def _skills_root() -> Path:
+    """Skills directory the RUNTIME actually reads.
+
+    The agent's SkillStore loads from ``Workspace.skills_dir`` =
+    ``<workspace>/self/skills``. The dashboard previously used
+    ``<workspace>/skills``, so edits made here were invisible to the running
+    agent. Keep this aligned with kronos.workspace.Workspace.skills_dir.
+    """
+    return Path(settings.workspace_path) / "self" / "skills"
+
+
 class SkillContent(BaseModel):
     content: str
 
@@ -20,7 +31,7 @@ class SkillContent(BaseModel):
 @router.get("/")
 async def list_skills():
     """List all skills with enabled status."""
-    skills_dir = Path(settings.workspace_path) / "skills"
+    skills_dir = _skills_root()
     if not skills_dir.is_dir():
         return {"skills": []}
 
@@ -55,7 +66,7 @@ async def list_skills():
 @router.get("/{name}")
 async def get_skill(name: str):
     """Get skill content."""
-    skills_dir = Path(settings.workspace_path) / "skills" / name
+    skills_dir = _skills_root() / name
     skill_file = skills_dir / "SKILL.md"
     disabled_file = skills_dir / "SKILL.md.disabled"
 
@@ -69,7 +80,7 @@ async def get_skill(name: str):
 @router.put("/{name}")
 async def update_skill(name: str, body: SkillContent):
     """Update skill content."""
-    skills_dir = Path(settings.workspace_path) / "skills" / name
+    skills_dir = _skills_root() / name
     skill_file = skills_dir / "SKILL.md"
     disabled_file = skills_dir / "SKILL.md.disabled"
 
@@ -85,7 +96,7 @@ async def update_skill(name: str, body: SkillContent):
 @router.post("/{name}/toggle")
 async def toggle_skill(name: str):
     """Enable/disable a skill by renaming SKILL.md ↔ SKILL.md.disabled."""
-    skills_dir = Path(settings.workspace_path) / "skills" / name
+    skills_dir = _skills_root() / name
     skill_file = skills_dir / "SKILL.md"
     disabled_file = skills_dir / "SKILL.md.disabled"
 
@@ -108,7 +119,7 @@ class NewSkill(BaseModel):
 @router.post("/")
 async def create_skill(body: NewSkill):
     """Create a new skill directory with SKILL.md."""
-    skills_dir = Path(settings.workspace_path) / "skills" / body.name
+    skills_dir = _skills_root() / body.name
     if skills_dir.exists():
         raise HTTPException(409, f"Skill already exists: {body.name}")
     skills_dir.mkdir(parents=True)
@@ -121,7 +132,7 @@ async def create_skill(body: NewSkill):
 @router.delete("/{name}")
 async def delete_skill(name: str):
     """Delete a skill directory."""
-    skills_dir = Path(settings.workspace_path) / "skills" / name
+    skills_dir = _skills_root() / name
     if not skills_dir.exists():
         raise HTTPException(404, f"Skill not found: {name}")
     import shutil
