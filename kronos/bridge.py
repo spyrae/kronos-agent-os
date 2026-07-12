@@ -970,9 +970,18 @@ async def _post_bot_api_message(
 
 
 async def _clear_context(chat_id: int, topic_id: int | None = None) -> str:
-    """Clear conversation history for a chat/topic."""
+    """Clear the conversation for a chat/topic: session history + the shared
+    swarm message ledger. Learned user facts (Mem0 / shared_user_facts) are
+    cross-conversation and are NOT removed here — see clear_context's message.
+    """
     thread_id = f"{chat_id}:{topic_id}" if topic_id else str(chat_id)
-    return await _agent.clear_context(thread_id)
+    result = await _agent.clear_context(thread_id)
+    try:
+        from kronos.swarm_store import get_swarm
+        get_swarm().clear_thread_messages(chat_id=chat_id, topic_id=topic_id)
+    except Exception as e:
+        log.debug("Swarm message clear failed (non-fatal): %s", e)
+    return result
 
 
 # --- Live progress reporter (roadmap 4.1) ---

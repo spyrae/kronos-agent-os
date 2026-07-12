@@ -92,6 +92,26 @@ class TestRecordMessages:
         assert rows[0]["sender_type"] == "agent"
         assert rows[0]["agent_name"] == "kronos"
 
+    def test_clear_thread_messages_is_scoped_and_keeps_facts(self, swarm):
+        swarm.record_inbound_message(
+            chat_id=10, topic_id=None, msg_id=1, reply_to_msg_id=None,
+            sender_id=42, sender_type="user", agent_name=None, text="keep",
+        )
+        swarm.record_inbound_message(
+            chat_id=20, topic_id=None, msg_id=1, reply_to_msg_id=None,
+            sender_id=42, sender_type="user", agent_name=None, text="clear me",
+        )
+        swarm.add_shared_fact(user_id="u1", fact="survives clear", source_agent="k")
+
+        deleted = swarm.clear_thread_messages(chat_id=20, topic_id=None)
+
+        assert deleted == 1
+        assert swarm.get_recent_messages(chat_id=20, topic_id=None) == []
+        # Other threads untouched…
+        assert len(swarm.get_recent_messages(chat_id=10, topic_id=None)) == 1
+        # …and learned facts are NOT wiped by clearing a conversation.
+        assert "survives clear" in swarm.all_shared_facts(user_id="u1")
+
 
 class TestArbitration:
     def _claim(self, swarm, agent: str, tier: int, eta_offset: float, *, msg_id: int = 1):
