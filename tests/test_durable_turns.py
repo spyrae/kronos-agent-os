@@ -539,3 +539,64 @@ async def test_stale_approval_expires_instead_of_resuming(tmp_path: Path) -> Non
     pending = await store.get_pending_approval(approval_id)
     assert pending is not None
     assert pending["status"] == "expired"
+
+
+@pytest.mark.asyncio
+async def test_approval_midbatch_defers_following_tool_calls(monkeypatch) -> None:
+    # When a tool call in the middle of a batch needs approval, the loop
+    # returns immediately. Every OTHER tool_call in that AIMessage must still
+    # get a ToolMessage, or the resumed history has unanswered tool_calls — a
+    # hard LLM protocol error. The approved call is answered on resume; the
+    # ones after it get deferred placeholders now.
+    monkeypatch.setattr(settings, "tool_approvals_enabled", True)
+
+    async def safe_tool() -> str:
+        return "did-safe"
+
+    async def risky_tool() -> str:
+        return "did-risky"
+
+    async def after_tool() -> str:
+        return "did-after"
+
+    tools = [
+        StructuredTool.from_function(coroutine=safe_tool, name="safe", description="safe"),
+        StructuredTool.from_function(coroutine=risky_tool, name="risky", description="risky"),
+        StructuredTool.from_function(coroutine=after_tool, name="after", description="after"),
+    ]
+    response = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "safe", "args": {}, "id": "c_safe"},
+            {"name": "risky", "args": {}, "id": "c_risky"},
+            {"name": "after", "args": {}, "id": "c_after"},
+        ],
+    )
+    model = _make_model([response])
+
+    async def needs_approval(tool, args):
+        return tool.name == "risky"
+
+    async def request_approval(tool, tool_call):
+        return "appr-xyz"
+
+    result = await react_loop(
+        model,
+        [HumanMessage(content="do batch")],
+        tools=tools,
+        needs_tool_approval=needs_approval,
+        request_tool_approval=request_approval,
+    )
+
+    assert result.waiting_approval is True
+    assert result.approval_id == "appr-xyz"
+
+    tms = {m.tool_call_id: m for m in result.messages if isinstance(m, ToolMessage)}
+    # Ran before the approval → real result.
+    assert tms["c_safe"].content == "did-safe"
+    # After the approval → deferred placeholder, not executed.
+    assert "deferred" in tms["c_after"].content.lower()
+    # The approval call itself is answered on resume, not here.
+    assert "c_risky" not in tms
+    # Every tool_call is accounted for (c_risky on resume) → protocol-valid.
+    assert set(tms) | {"c_risky"} == {"c_safe", "c_risky", "c_after"}
