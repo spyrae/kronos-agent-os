@@ -285,8 +285,13 @@ else
     fi
 
     # Reinstall package (in case deps changed). Includes the [documents] extra
-    # so PDF/DOCX ingest (roadmap 6.1) works on the host.
-    app/.venv/bin/python -m pip install -e "app/.[documents]" --quiet 2>/dev/null || true
+    # so PDF/DOCX ingest (roadmap 6.1) works on the host. A FAILED install must
+    # abort the deploy — restarting agents against a half-updated venv (new code,
+    # missing/old deps) would just crash-loop them. Errors are shown, not hidden.
+    if ! app/.venv/bin/python -m pip install -e "app/.[documents]" --quiet; then
+      echo "FATAL: dependency install failed — not restarting agents." >&2
+      exit 1
+    fi
 
     # Rebuild the dashboard UI: rsync excludes dist/ (the pattern also matches
     # Python build dirs), so the served bundle must be rebuilt from the synced
