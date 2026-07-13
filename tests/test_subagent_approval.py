@@ -229,3 +229,36 @@ async def test_pending_approval_round_trips_delegation(tmp_path: Path):
 
     claimed = await store.claim_pending_approval(approval_id=approval_id, decision="approved")
     assert claimed["delegation"] == delegation
+
+
+@pytest.mark.asyncio
+async def test_pending_approvals_migration_from_old_schema(tmp_path: Path):
+    """A DB created before delegation_json existed migrates cleanly, and a
+    second init over the migrated DB is a no-op (race-safe: the ALTER swallows
+    a concurrent duplicate-column add)."""
+    import aiosqlite
+
+    from kronos.session import SessionStore
+
+    db_path = str(tmp_path / "session.db")
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "CREATE TABLE pending_approvals ("
+            "approval_id TEXT PRIMARY KEY, turn_id TEXT NOT NULL, thread_id TEXT NOT NULL, "
+            "tool_call_id TEXT NOT NULL, tool_name TEXT NOT NULL, args_json TEXT NOT NULL DEFAULT '{}', "
+            "status TEXT NOT NULL DEFAULT 'pending', requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "decided_at TIMESTAMP, decided_by TEXT, decision TEXT)"
+        )
+        await db.commit()
+
+    store = SessionStore(db_path)
+    turn_id = await store.begin_turn("t", "hi")  # first use migrates (adds the column)
+    approval_id = await store.create_pending_approval(
+        turn_id=turn_id, thread_id="t", tool_call_id="c",
+        tool_name="restart_service", args={}, delegation={"tool_name": "delegate_to_x"},
+    )
+    assert (await store.get_pending_approval(approval_id))["delegation"] == {"tool_name": "delegate_to_x"}
+
+    # A second store re-running _ensure_table over the migrated DB must not raise.
+    store2 = SessionStore(db_path)
+    await store2.begin_turn("t2", "hi")
