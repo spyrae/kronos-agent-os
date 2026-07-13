@@ -182,7 +182,7 @@ def _telegram_safe_html(text: str) -> str:
     stack: list[str] = []
     pos = 0
     for match in _HTML_TAG_RE.finditer(text):
-        out.append(_escape_html_text(text[pos:match.start()]))
+        out.append(_escape_html_text(text[pos : match.start()]))
         pos = match.end()
         closing, name, attrs = match.group(1), match.group(2).lower(), match.group(3)
         if name not in _TG_ALLOWED_TAGS:
@@ -219,7 +219,12 @@ def _sanitize_html(text: str) -> str:
     text = _markdown_to_html(text)
     # Remove unsupported tags (keep only b, i, a, code, pre, u, s, em, strong)
     text = re.sub(r"<!DOCTYPE[^>]*>", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"</?(?:html|head|body|meta|title|div|span|p|br\s*/?|h[1-6]|ul|ol|li|table|tr|td|th|thead|tbody|img|hr)[^>]*>", "", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"</?(?:html|head|body|meta|title|div|span|p|br\s*/?|h[1-6]|ul|ol|li|table|tr|td|th|thead|tbody|img|hr)[^>]*>",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
     # Collapse multiple newlines
     text = re.sub(r"\n{3,}", "\n\n", text)
     # Final pass: escape stray &<> and balance tags so Telegram never rejects
@@ -285,7 +290,7 @@ def _split_by_lines(text: str, max_len: int = 4000) -> list[str]:
         if len(chunk) <= max_len:
             result.append(chunk)
         else:
-            result.extend(chunk[i:i + max_len] for i in range(0, len(chunk), max_len))
+            result.extend(chunk[i : i + max_len] for i in range(0, len(chunk), max_len))
 
     return result
 

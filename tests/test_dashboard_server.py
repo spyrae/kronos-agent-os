@@ -5,7 +5,7 @@ from dashboard.server import SPAStaticFiles
 
 
 def test_spa_static_files_falls_back_to_index_for_client_routes(tmp_path):
-    (tmp_path / "index.html").write_text("<div id=\"root\">KAOS UI</div>", encoding="utf-8")
+    (tmp_path / "index.html").write_text('<div id="root">KAOS UI</div>', encoding="utf-8")
     (tmp_path / "asset.txt").write_text("asset", encoding="utf-8")
     app = FastAPI()
     app.mount("/", SPAStaticFiles(directory=str(tmp_path), html=True), name="ui")

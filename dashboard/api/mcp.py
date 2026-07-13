@@ -45,26 +45,30 @@ async def list_servers():
     servers = []
     for name, config in base_config.items():
         disabled = overrides.get(name, {}).get("disabled", False)
-        servers.append({
-            "name": name,
-            "transport": config.get("transport", "stdio"),
-            "command": config.get("command", ""),
-            "args": config.get("args", []),
-            "source": "builtin",
-            "disabled": disabled,
-        })
+        servers.append(
+            {
+                "name": name,
+                "transport": config.get("transport", "stdio"),
+                "command": config.get("command", ""),
+                "args": config.get("args", []),
+                "source": "builtin",
+                "disabled": disabled,
+            }
+        )
 
     # Add override-only servers
     for name, override in overrides.items():
         if name not in base_config and not override.get("disabled"):
-            servers.append({
-                "name": name,
-                "transport": override.get("transport", "stdio"),
-                "command": override.get("command", ""),
-                "args": override.get("args", []),
-                "source": "custom",
-                "disabled": False,
-            })
+            servers.append(
+                {
+                    "name": name,
+                    "transport": override.get("transport", "stdio"),
+                    "command": override.get("command", ""),
+                    "args": override.get("args", []),
+                    "source": "custom",
+                    "disabled": False,
+                }
+            )
 
     return {"servers": servers}
 

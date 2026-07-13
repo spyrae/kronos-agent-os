@@ -102,9 +102,7 @@ def _agent_rollup(now: float) -> dict[str, dict]:
         rollup[row["agent_name"]]["replies_won_24h"] = row["won"] or 0
         rollup[row["agent_name"]]["claims_yielded_24h"] = row["yielded"] or 0
 
-    for row in _rows(
-        "SELECT to_agent, COUNT(*) AS n FROM handoffs WHERE state = 'pending' GROUP BY to_agent"
-    ):
+    for row in _rows("SELECT to_agent, COUNT(*) AS n FROM handoffs WHERE state = 'pending' GROUP BY to_agent"):
         rollup.setdefault(row["to_agent"], {})
         rollup[row["to_agent"]]["handoffs_pending"] = row["n"]
 
@@ -137,56 +135,62 @@ def _timeline() -> list[dict]:
         "WHERE state = 'sent' ORDER BY created_at DESC LIMIT ?",
         (TIMELINE_LIMIT,),
     ):
-        events.append({
-            "kind": "reply",
-            "ts": row["created_at"],
-            "from_agent": row["agent_name"],
-            "to_agent": "",
-            "text": row["reason"] or f"Tier {row['tier']} reply",
-            "state": "sent",
-        })
+        events.append(
+            {
+                "kind": "reply",
+                "ts": row["created_at"],
+                "from_agent": row["agent_name"],
+                "to_agent": "",
+                "text": row["reason"] or f"Tier {row['tier']} reply",
+                "state": "sent",
+            }
+        )
 
     for row in _rows(
-        "SELECT from_agent, to_agent, context, state, created_at FROM handoffs "
-        "ORDER BY created_at DESC LIMIT ?",
+        "SELECT from_agent, to_agent, context, state, created_at FROM handoffs ORDER BY created_at DESC LIMIT ?",
         (TIMELINE_LIMIT,),
     ):
-        events.append({
-            "kind": "handoff",
-            "ts": row["created_at"],
-            "from_agent": row["from_agent"],
-            "to_agent": row["to_agent"],
-            "text": row["context"],
-            "state": row["state"],
-        })
+        events.append(
+            {
+                "kind": "handoff",
+                "ts": row["created_at"],
+                "from_agent": row["from_agent"],
+                "to_agent": row["to_agent"],
+                "text": row["context"],
+                "state": row["state"],
+            }
+        )
 
     for row in _rows(
         "SELECT initiator, participants, question, state, created_at FROM council_sessions "
         "ORDER BY created_at DESC LIMIT ?",
         (TIMELINE_LIMIT,),
     ):
-        events.append({
-            "kind": "council",
-            "ts": row["created_at"],
-            "from_agent": row["initiator"],
-            "to_agent": row["participants"],
-            "text": row["question"],
-            "state": row["state"],
-        })
+        events.append(
+            {
+                "kind": "council",
+                "ts": row["created_at"],
+                "from_agent": row["initiator"],
+                "to_agent": row["participants"],
+                "text": row["question"],
+                "state": row["state"],
+            }
+        )
 
     for row in _rows(
-        "SELECT from_agent, to_agent, query, state, created_at FROM memory_requests "
-        "ORDER BY created_at DESC LIMIT ?",
+        "SELECT from_agent, to_agent, query, state, created_at FROM memory_requests ORDER BY created_at DESC LIMIT ?",
         (TIMELINE_LIMIT,),
     ):
-        events.append({
-            "kind": "memory",
-            "ts": row["created_at"],
-            "from_agent": row["from_agent"],
-            "to_agent": row["to_agent"],
-            "text": row["query"],
-            "state": row["state"],
-        })
+        events.append(
+            {
+                "kind": "memory",
+                "ts": row["created_at"],
+                "from_agent": row["from_agent"],
+                "to_agent": row["to_agent"],
+                "text": row["query"],
+                "state": row["state"],
+            }
+        )
 
     events.sort(key=lambda item: item["ts"] or 0, reverse=True)
     return events[:TIMELINE_LIMIT]
@@ -202,9 +206,7 @@ def _totals(now: float) -> dict:
         "SELECT COUNT(*) AS n FROM swarm_messages WHERE sender_type = 'agent' AND created_at >= ?",
         (since,),
     )
-    active_councils = _rows(
-        "SELECT COUNT(*) AS n FROM council_sessions WHERE state IN ('gathering', 'synthesizing')"
-    )
+    active_councils = _rows("SELECT COUNT(*) AS n FROM council_sessions WHERE state IN ('gathering', 'synthesizing')")
     pending_handoffs = _rows("SELECT COUNT(*) AS n FROM handoffs WHERE state = 'pending'")
     pending_memory = _rows("SELECT COUNT(*) AS n FROM memory_requests WHERE state = 'pending'")
     shared_facts = _rows("SELECT COUNT(*) AS n FROM shared_user_facts")
@@ -237,19 +239,21 @@ async def fleet_overview():
     for name in sorted(known):
         profile = AGENT_PROFILES.get(name, {})
         stats = rollup.get(name, {})
-        agents.append({
-            "name": name,
-            "username": profile.get("username", ""),
-            "role": profile.get("role", ""),
-            "is_me": name == settings.agent_name,
-            "last_seen": stats.get("last_seen"),
-            "messages_24h": stats.get("messages_24h", 0),
-            "replies_won_24h": stats.get("replies_won_24h", 0),
-            "claims_yielded_24h": stats.get("claims_yielded_24h", 0),
-            "handoffs_pending": stats.get("handoffs_pending", 0),
-            "sparkline": sparks.get(name, [0] * SPARK_BUCKETS),
-            "health": health.get(name),
-        })
+        agents.append(
+            {
+                "name": name,
+                "username": profile.get("username", ""),
+                "role": profile.get("role", ""),
+                "is_me": name == settings.agent_name,
+                "last_seen": stats.get("last_seen"),
+                "messages_24h": stats.get("messages_24h", 0),
+                "replies_won_24h": stats.get("replies_won_24h", 0),
+                "claims_yielded_24h": stats.get("claims_yielded_24h", 0),
+                "handoffs_pending": stats.get("handoffs_pending", 0),
+                "sparkline": sparks.get(name, [0] * SPARK_BUCKETS),
+                "health": health.get(name),
+            }
+        )
 
     return {
         "agents": agents,

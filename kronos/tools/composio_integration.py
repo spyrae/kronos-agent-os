@@ -40,6 +40,7 @@ def get_composio_tools(apps: list[str] | None = None) -> list[BaseTool]:
         if apps:
             # Import app enum
             from composio_langchain import App
+
             app_enums = []
             for app_name in apps:
                 app_enum = getattr(App, app_name.upper(), None)

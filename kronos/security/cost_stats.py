@@ -21,9 +21,7 @@ def _cutoff(period: str) -> str:
 
 
 def _aggregate(cost_file: Path, cutoff: str) -> dict:
-    by_tier: dict[str, dict] = defaultdict(
-        lambda: {"requests": 0, "cost": 0.0, "input_tokens": 0, "output_tokens": 0}
-    )
+    by_tier: dict[str, dict] = defaultdict(lambda: {"requests": 0, "cost": 0.0, "input_tokens": 0, "output_tokens": 0})
     total = {"requests": 0, "cost": 0.0, "input_tokens": 0, "output_tokens": 0}
     if not cost_file.exists():
         return {"total": total, "by_tier": {}}

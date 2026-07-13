@@ -96,8 +96,7 @@ class CompetitorStore:
             "INSERT INTO competitor_changes "
             "(competitor_id, channel, change_type, severity, summary, details) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (competitor_id, channel, change_type, severity, summary,
-             json.dumps(details) if details else None),
+            (competitor_id, channel, change_type, severity, summary, json.dumps(details) if details else None),
         )
         return cursor.lastrowid
 
@@ -106,15 +105,13 @@ class CompetitorStore:
             return
         placeholders = ",".join("?" for _ in change_ids)
         self._db.write(
-            f"UPDATE competitor_changes SET included_in_digest = 1 "
-            f"WHERE id IN ({placeholders})",
+            f"UPDATE competitor_changes SET included_in_digest = 1 WHERE id IN ({placeholders})",
             tuple(change_ids),
         )
 
     def get_undigested_changes(self) -> list[dict]:
         rows = self._db.read(
-            "SELECT * FROM competitor_changes WHERE included_in_digest = 0 "
-            "ORDER BY detected_at DESC",
+            "SELECT * FROM competitor_changes WHERE included_in_digest = 0 ORDER BY detected_at DESC",
         )
         return [dict(r) for r in rows]
 
@@ -140,19 +137,20 @@ class CompetitorStore:
             (snapshots_deleted, changes_deleted)
         """
         snap_cur = self._db.write(
-            "DELETE FROM competitor_snapshots "
-            "WHERE captured_at < datetime('now', ?)",
+            "DELETE FROM competitor_snapshots WHERE captured_at < datetime('now', ?)",
             (f"-{snapshot_days} days",),
         )
         change_cur = self._db.write(
-            "DELETE FROM competitor_changes "
-            "WHERE detected_at < datetime('now', ?)",
+            "DELETE FROM competitor_changes WHERE detected_at < datetime('now', ?)",
             (f"-{change_days} days",),
         )
         snap_deleted = snap_cur.rowcount if snap_cur is not None else 0
         change_deleted = change_cur.rowcount if change_cur is not None else 0
         log.info(
             "Pruned competitor data: %d snapshots > %dd, %d changes > %dd",
-            snap_deleted, snapshot_days, change_deleted, change_days,
+            snap_deleted,
+            snapshot_days,
+            change_deleted,
+            change_days,
         )
         return snap_deleted, change_deleted

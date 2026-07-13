@@ -15,13 +15,15 @@ def _api_call(method: str, params: dict | None = None) -> list | dict:
     """Call Zabbix JSON-RPC API."""
     url = settings.zabbix_url.rstrip("/") + "/api_jsonrpc.php"
 
-    body = json.dumps({
-        "jsonrpc": "2.0",
-        "method": method,
-        "params": params or {},
-        "id": 1,
-        "auth": settings.zabbix_token,
-    }).encode()
+    body = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params or {},
+            "id": 1,
+            "auth": settings.zabbix_token,
+        }
+    ).encode()
 
     req = urllib.request.Request(
         url,
@@ -44,31 +46,40 @@ def collect() -> dict:
 
     try:
         # Host status
-        hosts = _api_call("host.get", {
-            "output": ["host", "name", "status"],
-            "selectInterfaces": ["ip"],
-            "filter": {"status": "0"},  # only enabled hosts
-        })
+        hosts = _api_call(
+            "host.get",
+            {
+                "output": ["host", "name", "status"],
+                "selectInterfaces": ["ip"],
+                "filter": {"status": "0"},  # only enabled hosts
+            },
+        )
 
         # Active problems (severity >= Warning)
-        problems = _api_call("problem.get", {
-            "recent": True,
-            "sortfield": ["eventid"],
-            "sortorder": "DESC",
-            "limit": 20,
-            "severities": [2, 3, 4, 5],  # Warning, Average, High, Disaster
-            "selectHosts": ["host"],
-            "suppressed": False,  # exclude problems intentionally suppressed in Zabbix
-        })
+        problems = _api_call(
+            "problem.get",
+            {
+                "recent": True,
+                "sortfield": ["eventid"],
+                "sortorder": "DESC",
+                "limit": 20,
+                "severities": [2, 3, 4, 5],  # Warning, Average, High, Disaster
+                "selectHosts": ["host"],
+                "suppressed": False,  # exclude problems intentionally suppressed in Zabbix
+            },
+        )
 
         # Active triggers
-        triggers = _api_call("trigger.get", {
-            "only_true": True,
-            "min_severity": 2,
-            "output": ["description", "priority", "lastchange"],
-            "selectHosts": ["host"],
-            "limit": 20,
-        })
+        triggers = _api_call(
+            "trigger.get",
+            {
+                "only_true": True,
+                "min_severity": 2,
+                "output": ["description", "priority", "lastchange"],
+                "selectHosts": ["host"],
+                "limit": 20,
+            },
+        )
 
         hosts_total = len(hosts)
 

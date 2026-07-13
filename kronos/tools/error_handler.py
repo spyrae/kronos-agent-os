@@ -59,8 +59,4 @@ def classify_tool_error(error: Exception) -> str:
             )
 
     # Unknown error — conservative: report but let LLM decide
-    return (
-        f"[ERROR] {error_str}\n"
-        "The tool returned an unexpected error. "
-        "Try an alternative tool if available."
-    )
+    return f"[ERROR] {error_str}\nThe tool returned an unexpected error. Try an alternative tool if available."

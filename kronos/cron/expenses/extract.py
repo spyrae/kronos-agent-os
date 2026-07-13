@@ -239,15 +239,17 @@ def audit_expense(email_text: str, expense: ExtractedExpense, model=None) -> Aud
         },
         ensure_ascii=False,
     )
-    prompt = AUDIT_PROMPT.format(
-        email=email_text[:4000], expense=expense_json, categories=_CATEGORY_LIST
-    )
+    prompt = AUDIT_PROMPT.format(email=email_text[:4000], expense=expense_json, categories=_CATEGORY_LIST)
     data = _run_json(prompt, model=model)
     if not data:
         # No verdict → treat as unverified (fail closed): not ok.
         return AuditVerdict(
-            ok=False, is_expense=False, amount_matches=False,
-            category=expense.category, confidence=0.0, issues="audit unavailable",
+            ok=False,
+            is_expense=False,
+            amount_matches=False,
+            category=expense.category,
+            confidence=0.0,
+            issues="audit unavailable",
         )
     return AuditVerdict(
         ok=bool(data.get("ok")),

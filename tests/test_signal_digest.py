@@ -391,9 +391,7 @@ def test_synthesize_ideas_digest_replaces_body_with_generated_ideas(monkeypatch)
     from kronos.signals.digest import synthesize_ideas_digest
 
     clusters = [{"id": 1, "category": "ideas", "title": "Looking for a tool", "summary": "I wish", "item_ids": [1]}]
-    items_by_cluster = {
-        1: [_item("reddit_ai_agents", "reddit", "I wish there was a tool", categories=("ideas",))]
-    }
+    items_by_cluster = {1: [_item("reddit_ai_agents", "reddit", "I wish there was a tool", categories=("ideas",))]}
 
     generated = (
         "• <b>Идея:</b> Авто-саммари сообществ\n"
@@ -430,9 +428,7 @@ def test_synthesize_ideas_digest_falls_back_without_llm(monkeypatch):
     monkeypatch.setattr("kronos.llm.is_runtime_llm_configured", lambda: False)
 
     clusters = [{"id": 1, "category": "ideas", "title": "Looking for a tool", "summary": "I wish", "item_ids": [1]}]
-    items_by_cluster = {
-        1: [_item("reddit_ai_agents", "reddit", "I wish there was a tool", categories=("ideas",))]
-    }
+    items_by_cluster = {1: [_item("reddit_ai_agents", "reddit", "I wish there was a tool", categories=("ideas",))]}
     rendered = render_digest("ideas", clusters, items_by_cluster, max_chars=10000)
 
     synthesized = synthesize_ideas_digest(rendered, clusters, items_by_cluster)

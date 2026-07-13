@@ -187,10 +187,7 @@ def get_nudge_message(level: str, description: str) -> str:
             "Если задача невыполнима — скажи об этом прямо."
         )
     elif level == LoopLevel.CIRCUIT_BREAKER:
-        return (
-            f"[CIRCUIT BREAKER] {description}. "
-            "Выполнение прервано из-за зацикливания."
-        )
+        return f"[CIRCUIT BREAKER] {description}. Выполнение прервано из-за зацикливания."
     return ""
 
 

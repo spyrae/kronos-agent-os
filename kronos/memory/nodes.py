@@ -76,8 +76,11 @@ def retrieve_memories(state: AgentState) -> AgentState:
     shared_facts: list[str] = []
     try:
         from kronos.swarm_store import get_swarm
+
         shared_facts = get_swarm().search_shared_facts(
-            user_id=user_id, query=last_user_msg, limit=5,
+            user_id=user_id,
+            query=last_user_msg,
+            limit=5,
         )
     except Exception as e:
         log.debug("Shared user facts lookup failed: %s", e)
@@ -100,7 +103,9 @@ def retrieve_memories(state: AgentState) -> AgentState:
 
     log.info(
         "Injected %d shared + %d personal memories for user %s",
-        len(shared_facts), len(memories), user_id,
+        len(shared_facts),
+        len(memories),
+        user_id,
     )
     return {"messages": [memory_msg]}
 
@@ -152,6 +157,7 @@ def store_memories_background(state: AgentState) -> AgentState:
     if extracted_facts:
         try:
             from kronos.swarm_store import get_swarm
+
             swarm = get_swarm()
             added = 0
             for fact in extracted_facts:

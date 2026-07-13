@@ -76,12 +76,14 @@ def _load_approvals() -> list[dict]:
             if event.get("event") == "created":
                 approvals[approval_id] = {k: v for k, v in event.items() if k != "event"}
             elif event.get("event") == "decided" and approval_id in approvals:
-                approvals[approval_id].update({
-                    "status": event.get("decision", approvals[approval_id].get("status")),
-                    "decision_reason": event.get("reason", ""),
-                    "decided_at": event.get("decided_at", ""),
-                    "decided_by": event.get("decided_by", ""),
-                })
+                approvals[approval_id].update(
+                    {
+                        "status": event.get("decision", approvals[approval_id].get("status")),
+                        "decision_reason": event.get("reason", ""),
+                        "decided_at": event.get("decided_at", ""),
+                        "decided_by": event.get("decided_by", ""),
+                    }
+                )
 
     return sorted(approvals.values(), key=lambda item: item.get("requested_at", ""), reverse=True)
 
@@ -103,11 +105,13 @@ async def get_env_vars():
         key, _, value = line.partition("=")
         key = key.strip()
         value = value.strip()
-        result.append({
-            "key": key,
-            "value": _mask_value(key, value),
-            "is_secret": bool(SECRET_PATTERNS.search(key)),
-        })
+        result.append(
+            {
+                "key": key,
+                "value": _mask_value(key, value),
+                "is_secret": bool(SECRET_PATTERNS.search(key)),
+            }
+        )
     return {"vars": result}
 
 
@@ -310,12 +314,14 @@ async def decide_approval(approval_id: str, body: ApprovalDecision):
         "decided_by": "dashboard",
     }
     _append_approval_event(event)
-    approval.update({
-        "status": body.decision,
-        "decision_reason": body.reason,
-        "decided_at": event["decided_at"],
-        "decided_by": "dashboard",
-    })
+    approval.update(
+        {
+            "status": body.decision,
+            "decision_reason": body.reason,
+            "decided_at": event["decided_at"],
+            "decided_by": "dashboard",
+        }
+    )
     log.info("Approval %s: %s", approval_id, body.decision)
     return {"ok": True, "approval": approval}
 

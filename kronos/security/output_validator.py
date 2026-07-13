@@ -21,15 +21,12 @@ _SECRET_PATTERNS = [
     r"xai-[a-zA-Z0-9]{20,}",
     r"AIza[a-zA-Z0-9_-]{35}",  # Google API key
     r"AKIA[A-Z0-9]{16}",  # AWS access key
-
     # Tokens
     r"ghp_[a-zA-Z0-9]{36}",  # GitHub PAT
     r"gho_[a-zA-Z0-9]{36}",
     r"eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}",  # JWT
-
     # Connection strings
     r"(?:postgres|mysql|mongodb)://[^\s]+:[^\s]+@[^\s]+",
-
     # Generic secrets
     r"(?:password|secret|token|api_key)\s*[=:]\s*['\"][^'\"]{8,}['\"]",
 ]

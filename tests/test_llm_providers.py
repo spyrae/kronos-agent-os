@@ -168,13 +168,15 @@ def test_get_model_uses_openai_compatible_adapter(monkeypatch):
     model = get_model(ModelTier.STANDARD)
 
     assert isinstance(model, FakeChatOpenAI)
-    assert calls == [{
-        "model": "my-model",
-        "api_key": "sk-test",
-        "max_tokens": 4096,
-        "temperature": 0.5,
-        "base_url": "https://llm.example.com/v1",
-    }]
+    assert calls == [
+        {
+            "model": "my-model",
+            "api_key": "sk-test",
+            "max_tokens": 4096,
+            "temperature": 0.5,
+            "base_url": "https://llm.example.com/v1",
+        }
+    ]
     reset_provider_state()
 
 
@@ -265,14 +267,16 @@ def test_retriable_llm_error_classification() -> None:
 def test_provider_config_can_come_from_dotenv_without_settings_fields(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "\n".join([
-            "KAOS_STANDARD_PROVIDER_CHAIN=my-lab",
-            "KAOS_LITE_PROVIDER_CHAIN=my-lab",
-            "KAOS_PROVIDER_MY_LAB_MODEL=my-model",
-            "KAOS_PROVIDER_MY_LAB_BASE_URL=https://llm.example.com/v1",
-            "KAOS_PROVIDER_MY_LAB_API_KEY_ENV=MY_LAB_API_KEY",
-            "MY_LAB_API_KEY=sk-test",
-        ]),
+        "\n".join(
+            [
+                "KAOS_STANDARD_PROVIDER_CHAIN=my-lab",
+                "KAOS_LITE_PROVIDER_CHAIN=my-lab",
+                "KAOS_PROVIDER_MY_LAB_MODEL=my-model",
+                "KAOS_PROVIDER_MY_LAB_BASE_URL=https://llm.example.com/v1",
+                "KAOS_PROVIDER_MY_LAB_API_KEY_ENV=MY_LAB_API_KEY",
+                "MY_LAB_API_KEY=sk-test",
+            ]
+        ),
         encoding="utf-8",
     )
 

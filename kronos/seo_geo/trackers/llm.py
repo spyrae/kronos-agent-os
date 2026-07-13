@@ -34,8 +34,8 @@ _TIMEOUT = 60  # LLMs are slow
 
 @dataclass(frozen=True)
 class Engine:
-    id: str           # 'chatgpt' | 'perplexity' | ...
-    model: str        # LiteLLM model id
+    id: str  # 'chatgpt' | 'perplexity' | ...
+    model: str  # LiteLLM model id
     web_grounded: bool
 
 
@@ -57,23 +57,25 @@ def _litellm_chat(model: str, question: str) -> tuple[str, str | None]:
     if not base or not key:
         return "", "LiteLLM not configured"
 
-    body = json.dumps({
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a helpful assistant. Answer the user's question "
-                    "concretely and concisely. If you know specific products, "
-                    "tools, or websites that answer the question, mention them "
-                    "by name. Cite URLs when relevant."
-                ),
-            },
-            {"role": "user", "content": question},
-        ],
-        "max_tokens": 600,
-        "temperature": 0.4,
-    }).encode()
+    body = json.dumps(
+        {
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful assistant. Answer the user's question "
+                        "concretely and concisely. If you know specific products, "
+                        "tools, or websites that answer the question, mention them "
+                        "by name. Cite URLs when relevant."
+                    ),
+                },
+                {"role": "user", "content": question},
+            ],
+            "max_tokens": 600,
+            "temperature": 0.4,
+        }
+    ).encode()
     req = urllib.request.Request(
         f"{base}/chat/completions",
         data=body,
@@ -105,9 +107,7 @@ def _detect_mentions(text: str, site_id: str) -> tuple[bool, list[str], str | No
     """
     low = text.lower()
     we_cited = any(p in low for p in BRAND_PATTERNS.get(site_id, []))
-    competitors = [
-        c for c in COMPETITOR_PATTERNS.get(site_id, []) if c.lower() in low
-    ]
+    competitors = [c for c in COMPETITOR_PATTERNS.get(site_id, []) if c.lower() in low]
     # Try to extract our URL if explicitly cited.
     cited_url = None
     if we_cited:
@@ -127,8 +127,12 @@ def ask_engine(engine: Engine, question: str, site_id: str) -> dict:
     answer, err = _litellm_chat(engine.model, question)
     if err:
         return {
-            "engine": engine.id, "question": question, "answer": "",
-            "cited": False, "cited_url": None, "competitors_cited": "[]",
+            "engine": engine.id,
+            "question": question,
+            "answer": "",
+            "cited": False,
+            "cited_url": None,
+            "competitors_cited": "[]",
             "error": err,
         }
     cited, competitors, cited_url = _detect_mentions(answer, site_id)

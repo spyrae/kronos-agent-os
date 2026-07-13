@@ -30,9 +30,17 @@ TOOLS_DIR = ws.dynamic_tools_dir
 
 # Allowed imports in generated code
 SAFE_IMPORTS = {
-    "json", "re", "math", "datetime", "collections",
-    "itertools", "functools", "hashlib", "base64",
-    "urllib.parse", "statistics",
+    "json",
+    "re",
+    "math",
+    "datetime",
+    "collections",
+    "itertools",
+    "functools",
+    "hashlib",
+    "base64",
+    "urllib.parse",
+    "statistics",
 }
 
 # Forbidden patterns in generated code
@@ -72,6 +80,7 @@ class ToolFunctionSpec:
     name: str
     description: str
     args_schema: type
+
 
 GENERATE_PROMPT = """Create a Python function for a LangChain tool.
 
@@ -157,10 +166,7 @@ def validate_code(code: str) -> tuple[bool, str]:
 def _extract_function_spec(code: str, description: str) -> ToolFunctionSpec:
     tree = ast.parse(code)
     module_doc = ast.get_docstring(tree) or ""
-    func_def = next(
-        node for node in tree.body
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-    )
+    func_def = next(node for node in tree.body if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef))
     docstring = ast.get_docstring(func_def) or module_doc or description
     return ToolFunctionSpec(
         name=func_def.name,
@@ -304,8 +310,7 @@ async def create_tool(name: str, description: str) -> tuple[BaseTool | None, str
     """
     if not settings.enable_dynamic_tools:
         return None, (
-            "Dynamic tool creation is disabled. "
-            "Set ENABLE_DYNAMIC_TOOLS=true in a trusted local environment."
+            "Dynamic tool creation is disabled. Set ENABLE_DYNAMIC_TOOLS=true in a trusted local environment."
         )
 
     # Sanitize name
@@ -322,6 +327,7 @@ async def create_tool(name: str, description: str) -> tuple[BaseTool | None, str
 
     model = get_model(ModelTier.STANDARD)
     from langchain_core.messages import HumanMessage
+
     response = model.invoke([HumanMessage(content=prompt)])
     code = response.content if isinstance(response.content, str) else str(response.content)
 

@@ -186,12 +186,7 @@ def _peer_title(entity, dialog) -> str:
 
 
 def _message_text(msg) -> str:
-    return str(
-        getattr(msg, "message", None)
-        or getattr(msg, "text", None)
-        or getattr(msg, "raw_text", None)
-        or ""
-    )
+    return str(getattr(msg, "message", None) or getattr(msg, "text", None) or getattr(msg, "raw_text", None) or "")
 
 
 def _compact_text(text: str) -> str:

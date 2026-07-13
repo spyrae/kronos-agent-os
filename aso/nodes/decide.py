@@ -41,10 +41,7 @@ def decide(state: ASOState) -> dict:
         }
 
     # Filter: only high and medium priority
-    actionable = [
-        opp for opp in opportunities
-        if opp.get("priority") in ("high", "medium")
-    ]
+    actionable = [opp for opp in opportunities if opp.get("priority") in ("high", "medium")]
 
     if not actionable:
         log.info("DECIDE: %d opportunities, but none high/medium priority", len(opportunities))

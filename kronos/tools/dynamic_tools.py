@@ -22,8 +22,7 @@ async def create_new_tool(name: str, description: str) -> str:
     """
     if not settings.enable_dynamic_tools:
         return (
-            "Blocked: dynamic tool creation is disabled. "
-            "Set ENABLE_DYNAMIC_TOOLS=true in a trusted local environment."
+            "Blocked: dynamic tool creation is disabled. Set ENABLE_DYNAMIC_TOOLS=true in a trusted local environment."
         )
 
     result_tool, message = await create_tool(name, description)

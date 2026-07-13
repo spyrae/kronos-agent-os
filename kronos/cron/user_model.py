@@ -122,6 +122,7 @@ async def run_user_model() -> None:
 
     # Load current model (previous hypotheses)
     from kronos.workspace import ws
+
     model_path = ws.user_model
     current_model = ""
     if model_path.exists():
@@ -138,6 +139,7 @@ async def run_user_model() -> None:
     try:
         model = get_model(ModelTier.STANDARD)
         from langchain_core.messages import HumanMessage
+
         response = model.invoke([HumanMessage(content=prompt)])
         new_model = response.content if isinstance(response.content, str) else str(response.content)
     except Exception as e:
@@ -174,9 +176,7 @@ async def run_user_model() -> None:
     changes_section = _extract_evolution_summary(new_model)
 
     send_bot_api(
-        f"🧠 User Model updated\n"
-        f"Period: {LOOKBACK_DAYS}d, {len(entries)} interactions\n"
-        f"{changes_section}",
+        f"🧠 User Model updated\nPeriod: {LOOKBACK_DAYS}d, {len(entries)} interactions\n{changes_section}",
         topic_id=TOPIC_GENERAL,
     )
 
@@ -215,6 +215,7 @@ def _collect_session_context() -> str:
     snippets = []
     try:
         from kronos.swarm_store import get_swarm
+
         swarm = get_swarm()
         for query in ["решил", "выбрал", "предпочитаю", "хочу", "не хочу"]:
             results = swarm.search_sessions(
@@ -283,7 +284,7 @@ def _extract_evolution_summary(model_text: str, max_chars: int = 300) -> str:
     """Extract the prompt's expected evolution section for notifications."""
     for heading in ("## Evolution", "## Эволюция", "## Changes"):
         if heading in model_text:
-            return model_text[model_text.index(heading):][:max_chars]
+            return model_text[model_text.index(heading) :][:max_chars]
     return ""
 
 

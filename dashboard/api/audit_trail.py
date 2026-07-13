@@ -72,20 +72,22 @@ async def get_events(
             continue
 
         evt_id = hashlib.sha256(json.dumps(entry, sort_keys=True, default=str).encode()).hexdigest()[:12]
-        events.append({
-            "id": f"evt_{evt_id}",
-            "type": event_type,
-            "agent": entry.get("agent", entry.get("tier", "unknown")),
-            "description": entry.get("input_preview", "") or entry.get("output_preview", ""),
-            "timestamp": entry.get("ts", ""),
-            "metadata": {
-                "duration_ms": entry.get("duration_ms"),
-                "cost_usd": entry.get("approx_cost_usd"),
-            },
-        })
+        events.append(
+            {
+                "id": f"evt_{evt_id}",
+                "type": event_type,
+                "agent": entry.get("agent", entry.get("tier", "unknown")),
+                "description": entry.get("input_preview", "") or entry.get("output_preview", ""),
+                "timestamp": entry.get("ts", ""),
+                "metadata": {
+                    "duration_ms": entry.get("duration_ms"),
+                    "cost_usd": entry.get("approx_cost_usd"),
+                },
+            }
+        )
 
     total = len(events)
-    page = events[offset:offset + limit]
+    page = events[offset : offset + limit]
 
     return {
         "events": page,
@@ -152,31 +154,33 @@ async def get_tool_calls(
             continue
 
         event_id = hashlib.sha256(json.dumps(entry, sort_keys=True, default=str).encode()).hexdigest()[:12]
-        filtered.append({
-            "id": f"tool_{event_id}",
-            "timestamp": entry.get("ts", ""),
-            "event": entry.get("event", ""),
-            "status": entry_status,
-            "tool": entry_tool,
-            "capability": entry_capability,
-            "approval_status": entry.get("approval_status", ""),
-            "agent": entry.get("agent", "unknown"),
-            "session_id": entry_session,
-            "thread_id": entry.get("thread_id", ""),
-            "source_kind": entry.get("source_kind", ""),
-            "call_id": entry.get("call_id", ""),
-            "turn": entry.get("turn"),
-            "args_summary": entry.get("args_summary", ""),
-            "result_summary": entry.get("result_summary", ""),
-            "error": bool(entry.get("error", False)),
-            "duration_ms": entry.get("duration_ms"),
-            "cost_usd": entry.get("cost_usd"),
-            "input_tokens": entry.get("input_tokens"),
-            "output_tokens": entry.get("output_tokens"),
-        })
+        filtered.append(
+            {
+                "id": f"tool_{event_id}",
+                "timestamp": entry.get("ts", ""),
+                "event": entry.get("event", ""),
+                "status": entry_status,
+                "tool": entry_tool,
+                "capability": entry_capability,
+                "approval_status": entry.get("approval_status", ""),
+                "agent": entry.get("agent", "unknown"),
+                "session_id": entry_session,
+                "thread_id": entry.get("thread_id", ""),
+                "source_kind": entry.get("source_kind", ""),
+                "call_id": entry.get("call_id", ""),
+                "turn": entry.get("turn"),
+                "args_summary": entry.get("args_summary", ""),
+                "result_summary": entry.get("result_summary", ""),
+                "error": bool(entry.get("error", False)),
+                "duration_ms": entry.get("duration_ms"),
+                "cost_usd": entry.get("cost_usd"),
+                "input_tokens": entry.get("input_tokens"),
+                "output_tokens": entry.get("output_tokens"),
+            }
+        )
 
     total = len(filtered)
-    page = filtered[offset:offset + limit]
+    page = filtered[offset : offset + limit]
 
     return {
         "events": page,

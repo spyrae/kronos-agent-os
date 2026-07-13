@@ -24,32 +24,41 @@ def _find_tool(tools: list[BaseTool], name_prefix: str) -> BaseTool | None:
 async def _audited_tool_call(tool: BaseTool, args: dict, on_tool_event=None):
     call_id = f"manual_{tool.name}_{time.time_ns()}"
     if on_tool_event:
-        on_tool_event("tool_call", {
-            "name": tool.name,
-            "call_id": call_id,
-            "args": args,
-        })
+        on_tool_event(
+            "tool_call",
+            {
+                "name": tool.name,
+                "call_id": call_id,
+                "args": args,
+            },
+        )
     started = time.perf_counter()
     try:
         result = await tool.ainvoke(args)
         if on_tool_event:
-            on_tool_event("tool_result", {
-                "name": tool.name,
-                "call_id": call_id,
-                "ok": True,
-                "content": result,
-                "duration_ms": round((time.perf_counter() - started) * 1000),
-            })
+            on_tool_event(
+                "tool_result",
+                {
+                    "name": tool.name,
+                    "call_id": call_id,
+                    "ok": True,
+                    "content": result,
+                    "duration_ms": round((time.perf_counter() - started) * 1000),
+                },
+            )
         return result
     except Exception as e:
         if on_tool_event:
-            on_tool_event("tool_result", {
-                "name": tool.name,
-                "call_id": call_id,
-                "ok": False,
-                "content": f"[ERROR] {e}",
-                "duration_ms": round((time.perf_counter() - started) * 1000),
-            })
+            on_tool_event(
+                "tool_result",
+                {
+                    "name": tool.name,
+                    "call_id": call_id,
+                    "ok": False,
+                    "content": f"[ERROR] {e}",
+                    "duration_ms": round((time.perf_counter() - started) * 1000),
+                },
+            )
         raise
 
 
@@ -83,11 +92,15 @@ async def discover_topics(state: TopicResearchState, tools: list[BaseTool], on_t
         # Exa semantic search
         if exa:
             try:
-                result = await _audited_tool_call(exa, {
-                    "query": f"{keyword} insights analysis",
-                    "numResults": 5,
-                    "type": "auto",
-                }, on_tool_event)
+                result = await _audited_tool_call(
+                    exa,
+                    {
+                        "query": f"{keyword} insights analysis",
+                        "numResults": 5,
+                        "type": "auto",
+                    },
+                    on_tool_event,
+                )
                 all_results.append(f"[Exa: {keyword}]\n{result}")
             except Exception as e:
                 log.debug("Exa search failed for '%s': %s", keyword, e)
@@ -106,9 +119,11 @@ async def discover_topics(state: TopicResearchState, tools: list[BaseTool], on_t
     )
 
     model = get_model(ModelTier.STANDARD)
-    response = model.invoke([
-        HumanMessage(content=f"{prompt}\n\nРезультаты поиска:\n{search_data}"),
-    ])
+    response = model.invoke(
+        [
+            HumanMessage(content=f"{prompt}\n\nРезультаты поиска:\n{search_data}"),
+        ]
+    )
     reply = response.content if isinstance(response.content, str) else str(response.content)
 
     topics = _parse_json_array(reply)
@@ -120,8 +135,9 @@ async def discover_topics(state: TopicResearchState, tools: list[BaseTool], on_t
 def _parse_json_array(text: str) -> list[dict]:
     """Extract JSON array from LLM response (may contain markdown fences)."""
     import re
+
     # Try to find JSON array in the response
-    match = re.search(r'\[[\s\S]*\]', text)
+    match = re.search(r"\[[\s\S]*\]", text)
     if match:
         try:
             return json.loads(match.group())

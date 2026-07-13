@@ -29,6 +29,7 @@ BUNDLE_ID = os.environ.get("ASC_BUNDLE_ID", "com.example.app")
 
 # --- JWT Auth ---
 
+
 def _generate_jwt() -> str:
     """Generate App Store Connect JWT token.
 
@@ -76,6 +77,7 @@ def _headers() -> dict[str, str]:
 
 # --- API Helpers ---
 
+
 async def _get(path: str, params: dict | None = None) -> dict:
     """GET request to App Store Connect API."""
     async with httpx.AsyncClient(timeout=30) as client:
@@ -93,6 +95,7 @@ async def _patch(path: str, payload: dict) -> dict:
 
 
 # --- Public API ---
+
 
 async def get_latest_version_id(app_id: str = APP_ID) -> tuple[str | None, str]:
     """Get the ID of the most relevant app version.
@@ -115,11 +118,14 @@ async def get_latest_version_id(app_id: str = APP_ID) -> tuple[str | None, str]:
     ]
 
     for state in preferred_states:
-        data = await _get(f"/apps/{app_id}/appStoreVersions", params={
-            "filter[appStoreState]": state,
-            "filter[platform]": "IOS",
-            "limit": "1",
-        })
+        data = await _get(
+            f"/apps/{app_id}/appStoreVersions",
+            params={
+                "filter[appStoreState]": state,
+                "filter[platform]": "IOS",
+                "limit": "1",
+            },
+        )
         versions = data.get("data", [])
         if versions:
             version_id = versions[0]["id"]
@@ -127,10 +133,13 @@ async def get_latest_version_id(app_id: str = APP_ID) -> tuple[str | None, str]:
             return version_id, state
 
     # Fallback: get any version
-    data = await _get(f"/apps/{app_id}/appStoreVersions", params={
-        "filter[platform]": "IOS",
-        "limit": "1",
-    })
+    data = await _get(
+        f"/apps/{app_id}/appStoreVersions",
+        params={
+            "filter[platform]": "IOS",
+            "limit": "1",
+        },
+    )
     versions = data.get("data", [])
     if versions:
         attrs = versions[0].get("attributes", {})
@@ -146,10 +155,13 @@ async def get_localizations(version_id: str) -> dict[str, dict]:
 
     Returns {locale: {title, subtitle, keywords, description, ...}}.
     """
-    data = await _get("/appStoreVersionLocalizations", params={
-        "filter[appStoreVersion]": version_id,
-        "limit": "50",
-    })
+    data = await _get(
+        "/appStoreVersionLocalizations",
+        params={
+            "filter[appStoreVersion]": version_id,
+            "limit": "50",
+        },
+    )
 
     result = {}
     for item in data.get("data", []):
@@ -238,28 +250,36 @@ async def request_analytics_report(app_id: str = APP_ID) -> str:
 
 async def get_analytics_reports(request_id: str, category: str = "APP_STORE_ENGAGEMENT") -> list[dict]:
     """List available reports for a request, filtered by category."""
-    data = await _get(f"/analyticsReportRequests/{request_id}/analyticsReports", params={
-        "filter[category]": category,
-        "limit": "50",
-    })
+    data = await _get(
+        f"/analyticsReportRequests/{request_id}/analyticsReports",
+        params={
+            "filter[category]": category,
+            "limit": "50",
+        },
+    )
     return data.get("data", [])
 
 
 async def download_report_segments(report_id: str) -> list[dict]:
     """Get download URLs for report segments."""
-    data = await _get(f"/analyticsReports/{report_id}/analyticsReportSegments", params={
-        "limit": "50",
-    })
+    data = await _get(
+        f"/analyticsReports/{report_id}/analyticsReportSegments",
+        params={
+            "limit": "50",
+        },
+    )
     segments = []
     for item in data.get("data", []):
         attrs = item.get("attributes", {})
         if attrs.get("url"):
-            segments.append({
-                "id": item["id"],
-                "url": attrs["url"],
-                "checksum": attrs.get("checksum"),
-                "size": attrs.get("sizeInBytes"),
-            })
+            segments.append(
+                {
+                    "id": item["id"],
+                    "url": attrs["url"],
+                    "checksum": attrs.get("checksum"),
+                    "size": attrs.get("sizeInBytes"),
+                }
+            )
     return segments
 
 

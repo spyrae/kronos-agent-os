@@ -65,9 +65,17 @@ class Workspace:
     def ensure_dirs(self) -> None:
         """Create all workspace directories (idempotent)."""
         for d in [
-            self.self_dir, self.skills_dir,
-            self.user_dir, self.daily_scope_dir, self.inbox_dir, self.world_dir, self.contacts_dir,
-            self.ops_dir, self.sessions_dir, self.queue_dir, self.observer_dir,
+            self.self_dir,
+            self.skills_dir,
+            self.user_dir,
+            self.daily_scope_dir,
+            self.inbox_dir,
+            self.world_dir,
+            self.contacts_dir,
+            self.ops_dir,
+            self.sessions_dir,
+            self.queue_dir,
+            self.observer_dir,
         ]:
             d.mkdir(parents=True, exist_ok=True)
 

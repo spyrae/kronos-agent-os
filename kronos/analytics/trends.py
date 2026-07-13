@@ -55,6 +55,7 @@ def _weekly_average(metric_name: str, days_offset: int, window: int = 7) -> floa
         return None
 
     import statistics
+
     return statistics.mean(relevant)
 
 
@@ -90,13 +91,15 @@ def analyze_trends() -> list[Trend]:
         else:
             direction = "\u2192"  # → stable
 
-        trends.append(Trend(
-            metric=metric_name,
-            direction=direction,
-            current=round(current, 2),
-            previous=round(previous, 2),
-            change_pct=round(change_pct, 1),
-        ))
+        trends.append(
+            Trend(
+                metric=metric_name,
+                direction=direction,
+                current=round(current, 2),
+                previous=round(previous, 2),
+                change_pct=round(change_pct, 1),
+            )
+        )
 
     trends.sort(key=lambda t: abs(t.change_pct), reverse=True)
     return trends

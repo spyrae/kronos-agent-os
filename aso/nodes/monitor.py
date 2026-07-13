@@ -49,6 +49,7 @@ async def monitor(state: ASOState) -> dict:
     # 2. Android metadata from Google Play Developer API
     try:
         from ..tools import play_store
+
         android_metadata = await play_store.get_current_metadata()
         updates["metadata_android"] = android_metadata
         log.info("Android metadata: %d locales", len(android_metadata))
@@ -73,9 +74,9 @@ async def monitor(state: ASOState) -> dict:
     # 4. Apple Search Ads keyword popularity (optional, enriches keyword data)
     try:
         from ..tools import apple_search_ads
+
         all_keywords = [
-            r.get("keyword", "") for r in (updates.get("keyword_rankings") or {}).values()
-            if r.get("keyword")
+            r.get("keyword", "") for r in (updates.get("keyword_rankings") or {}).values() if r.get("keyword")
         ]
         if all_keywords:
             popularity = await apple_search_ads.get_keyword_popularity(all_keywords)

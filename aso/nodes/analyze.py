@@ -44,7 +44,7 @@ def _build_data_section(state: ASOState) -> str:
             pos = data.get("position")
             pos_str = f"#{pos}" if pos else "не в top-50"
             priority = data.get("priority", "")
-            sections.append(f"- [{priority}] \"{data.get('keyword')}\" ({data.get('country')}): {pos_str}")
+            sections.append(f'- [{priority}] "{data.get("keyword")}" ({data.get("country")}): {pos_str}')
         sections.append("")
 
     # Reviews summary

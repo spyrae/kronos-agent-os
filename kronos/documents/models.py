@@ -251,12 +251,4 @@ def planned_storage_path(
     root = Path(workspace_root)
     if should_quarantine(classification, project_match):
         return root / "ops" / "documents" / "quarantine" / filename
-    return (
-        root
-        / "notes"
-        / "world"
-        / "projects"
-        / project_match.normalized_slug()
-        / "documents"
-        / filename
-    )
+    return root / "notes" / "world" / "projects" / project_match.normalized_slug() / "documents" / filename

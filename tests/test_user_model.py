@@ -66,18 +66,20 @@ def _entries(count: int = 6):
         user_text = "Дай краткий технический план"
         if idx == count - 1:
             user_text = "Не так, переделай короче и с причиной"
-        rows.append({
-            "ts": (now - timedelta(hours=idx)).isoformat(),
-            "session_id": f"s-{idx}",
-            "tier": "standard" if idx % 2 else "lite",
-            "duration_ms": 20_000 if idx == 0 else 500 + idx,
-            "approx_cost_usd": 0.0001 * (idx + 1),
-            "input_len": len(user_text),
-            "output_len": 90 + idx,
-            "input_preview": user_text,
-            "output_preview": "Ответил структурированно",
-            "tool_calls_count": 6 if idx == 1 else 1,
-        })
+        rows.append(
+            {
+                "ts": (now - timedelta(hours=idx)).isoformat(),
+                "session_id": f"s-{idx}",
+                "tier": "standard" if idx % 2 else "lite",
+                "duration_ms": 20_000 if idx == 0 else 500 + idx,
+                "approx_cost_usd": 0.0001 * (idx + 1),
+                "input_len": len(user_text),
+                "output_len": 90 + idx,
+                "input_preview": user_text,
+                "output_preview": "Ответил структурированно",
+                "tool_calls_count": 6 if idx == 1 else 1,
+            }
+        )
     return rows
 
 

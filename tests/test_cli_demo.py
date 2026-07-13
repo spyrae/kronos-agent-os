@@ -118,12 +118,16 @@ def test_doctor_fails_when_dynamic_tools_enabled_without_sandbox_image(monkeypat
     monkeypatch.setattr(settings, "enable_server_ops", False)
     monkeypatch.setattr(settings, "allowed_users", "")
     monkeypatch.setattr(settings, "allow_all_users", False)
-    monkeypatch.setattr(sandbox, "sandbox_status", lambda: {
-        "docker_available": True,
-        "image": "kronos-sandbox:latest",
-        "image_available": False,
-        "build_script": "scripts/build-sandbox.sh",
-    })
+    monkeypatch.setattr(
+        sandbox,
+        "sandbox_status",
+        lambda: {
+            "docker_available": True,
+            "image": "kronos-sandbox:latest",
+            "image_available": False,
+            "build_script": "scripts/build-sandbox.sh",
+        },
+    )
 
     result = main(["doctor"])
 
@@ -159,19 +163,25 @@ def test_tool_event_printer_redacts_secret_args(capsys):
     from kronos.cli import _make_tool_event_printer
 
     printer = _make_tool_event_printer()
-    printer("tool_call", {
-        "name": "mcp_add_server",
-        "args": {
-            "server": "local",
-            "api_key": "sk-real-secret",
-            "keyword": "agent runtime",
+    printer(
+        "tool_call",
+        {
+            "name": "mcp_add_server",
+            "args": {
+                "server": "local",
+                "api_key": "sk-real-secret",
+                "keyword": "agent runtime",
+            },
         },
-    })
-    printer("tool_result", {
-        "name": "mcp_add_server",
-        "ok": True,
-        "content": "registered",
-    })
+    )
+    printer(
+        "tool_result",
+        {
+            "name": "mcp_add_server",
+            "ok": True,
+            "content": "registered",
+        },
+    )
 
     err = capsys.readouterr().err
     assert "[tool] mcp_add_server" in err
@@ -238,17 +248,19 @@ def test_signals_dry_run_command_routes_to_runner(monkeypatch, capsys):
 
     monkeypatch.setattr(cli, "_run_signals_dry_run", fake_dry_run)
 
-    result = cli.main([
-        "signals",
-        "dry-run",
-        "news",
-        "--source-limit",
-        "2",
-        "--fetch-limit",
-        "3",
-        "--output",
-        "/tmp/news.json",
-    ])
+    result = cli.main(
+        [
+            "signals",
+            "dry-run",
+            "news",
+            "--source-limit",
+            "2",
+            "--fetch-limit",
+            "3",
+            "--output",
+            "/tmp/news.json",
+        ]
+    )
 
     capsys.readouterr()
     assert result == 0

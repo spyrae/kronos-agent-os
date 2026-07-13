@@ -52,10 +52,12 @@ def test_write_rolls_back_on_integrity_error(db):
 
 def test_write_many_rolls_back_atomically_on_error(db):
     with pytest.raises(sqlite3.IntegrityError):
-        db.write_many([
-            ("INSERT INTO t (id, v) VALUES (5, 'e')", ()),
-            ("INSERT INTO t (id, v) VALUES (5, 'dup')", ()),  # dup PK
-        ])
+        db.write_many(
+            [
+                ("INSERT INTO t (id, v) VALUES (5, 'e')", ()),
+                ("INSERT INTO t (id, v) VALUES (5, 'dup')", ()),  # dup PK
+            ]
+        )
     # Neither row committed (atomic), and the connection is healthy.
     assert db.read_one("SELECT v FROM t WHERE id = 5") is None
     db.write("INSERT INTO t (id, v) VALUES (6, 'f')")

@@ -52,10 +52,7 @@ def _fallback_to_exa(query: str, count: int, freshness: str, reason: str) -> lis
     """
     log.warning("Brave unavailable (%s) — falling back to Exa for '%s'", reason, query[:60])
     exa_results = _exa.search(query, count=count, freshness=freshness)
-    return [
-        SearchResult(title=r.title, url=r.url, description=r.description)
-        for r in exa_results
-    ]
+    return [SearchResult(title=r.title, url=r.url, description=r.description) for r in exa_results]
 
 
 def search(query: str, count: int = 10, freshness: str = "pd") -> list[SearchResult]:
@@ -89,11 +86,13 @@ def search(query: str, count: int = 10, freshness: str = "pd") -> list[SearchRes
         time.sleep(_MIN_INTERVAL - elapsed)
     _last_request_time = time.monotonic()
 
-    params = urllib.parse.urlencode({
-        "q": query,
-        "count": min(count, 20),
-        "freshness": freshness,
-    })
+    params = urllib.parse.urlencode(
+        {
+            "q": query,
+            "count": min(count, 20),
+            "freshness": freshness,
+        }
+    )
     url = f"{BRAVE_API_URL}?{params}"
 
     try:
@@ -109,11 +108,13 @@ def search(query: str, count: int = 10, freshness: str = "pd") -> list[SearchRes
 
         results = []
         for item in data.get("web", {}).get("results", []):
-            results.append(SearchResult(
-                title=item.get("title", ""),
-                url=item.get("url", ""),
-                description=item.get("description", ""),
-            ))
+            results.append(
+                SearchResult(
+                    title=item.get("title", ""),
+                    url=item.get("url", ""),
+                    description=item.get("description", ""),
+                )
+            )
 
         log.debug("Brave search '%s': %d results", query[:50], len(results))
         return results

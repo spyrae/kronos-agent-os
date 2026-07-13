@@ -52,8 +52,7 @@ def create_proposal(*, agent_name: str, target: str, rationale: str, proposal: s
 
 def list_pending(agent_name: str) -> list[dict]:
     rows = _db().read(
-        "SELECT * FROM persona_proposals "
-        "WHERE agent_name=? AND state='pending' ORDER BY created_at",
+        "SELECT * FROM persona_proposals WHERE agent_name=? AND state='pending' ORDER BY created_at",
         (agent_name,),
     )
     return [dict(row) for row in rows]
@@ -75,8 +74,7 @@ def decide_proposal(proposal_id: int, agent_name: str, *, approved: bool) -> dic
 
     def _tx(conn):
         row = conn.execute(
-            "SELECT * FROM persona_proposals "
-            "WHERE id=? AND agent_name=? AND state='pending'",
+            "SELECT * FROM persona_proposals WHERE id=? AND agent_name=? AND state='pending'",
             (proposal_id, agent_name),
         ).fetchone()
         if row is None:
@@ -102,11 +100,7 @@ def apply_proposal(proposal: dict) -> str:
     targets = {"soul": ws.soul, "identity": ws.identity}
     target_file = targets[proposal["target"]]
     stamp = datetime.now(UTC).strftime("%Y-%m-%d")
-    section = (
-        f"\n\n## Evolution {stamp} (approved)\n"
-        f"_{proposal['rationale']}_\n\n"
-        f"{proposal['proposal']}\n"
-    )
+    section = f"\n\n## Evolution {stamp} (approved)\n_{proposal['rationale']}_\n\n{proposal['proposal']}\n"
     target_file.parent.mkdir(parents=True, exist_ok=True)
     with open(target_file, "a", encoding="utf-8") as handle:
         handle.write(section)

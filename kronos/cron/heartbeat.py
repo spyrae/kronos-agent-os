@@ -71,6 +71,7 @@ async def run_heartbeat() -> None:
     """Run heartbeat check."""
     # Load HEARTBEAT.md
     from kronos.workspace import ws
+
     hb_path = ws.heartbeat
     heartbeat_content = ""
     if hb_path.exists():
@@ -92,6 +93,7 @@ async def run_heartbeat() -> None:
     satisfaction_text = ""
     try:
         from kronos.swarm_store import get_swarm
+
         swarm = get_swarm()
         satisfaction = swarm.get_satisfaction_rate(
             agent_name=settings.agent_name,
@@ -129,6 +131,7 @@ Answer in Russian."""
 
     model = get_model(ModelTier.LITE)
     from langchain_core.messages import HumanMessage
+
     response = model.invoke([HumanMessage(content=prompt)])
     reply = response.content if isinstance(response.content, str) else str(response.content)
 

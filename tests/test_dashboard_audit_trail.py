@@ -20,7 +20,7 @@ async def test_tool_calls_endpoint_filters_events(tmp_path, monkeypatch):
             "tool": "search",
             "capability": "research",
             "session_id": "s1",
-            "args_summary": "{\"query\":\"kaos\"}",
+            "args_summary": '{"query":"kaos"}',
         },
         {
             "ts": "2026-04-27T10:00:01+0000",

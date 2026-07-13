@@ -22,6 +22,7 @@ log = logging.getLogger("kronos.tools.server_ops")
 # ── Server registry ──────────────────────────────────────────────────────
 # Loaded from servers.yaml (gitignored). See servers.example.yaml for format.
 
+
 def _load_registry() -> dict[str, dict]:
     """Load server registry from YAML config."""
     config_path = os.environ.get(
@@ -34,6 +35,7 @@ def _load_registry() -> dict[str, dict]:
             return yaml.safe_load(f) or {}
     log.warning("Server registry not found at %s — server_ops tools disabled", config_path)
     return {}
+
 
 SERVER_REGISTRY: dict[str, dict] = _load_registry()
 
@@ -59,6 +61,7 @@ _EXAMPLE_REGISTRY: dict[str, dict] = {
 # ── Whitelisted commands (Level 2) ───────────────────────────────────────
 # Collect from registry: all services mentioned in any server entry.
 
+
 def _collect_services() -> set[str]:
     services = set()
     for srv in SERVER_REGISTRY.values():
@@ -66,6 +69,7 @@ def _collect_services() -> set[str]:
         for proj in srv.get("projects", {}).values():
             services.update(proj.get("services", []))
     return services
+
 
 ALLOWED_RESTART_SERVICES = _collect_services()
 
@@ -243,7 +247,7 @@ async def server_logs(
 
     if grep_pattern:
         # Sanitize grep pattern — only allow safe chars
-        safe_pattern = re.sub(r'[^a-zA-Z0-9_\-.\s|]', '', grep_pattern)
+        safe_pattern = re.sub(r"[^a-zA-Z0-9_\-.\s|]", "", grep_pattern)
         if safe_pattern:
             cmd += f" | grep -i '{safe_pattern}'"
 
@@ -276,10 +280,7 @@ async def server_errors(
     else:
         unit_filter = " ".join(f"-u {s}" for s in srv["services"])
 
-    cmd = (
-        f"journalctl {unit_filter} --no-pager --since '{minutes} min ago' "
-        f"-p err --output=short-iso | tail -100"
-    )
+    cmd = f"journalctl {unit_filter} --no-pager --since '{minutes} min ago' -p err --output=short-iso | tail -100"
     return await _ssh_run(srv["host"], cmd, srv["username"])
 
 
@@ -377,11 +378,7 @@ async def server_restart_service(
             f"Allowed: {sorted(ALLOWED_RESTART_SERVICES)}"
         )
 
-    cmd = (
-        f"sudo systemctl restart {service_name} && "
-        f"sleep 2 && "
-        f"systemctl is-active {service_name}"
-    )
+    cmd = f"sudo systemctl restart {service_name} && sleep 2 && systemctl is-active {service_name}"
     result = await _ssh_run(srv["host"], cmd, srv["username"])
     log.info("Restarted service %s on %s: %s", service_name, server_name, result)
     return f"Restart {service_name}: {result}"
@@ -403,12 +400,11 @@ async def server_clear_journal(
         return f"Unknown server: {server_name}"
 
     # Validate time format
-    if not re.match(r'^\d+[dhwm]$', older_than):
+    if not re.match(r"^\d+[dhwm]$", older_than):
         return "[BLOCKED] Invalid time format. Use e.g. '3d', '1w', '12h'."
 
     cmd = (
-        f"sudo journalctl --vacuum-time={older_than} 2>&1 && "
-        f"echo '\\n=== After cleanup ===' && journalctl --disk-usage"
+        f"sudo journalctl --vacuum-time={older_than} 2>&1 && echo '\\n=== After cleanup ===' && journalctl --disk-usage"
     )
     return await _ssh_run(srv["host"], cmd, srv["username"])
 
@@ -449,7 +445,7 @@ async def docker_logs(
         return f"Unknown or non-SSH server: {server_name}"
 
     # Validate container name — alphanumeric, hyphens, underscores only
-    if not re.match(r'^[a-zA-Z0-9_\-]+$', container_name):
+    if not re.match(r"^[a-zA-Z0-9_\-]+$", container_name):
         return "[BLOCKED] Invalid container name."
 
     lines = min(max(lines, 10), 200)
@@ -474,7 +470,7 @@ async def docker_restart(
     if not srv or not srv.get("host"):
         return f"Unknown or non-SSH server: {server_name}"
 
-    if not re.match(r'^[a-zA-Z0-9_\-]+$', container_name):
+    if not re.match(r"^[a-zA-Z0-9_\-]+$", container_name):
         return "[BLOCKED] Invalid container name."
 
     # Verify container exists in known docker list for this server

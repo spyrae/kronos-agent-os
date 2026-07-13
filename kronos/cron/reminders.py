@@ -51,9 +51,7 @@ async def _fire_task(task: dict) -> bool:
         text = task["message"]
     if not text:
         return False
-    return await asyncio.to_thread(
-        send_webhook, text, task["chat_id"], None, task["topic_id"]
-    )
+    return await asyncio.to_thread(send_webhook, text, task["chat_id"], None, task["topic_id"])
 
 
 async def run_due_reminders() -> None:

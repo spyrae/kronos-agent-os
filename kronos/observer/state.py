@@ -71,14 +71,10 @@ class ObserverState:
             ignored_peers={str(item) for item in data.get("ignored_peers") or []},
             muted_peers={str(item) for item in data.get("muted_peers") or []},
             ignored_peer_reasons={
-                str(key): str(value)
-                for key, value in dict(data.get("ignored_peer_reasons") or {}).items()
-                if value
+                str(key): str(value) for key, value in dict(data.get("ignored_peer_reasons") or {}).items() if value
             },
             muted_peer_reasons={
-                str(key): str(value)
-                for key, value in dict(data.get("muted_peer_reasons") or {}).items()
-                if value
+                str(key): str(value) for key, value in dict(data.get("muted_peer_reasons") or {}).items() if value
             },
             last_scan_at={str(key): str(value) for key, value in dict(data.get("last_scan_at") or {}).items()},
             last_digest_at={str(key): str(value) for key, value in dict(data.get("last_digest_at") or {}).items()},
@@ -226,11 +222,7 @@ class ObserverStateStore:
         """Read observer run records from the append-only JSONL log."""
         if not self.runs_path.exists():
             return []
-        runs = [
-            json.loads(line)
-            for line in self.runs_path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
+        runs = [json.loads(line) for line in self.runs_path.read_text(encoding="utf-8").splitlines() if line.strip()]
         if limit is None:
             return runs
         return runs[-limit:]

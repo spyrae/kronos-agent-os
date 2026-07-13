@@ -57,19 +57,22 @@ async def main():
         if isinstance(entity, Channel):
             try:
                 from telethon.tl.functions.channels import GetFullChannelRequest
+
                 full_info = await client(GetFullChannelRequest(entity))
                 about = (full_info.full_chat.about or "")[:100].replace("\n", " ")
             except Exception:
                 pass
 
-        groups.append({
-            "title": title,
-            "identifier": identifier,
-            "kind": kind,
-            "members": members,
-            "about": about,
-            "unread": dialog.unread_count,
-        })
+        groups.append(
+            {
+                "title": title,
+                "identifier": identifier,
+                "kind": kind,
+                "members": members,
+                "about": about,
+                "unread": dialog.unread_count,
+            }
+        )
 
     await client.disconnect()
 

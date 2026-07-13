@@ -136,9 +136,7 @@ class KronosAgent:
             schedule_task,
         )
 
-        self._tools.extend(
-            [schedule_task, schedule_followup, list_scheduled_tasks, cancel_scheduled_task]
-        )
+        self._tools.extend([schedule_task, schedule_followup, list_scheduled_tasks, cancel_scheduled_task])
 
         # Swarm collaboration: hand-off (5.1) + council (5.2) + memory query (5.3)
         from kronos.tools.council import convene_council
@@ -259,14 +257,11 @@ class KronosAgent:
             # restart_service("x") wave through restart_service("y") during the
             # resume. Compare canonical (sorted) args so only the approved call
             # skips a fresh approval; any other args re-prompt.
-            approved_args_key = json.dumps(
-                approved_tool_args or {}, sort_keys=True, default=str
-            )
+            approved_args_key = json.dumps(approved_tool_args or {}, sort_keys=True, default=str)
 
             async def approval_scope(tool: BaseTool, args: dict) -> bool:
                 same_call = tool.name == approved_tool_name and (
-                    json.dumps(args or {}, sort_keys=True, default=str)
-                    == approved_args_key
+                    json.dumps(args or {}, sort_keys=True, default=str) == approved_args_key
                 )
                 if same_call:
                     return False
@@ -293,6 +288,7 @@ class KronosAgent:
         """
         emit = self._emit_tool_event
         if on_tool_event is not None:
+
             def emit(event: str, payload: dict[str, Any], _extra=on_tool_event) -> None:
                 self._emit_tool_event(event, payload)
                 _extra(event, payload)

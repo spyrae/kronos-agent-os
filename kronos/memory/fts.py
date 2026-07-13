@@ -173,7 +173,7 @@ def _sanitize_fts_query(query: str) -> str:
     Strips special chars, splits into tokens, joins with implicit AND.
     """
     # Remove FTS5 operators and special chars
-    cleaned = re.sub(r'[^\w\s\-]', ' ', query)
+    cleaned = re.sub(r"[^\w\s\-]", " ", query)
     tokens = cleaned.split()
     # Filter short tokens (noise) but keep numbers/IDs
     tokens = [t for t in tokens if len(t) >= 2 or t.isdigit()]
@@ -198,13 +198,15 @@ def touch_facts(fact_contents: list[str], user_id: str) -> int:
 
         ops = []
         for content in fact_contents:
-            ops.append((
-                """UPDATE memory_facts
+            ops.append(
+                (
+                    """UPDATE memory_facts
                    SET last_accessed = ?,
                        relevance = MIN(1.0, relevance + 0.05)
                    WHERE user_id = ? AND content = ?""",
-                (now, user_id, content),
-            ))
+                    (now, user_id, content),
+                )
+            )
 
         if ops:
             db.write_many(ops)
@@ -230,9 +232,7 @@ def decay_all_facts(half_life_days: int = 14) -> dict:
     db = _get_db()
     now = datetime.now(UTC)
 
-    rows = db.read(
-        "SELECT id, relevance, last_accessed, tier FROM memory_facts WHERE relevance > 0.01"
-    )
+    rows = db.read("SELECT id, relevance, last_accessed, tier FROM memory_facts WHERE relevance > 0.01")
 
     stats = {"decayed": 0, "tier_changes": 0, "archived": 0}
     ops = []
@@ -260,10 +260,12 @@ def decay_all_facts(half_life_days: int = 14) -> dict:
             new_tier = "archive"
 
         if abs(new_relevance - old_relevance) > 0.001 or new_tier != row["tier"]:
-            ops.append((
-                "UPDATE memory_facts SET relevance = ?, tier = ? WHERE id = ?",
-                (new_relevance, new_tier, row["id"]),
-            ))
+            ops.append(
+                (
+                    "UPDATE memory_facts SET relevance = ?, tier = ? WHERE id = ?",
+                    (new_relevance, new_tier, row["id"]),
+                )
+            )
             stats["decayed"] += 1
             if new_tier != row["tier"]:
                 stats["tier_changes"] += 1
@@ -275,7 +277,9 @@ def decay_all_facts(half_life_days: int = 14) -> dict:
 
     log.info(
         "Decay complete: %d facts decayed, %d tier changes, %d archived",
-        stats["decayed"], stats["tier_changes"], stats["archived"],
+        stats["decayed"],
+        stats["tier_changes"],
+        stats["archived"],
     )
     return stats
 
@@ -283,9 +287,7 @@ def decay_all_facts(half_life_days: int = 14) -> dict:
 def get_tier_distribution() -> dict[str, int]:
     """Get count of facts per tier."""
     db = _get_db()
-    rows = db.read(
-        "SELECT COALESCE(tier, 'active') as tier, COUNT(*) as cnt FROM memory_facts GROUP BY tier"
-    )
+    rows = db.read("SELECT COALESCE(tier, 'active') as tier, COUNT(*) as cnt FROM memory_facts GROUP BY tier")
     return {row["tier"]: row["cnt"] for row in rows}
 
 
@@ -293,14 +295,13 @@ def get_stats(user_id: str | None = None) -> dict:
     """Get FTS index statistics."""
     db = _get_db()
     if user_id:
-        row = db.read_one(
-            "SELECT COUNT(*) as total FROM memory_facts WHERE user_id = ?", (user_id,)
-        )
+        row = db.read_one("SELECT COUNT(*) as total FROM memory_facts WHERE user_id = ?", (user_id,))
     else:
         row = db.read_one("SELECT COUNT(*) as total FROM memory_facts")
 
     total = row["total"] if row else 0
     from kronos.db import get_db as _gdb
+
     db_path = _gdb("memory_fts")._db_path
     db_size = db_path.stat().st_size if db_path.exists() else 0
     return {"total_facts": total, "db_size_kb": db_size // 1024}

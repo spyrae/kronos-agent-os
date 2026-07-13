@@ -45,24 +45,30 @@ async def test_control_room_aggregates_runtime_state(tmp_path, monkeypatch):
     logs_dir = db_dir / "logs"
     logs_dir.mkdir(parents=True)
     (logs_dir / "audit.jsonl").write_text(
-        "\n".join([
-            json.dumps({
-                "ts": "2026-04-27T10:00:00+0000",
-                "session_id": "s1",
-                "tier": "standard",
-                "duration_ms": 120,
-                "approx_cost_usd": 0.0001,
-                "input_preview": "search market signal",
-            }),
-            json.dumps({
-                "ts": "2026-04-27T10:03:00+0000",
-                "session_id": "s1",
-                "tier": "standard",
-                "duration_ms": 80,
-                "approx_cost_usd": 0.0002,
-                "input_preview": "write summary",
-            }),
-        ]),
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "ts": "2026-04-27T10:00:00+0000",
+                        "session_id": "s1",
+                        "tier": "standard",
+                        "duration_ms": 120,
+                        "approx_cost_usd": 0.0001,
+                        "input_preview": "search market signal",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ts": "2026-04-27T10:03:00+0000",
+                        "session_id": "s1",
+                        "tier": "standard",
+                        "duration_ms": 80,
+                        "approx_cost_usd": 0.0002,
+                        "input_preview": "write summary",
+                    }
+                ),
+            ]
+        ),
         encoding="utf-8",
     )
     (db_dir / "agent_registry.json").write_text(
@@ -83,16 +89,18 @@ async def test_control_room_aggregates_runtime_state(tmp_path, monkeypatch):
         conn.execute("INSERT INTO shared_user_facts DEFAULT VALUES")
         conn.execute("INSERT INTO swarm_metrics VALUES ('duplicate_replies_avoided', 3)")
 
-    fake_scheduler = SimpleNamespace(jobs={
-        "heartbeat": SimpleNamespace(
-            enabled=True,
-            _running=True,
-            interval_seconds=300,
-            cron_hour=None,
-            cron_weekday=None,
-            last_run=1777284000.0,
-        )
-    })
+    fake_scheduler = SimpleNamespace(
+        jobs={
+            "heartbeat": SimpleNamespace(
+                enabled=True,
+                _running=True,
+                interval_seconds=300,
+                cron_hour=None,
+                cron_weekday=None,
+                last_run=1777284000.0,
+            )
+        }
+    )
     monkeypatch.setattr(overview, "_get_scheduler", lambda: fake_scheduler)
 
     result = await overview.get_control_room()

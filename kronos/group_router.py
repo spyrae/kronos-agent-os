@@ -127,7 +127,8 @@ class GroupRouter:
         self.allowed_user_ids = allowed_user_ids
 
         profile = AGENT_PROFILES.get(
-            agent_name, {"username": self.my_username, "aliases": [agent_name], "role": agent_name},
+            agent_name,
+            {"username": self.my_username, "aliases": [agent_name], "role": agent_name},
         )
         self.aliases: list[str] = profile["aliases"]
         self.role: str = profile["role"]
@@ -176,7 +177,9 @@ class GroupRouter:
         # the addressed agent will respond via their own router.
         if addressing.explicit_to_other and not addressing.explicit_to_me:
             return RoutingDecision(
-                False, 0, 0,
+                False,
+                0,
+                0,
                 f"addressed to {sorted(addressing.target_agents)}, not me",
                 addressing=addressing,
             )
@@ -186,7 +189,10 @@ class GroupRouter:
             # Tier 1: explicit @mention from peer → always respond
             if addressing.explicit_to_me:
                 return RoutingDecision(
-                    True, random.uniform(3, 8), 1, "peer @mentioned me",
+                    True,
+                    random.uniform(3, 8),
+                    1,
+                    "peer @mentioned me",
                     addressing=addressing,
                 )
 
@@ -207,7 +213,10 @@ class GroupRouter:
             replied_to_user = await self._peer_replies_to_user(event)
             if not replied_to_user:
                 return RoutingDecision(
-                    False, 0, 0, "peer not replying to a user message",
+                    False,
+                    0,
+                    0,
+                    "peer not replying to a user message",
                     addressing=addressing,
                 )
 
@@ -220,7 +229,10 @@ class GroupRouter:
             if len(self._reacted_to_msgs) > 100:
                 self._reacted_to_msgs.clear()
             return RoutingDecision(
-                True, random.uniform(20, 45), 3, "disagree with peer",
+                True,
+                random.uniform(20, 45),
+                3,
+                "disagree with peer",
                 addressing=addressing,
             )
 
@@ -229,12 +241,18 @@ class GroupRouter:
         # Tier 1: Explicit addressing → respond quickly
         if addressing.explicit_to_me:
             return RoutingDecision(
-                True, random.uniform(1, 3), 1, "explicit @me",
+                True,
+                random.uniform(1, 3),
+                1,
+                "explicit @me",
                 addressing=addressing,
             )
         if addressing.reply_to_me:
             return RoutingDecision(
-                True, random.uniform(2, 5), 1, "reply to me",
+                True,
+                random.uniform(2, 5),
+                1,
+                "reply to me",
                 addressing=addressing,
             )
 
@@ -242,12 +260,19 @@ class GroupRouter:
         relevance = await self._check_relevance(text)
         if relevance >= 7:
             return RoutingDecision(
-                True, random.uniform(5, 20), 2, f"relevance={relevance}",
+                True,
+                random.uniform(5, 20),
+                2,
+                f"relevance={relevance}",
                 addressing=addressing,
             )
 
         return RoutingDecision(
-            False, 0, 0, f"low relevance={relevance}", addressing=addressing,
+            False,
+            0,
+            0,
+            f"low relevance={relevance}",
+            addressing=addressing,
         )
 
     async def should_still_respond(self, event, client, tier: int) -> bool:
@@ -262,7 +287,9 @@ class GroupRouter:
         if count >= MAX_PEER_REPLIES:
             log.info(
                 "[GroupRouter] %s: %d peers already replied (tier=%d), skipping",
-                self.agent_name, count, tier,
+                self.agent_name,
+                count,
+                tier,
             )
             return False
         return True
@@ -278,6 +305,7 @@ class GroupRouter:
         # 1. Telegram mention entities — authoritative for @username and
         #    MentionName (explicit user_id resolution).
         from telethon.tl.types import MessageEntityMention, MessageEntityMentionName
+
         entities = event.message.entities or []
         for ent in entities:
             if isinstance(ent, MessageEntityMentionName):
@@ -403,7 +431,7 @@ class GroupRouter:
 
         prompt = (
             f"You are a {self.role}.\n"
-            f"Another team member just said:\n\"{text[:500]}\"\n\n"
+            f'Another team member just said:\n"{text[:500]}"\n\n'
             f"Do you have a MEANINGFULLY DIFFERENT perspective that would "
             f"change the conclusion or surface critical missing context?\n"
             f"This is NOT about agreeing with nuance. Only say YES if skipping "

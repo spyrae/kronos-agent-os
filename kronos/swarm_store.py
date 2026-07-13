@@ -73,10 +73,7 @@ def _schema(conn) -> None:
     # table the script's fingerprint index aborts executescript mid-way, so
     # every statement after it (incl. the swarm 2.0 tables) is never created
     # and get_swarm() raises on startup.
-    columns = {
-        row[1]
-        for row in conn.execute("PRAGMA table_info(session_messages)").fetchall()
-    }
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(session_messages)").fetchall()}
     if columns and "fingerprint" not in columns:
         conn.execute("ALTER TABLE session_messages ADD COLUMN fingerprint TEXT")
 
@@ -86,9 +83,7 @@ def _schema(conn) -> None:
     # reply_claims is an ephemeral ledger (claims live minutes), so copying
     # rows forward is safe. Runs before the main script below, whose
     # CREATE TABLE / CREATE INDEX IF NOT EXISTS then no-op / rebuild indexes.
-    claims_ddl = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='reply_claims'"
-    ).fetchone()
+    claims_ddl = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='reply_claims'").fetchone()
     if claims_ddl and claims_ddl[0] and "'executing'" not in claims_ddl[0]:
         conn.executescript(
             """
@@ -700,8 +695,7 @@ class SwarmStore:
 
     def pending_handoffs(self, to_agent: str) -> list[dict]:
         rows = self._db.read(
-            "SELECT * FROM handoffs WHERE to_agent = ? AND state = 'pending' "
-            "ORDER BY created_at",
+            "SELECT * FROM handoffs WHERE to_agent = ? AND state = 'pending' ORDER BY created_at",
             (to_agent,),
         )
         return [dict(row) for row in rows]
@@ -729,8 +723,13 @@ class SwarmStore:
             VALUES (?, ?, ?, ?, ?, ?, 'gathering', ?)
             """,
             (
-                chat_id, topic_id or 0, thread_id, initiator, question,
-                ",".join(participants), time.time(),
+                chat_id,
+                topic_id or 0,
+                thread_id,
+                initiator,
+                question,
+                ",".join(participants),
+                time.time(),
             ),
         )
         return int(cursor.lastrowid)
@@ -738,9 +737,7 @@ class SwarmStore:
     def pending_council_tasks(self, agent_name: str) -> list[dict]:
         """Gathering sessions where this agent is a participant but hasn't
         submitted a position yet."""
-        rows = self._db.read(
-            "SELECT * FROM council_sessions WHERE state = 'gathering' ORDER BY created_at"
-        )
+        rows = self._db.read("SELECT * FROM council_sessions WHERE state = 'gathering' ORDER BY created_at")
         result = []
         for row in rows:
             participants = [p for p in row["participants"].split(",") if p]
@@ -765,8 +762,7 @@ class SwarmStore:
     def councils_awaiting_synthesis(self, initiator: str) -> list[dict]:
         """Gathering sessions initiated by this agent (synthesis poll targets)."""
         rows = self._db.read(
-            "SELECT * FROM council_sessions "
-            "WHERE state = 'gathering' AND initiator = ? ORDER BY created_at",
+            "SELECT * FROM council_sessions WHERE state = 'gathering' AND initiator = ? ORDER BY created_at",
             (initiator,),
         )
         return [dict(row) for row in rows]
@@ -780,8 +776,7 @@ class SwarmStore:
 
         def _tx(conn):
             row = conn.execute(
-                "SELECT * FROM council_sessions "
-                "WHERE id = ? AND initiator = ? AND state = 'gathering'",
+                "SELECT * FROM council_sessions WHERE id = ? AND initiator = ? AND state = 'gathering'",
                 (session_id, initiator),
             ).fetchone()
             if row is None:
@@ -803,8 +798,7 @@ class SwarmStore:
 
     def get_positions(self, session_id: int) -> list[dict]:
         rows = self._db.read(
-            "SELECT agent_name, position FROM council_positions "
-            "WHERE session_id = ? ORDER BY created_at",
+            "SELECT agent_name, position FROM council_positions WHERE session_id = ? ORDER BY created_at",
             (session_id,),
         )
         return [dict(row) for row in rows]
@@ -872,8 +866,7 @@ class SwarmStore:
 
     def pending_memory_requests(self, to_agent: str) -> list[dict]:
         rows = self._db.read(
-            "SELECT * FROM memory_requests WHERE to_agent = ? AND state = 'pending' "
-            "ORDER BY created_at",
+            "SELECT * FROM memory_requests WHERE to_agent = ? AND state = 'pending' ORDER BY created_at",
             (to_agent,),
         )
         return [dict(row) for row in rows]
@@ -940,9 +933,7 @@ class SwarmStore:
         query = query.strip()
         if not query:
             return []
-        safe_query = " ".join(
-            f'"{tok}"' for tok in query.split() if tok.strip()
-        )
+        safe_query = " ".join(f'"{tok}"' for tok in query.split() if tok.strip())
         if not safe_query:
             return []
         try:
@@ -1021,9 +1012,9 @@ class SwarmStore:
         clean_content = content.strip()
         if not clean_content:
             return False
-        fingerprint = fingerprint or hashlib.sha256(
-            f"{agent_name}\0{thread_id}\0{role}\0{clean_content}".encode()
-        ).hexdigest()
+        fingerprint = (
+            fingerprint or hashlib.sha256(f"{agent_name}\0{thread_id}\0{role}\0{clean_content}".encode()).hexdigest()
+        )
         cursor = self._db.write(
             """
             INSERT OR IGNORE INTO session_messages
@@ -1220,7 +1211,8 @@ class SwarmStore:
     def prune_old_messages(self, older_than_days: int = MESSAGE_RETENTION_DAYS) -> int:
         cutoff = time.time() - older_than_days * 86400
         cursor = self._db.write(
-            "DELETE FROM swarm_messages WHERE created_at < ?", (cutoff,),
+            "DELETE FROM swarm_messages WHERE created_at < ?",
+            (cutoff,),
         )
         deleted = cursor.rowcount if cursor is not None else 0
         log.info("Pruned %d swarm_messages older than %d days", deleted, older_than_days)

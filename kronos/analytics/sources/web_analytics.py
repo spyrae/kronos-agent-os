@@ -36,12 +36,15 @@ def _collect_ym() -> dict:
         return {"error": "Yandex Metrika not configured"}
 
     try:
-        data = _ym_api_get("/stat/v1/data", {
-            "ids": settings.ym_counter_id,
-            "metrics": "ym:s:visits,ym:s:users,ym:s:bounceRate,ym:s:pageviews",
-            "date1": "yesterday",
-            "date2": "yesterday",
-        })
+        data = _ym_api_get(
+            "/stat/v1/data",
+            {
+                "ids": settings.ym_counter_id,
+                "metrics": "ym:s:visits,ym:s:users,ym:s:bounceRate,ym:s:pageviews",
+                "date1": "yesterday",
+                "date2": "yesterday",
+            },
+        )
 
         totals = data.get("totals", [])
         if isinstance(totals, list) and totals and isinstance(totals[0], list):

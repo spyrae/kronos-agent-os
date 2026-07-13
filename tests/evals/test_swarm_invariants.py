@@ -32,23 +32,25 @@ def agent_profiles():
     """Install a small deterministic swarm profile set for evals."""
     original = {name: dict(profile) for name, profile in AGENT_PROFILES.items()}
     AGENT_PROFILES.clear()
-    AGENT_PROFILES.update({
-        "kronos": {
-            "username": "kronosagnt",
-            "aliases": ["kronos"],
-            "role": "primary coordinator",
-        },
-        "nexus": {
-            "username": "nexusagnt",
-            "aliases": ["nexus"],
-            "role": "critical reviewer",
-        },
-        "operator": {
-            "username": "operatoragnt",
-            "aliases": ["operator"],
-            "role": "execution and momentum",
-        },
-    })
+    AGENT_PROFILES.update(
+        {
+            "kronos": {
+                "username": "kronosagnt",
+                "aliases": ["kronos"],
+                "role": "primary coordinator",
+            },
+            "nexus": {
+                "username": "nexusagnt",
+                "aliases": ["nexus"],
+                "role": "critical reviewer",
+            },
+            "operator": {
+                "username": "operatoragnt",
+                "aliases": ["operator"],
+                "role": "execution and momentum",
+            },
+        }
+    )
     yield
     AGENT_PROFILES.clear()
     AGENT_PROFILES.update(original)
@@ -206,27 +208,36 @@ def test_reply_claim_winner_rule_is_deterministic(swarm) -> None:
             reason="eval",
         )
 
-    assert swarm.can_send_claim(
-        chat_id=CHAT_ID,
-        topic_id=None,
-        root_msg_id=1,
-        agent_name="kronos",
-        tier=2,
-    ).won is True
-    assert swarm.can_send_claim(
-        chat_id=CHAT_ID,
-        topic_id=None,
-        root_msg_id=1,
-        agent_name="nexus",
-        tier=2,
-    ).won is False
-    assert swarm.can_send_claim(
-        chat_id=CHAT_ID,
-        topic_id=None,
-        root_msg_id=1,
-        agent_name="operator",
-        tier=3,
-    ).won is False
+    assert (
+        swarm.can_send_claim(
+            chat_id=CHAT_ID,
+            topic_id=None,
+            root_msg_id=1,
+            agent_name="kronos",
+            tier=2,
+        ).won
+        is True
+    )
+    assert (
+        swarm.can_send_claim(
+            chat_id=CHAT_ID,
+            topic_id=None,
+            root_msg_id=1,
+            agent_name="nexus",
+            tier=2,
+        ).won
+        is False
+    )
+    assert (
+        swarm.can_send_claim(
+            chat_id=CHAT_ID,
+            topic_id=None,
+            root_msg_id=1,
+            agent_name="operator",
+            tier=3,
+        ).won
+        is False
+    )
 
 
 def test_implicit_reply_cap_and_pass_cancellation(swarm) -> None:

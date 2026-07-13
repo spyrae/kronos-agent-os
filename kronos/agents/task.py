@@ -12,7 +12,17 @@ from kronos.engine import create_agent
 from kronos.llm import ModelTier, get_model
 
 TASK_MCP_SERVERS = {"notion", "google-workspace", "filesystem"}
-TASK_TOOL_PREFIXES = {"notion", "google", "workspace", "gmail", "calendar", "filesystem", "read_file", "write_file", "list"}
+TASK_TOOL_PREFIXES = {
+    "notion",
+    "google",
+    "workspace",
+    "gmail",
+    "calendar",
+    "filesystem",
+    "read_file",
+    "write_file",
+    "list",
+}
 
 TASK_SYSTEM_PROMPT = """Ты — Task Agent в системе Kronos. Твоя задача — управление задачами, календарём, почтой и файлами.
 
@@ -46,7 +56,8 @@ Split = true → сумма делится пополам.
 def create_task_agent(tools: list[BaseTool], on_tool_event=None):
     """Create task agent with productivity tools."""
     task_tools = [
-        t for t in tools
+        t
+        for t in tools
         if (t.metadata or {}).get("mcp_server") in TASK_MCP_SERVERS
         or any(prefix in t.name.lower() for prefix in TASK_TOOL_PREFIXES)
     ]

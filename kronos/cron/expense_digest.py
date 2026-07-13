@@ -27,13 +27,15 @@ def _query_notion_expenses(days: int = 7) -> list[dict]:
 
     cutoff = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
 
-    payload = json.dumps({
-        "filter": {
-            "property": "Date",
-            "date": {"on_or_after": cutoff},
-        },
-        "sorts": [{"property": "Date", "direction": "descending"}],
-    }).encode("utf-8")
+    payload = json.dumps(
+        {
+            "filter": {
+                "property": "Date",
+                "date": {"on_or_after": cutoff},
+            },
+            "sorts": [{"property": "Date", "direction": "descending"}],
+        }
+    ).encode("utf-8")
 
     try:
         req = urllib.request.Request(
@@ -103,6 +105,7 @@ async def run_expense_digest() -> None:
 
     model = get_model(ModelTier.LITE)
     from langchain_core.messages import HumanMessage
+
     response = model.invoke([HumanMessage(content=prompt)])
     digest = response.content if isinstance(response.content, str) else str(response.content)
 

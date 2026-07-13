@@ -72,14 +72,8 @@ def collect() -> dict:
         # Firing alerts via unified alerting
         try:
             alert_instances = _api_get("/api/alertmanager/grafana/api/v2/alerts")
-            firing = [
-                a for a in (alert_instances or [])
-                if a.get("status", {}).get("state") == "active"
-            ]
-            firing_names = [
-                a.get("labels", {}).get("alertname", "unknown")
-                for a in firing[:5]
-            ]
+            firing = [a for a in (alert_instances or []) if a.get("status", {}).get("state") == "active"]
+            firing_names = [a.get("labels", {}).get("alertname", "unknown") for a in firing[:5]]
         except Exception as e:
             log.debug("Grafana alerts fetch failed: %s", e)
             firing = []

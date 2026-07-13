@@ -303,9 +303,7 @@ def curate_news_digest(
         title = _clean_display_text(str(cluster.get("title") or "Без названия"))
         first_url = next((item.url for item in items if item.url), "")
         link = (
-            f' (<a href="{escape(first_url, quote=True)}">{escape(_source_label(first_url))}</a>)'
-            if first_url
-            else ""
+            f' (<a href="{escape(first_url, quote=True)}">{escape(_source_label(first_url))}</a>)' if first_url else ""
         )
         lines.append(f"• <b>{escape(title)}</b>{link}")
         why = _clean_display_text(entry["why"], limit=280)

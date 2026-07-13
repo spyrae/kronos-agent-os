@@ -25,8 +25,7 @@ def _client():
         from googleapiclient.discovery import build  # type: ignore
     except ImportError:
         log.warning(
-            "GSC: install google-api-python-client + google-auth: "
-            "pip install google-api-python-client google-auth"
+            "GSC: install google-api-python-client + google-auth: pip install google-api-python-client google-auth"
         )
         return None
     scopes = ["https://www.googleapis.com/auth/webmasters.readonly"]

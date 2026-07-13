@@ -49,9 +49,7 @@ def build_source_quality_audit(
     stats_by_source = {row["source_id"]: row for row in signal_store.get_source_quality_stats()}
 
     recommendations = tuple(
-        _recommend(source, stats_by_source.get(source.id))
-        for source in registry.sources
-        if source.enabled
+        _recommend(source, stats_by_source.get(source.id)) for source in registry.sources if source.enabled
     )
     title = "Signal Source Quality Audit"
     body = _render_audit(title, recommendations)
@@ -113,7 +111,9 @@ def _recommend(source: SignalSource, stats: dict | None) -> SourceRecommendation
     elif seen >= 5 and (selected_rate < 0.2 or duplicate_rate >= 0.6 or low_rate >= 0.4 or avg_importance < 30):
         action = "demote"
         reason = "Low yield relative to fetched volume; keep as candidate or lower priority."
-    elif source.tier == "candidate" and selected >= 3 and clusters >= 2 and avg_importance >= 50 and duplicate_rate < 0.5:
+    elif (
+        source.tier == "candidate" and selected >= 3 and clusters >= 2 and avg_importance >= 50 and duplicate_rate < 0.5
+    ):
         action = "promote"
         reason = "Candidate produced repeated accepted signals with enough unique contribution."
     elif source.tier == "core" or clusters > 0 or digests > 0:

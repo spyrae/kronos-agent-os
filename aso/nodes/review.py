@@ -61,8 +61,8 @@ def _format_plan_for_telegram(state: ASOState) -> str:
         lines.append("Изменения:")
         for ch in changes:
             lines.append(f"  {ch.get('field', '?')}:")
-            lines.append(f"    было: \"{ch.get('current', '—')}\"")
-            lines.append(f"    будет: \"{ch.get('proposed', '—')}\"")
+            lines.append(f'    было: "{ch.get("current", "—")}"')
+            lines.append(f'    будет: "{ch.get("proposed", "—")}"')
             if ch.get("rationale"):
                 lines.append(f"    причина: {ch['rationale']}")
             lines.append("")
@@ -103,12 +103,13 @@ def review(state: ASOState) -> Command:
     log.info("Plan sent to Telegram, waiting for human input...")
 
     # Pause the graph — this is where LangGraph magic happens
-    human_input = interrupt({
-        "type": "review_request",
-        "cycle_id": state.get("cycle_id"),
-        "plan_summary": f"{len(plan.get('changes', []))} changes, "
-                       f"risk: {plan.get('risk_assessment', '?')}",
-    })
+    human_input = interrupt(
+        {
+            "type": "review_request",
+            "cycle_id": state.get("cycle_id"),
+            "plan_summary": f"{len(plan.get('changes', []))} changes, risk: {plan.get('risk_assessment', '?')}",
+        }
+    )
 
     # Graph resumes here with human_input
     action = human_input.get("action", "skip")

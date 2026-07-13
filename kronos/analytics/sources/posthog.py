@@ -81,11 +81,7 @@ def collect() -> dict:
         f"AND timestamp >= toDateTime('{since}')"
     )
 
-    trips = _scalar(
-        f"SELECT count() FROM events "
-        f"WHERE event = 'trip_created' "
-        f"AND timestamp >= toDateTime('{since}')"
-    )
+    trips = _scalar(f"SELECT count() FROM events WHERE event = 'trip_created' AND timestamp >= toDateTime('{since}')")
 
     # AI chat traffic — include both fine-grained chat_message_sent and the
     # broader chat_list_viewed so we capture activity even if the message
@@ -96,11 +92,7 @@ def collect() -> dict:
         f"AND timestamp >= toDateTime('{since}')"
     )
 
-    places = _scalar(
-        f"SELECT count() FROM events "
-        f"WHERE event = 'poi_saved' "
-        f"AND timestamp >= toDateTime('{since}')"
-    )
+    places = _scalar(f"SELECT count() FROM events WHERE event = 'poi_saved' AND timestamp >= toDateTime('{since}')")
 
     client_errors = _scalar(
         f"SELECT count() FROM events "

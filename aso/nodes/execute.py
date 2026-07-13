@@ -72,14 +72,16 @@ async def execute(state: ASOState) -> dict:
         if api_field in LOCALIZATION_FIELDS:
             try:
                 await app_store.update_localization(localization_id, api_field, proposed)
-                applied.append({
-                    "locale": locale,
-                    "field": field,
-                    "old_value": change.get("current", ""),
-                    "new_value": proposed,
-                    "localization_id": localization_id,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                })
+                applied.append(
+                    {
+                        "locale": locale,
+                        "field": field,
+                        "old_value": change.get("current", ""),
+                        "new_value": proposed,
+                        "localization_id": localization_id,
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    }
+                )
                 log.info("Applied: %s.%s → %s", locale, field, proposed[:50])
             except Exception as e:
                 error = f"Failed to update {locale}.{field}: {e}"
@@ -90,14 +92,16 @@ async def execute(state: ASOState) -> dict:
             # Title/subtitle updates need appInfoLocalizations endpoint
             # This is a different API path — log for now, implement in Phase 4
             log.warning(
-                "Title/subtitle changes require appInfoLocalizations API "
-                "(not yet implemented). Skipping: %s.%s",
-                locale, field,
+                "Title/subtitle changes require appInfoLocalizations API (not yet implemented). Skipping: %s.%s",
+                locale,
+                field,
             )
-            errors.append({
-                "change": change,
-                "error": "title/subtitle updates not yet supported via API",
-            })
+            errors.append(
+                {
+                    "change": change,
+                    "error": "title/subtitle updates not yet supported via API",
+                }
+            )
 
         else:
             log.warning("Unknown field: %s", field)
@@ -134,14 +138,16 @@ async def execute(state: ASOState) -> dict:
                         auto_commit=False,
                         **{play_field: proposed},
                     )
-                    applied.append({
-                        "platform": "android",
-                        "locale": locale,
-                        "field": field,
-                        "old_value": change.get("current", ""),
-                        "new_value": proposed,
-                        "timestamp": datetime.now(UTC).isoformat(),
-                    })
+                    applied.append(
+                        {
+                            "platform": "android",
+                            "locale": locale,
+                            "field": field,
+                            "old_value": change.get("current", ""),
+                            "new_value": proposed,
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        }
+                    )
                     log.info("Applied (Android): %s.%s → %s", locale, field, proposed[:50])
                 except Exception as e:
                     errors.append({"change": change, "error": f"Play Store: {e}"})
@@ -160,7 +166,8 @@ async def execute(state: ASOState) -> dict:
 
     log.info(
         "=== EXECUTE: %d applied, %d errors ===",
-        len(applied), len(errors),
+        len(applied),
+        len(errors),
     )
 
     return {

@@ -19,22 +19,44 @@ from kronos.engine import AgentResult
 log = logging.getLogger("kronos.agents.analytics")
 
 _PULSE_KEYWORDS = [
-    "pulse", "пульс", "здоровье", "health", "обзор",
-    "как дела", "как у нас", "статус", "status", "дайджест",
+    "pulse",
+    "пульс",
+    "здоровье",
+    "health",
+    "обзор",
+    "как дела",
+    "как у нас",
+    "статус",
+    "status",
+    "дайджест",
     "как продукт",
 ]
 
 _WEEKLY_KEYWORDS = [
-    "weekly", "недельный", "за неделю", "бизнес-отчёт", "бизнес отчёт",
-    "weekly report", "полный отчёт",
+    "weekly",
+    "недельный",
+    "за неделю",
+    "бизнес-отчёт",
+    "бизнес отчёт",
+    "weekly report",
+    "полный отчёт",
 ]
 
 _ANOMALY_KEYWORDS = [
-    "аномали", "anomal", "отклонен", "deviation", "что не так",
+    "аномали",
+    "anomal",
+    "отклонен",
+    "deviation",
+    "что не так",
 ]
 
 _TREND_KEYWORDS = [
-    "тренд", "trend", "динамик", "рост", "падение", "wow",
+    "тренд",
+    "trend",
+    "динамик",
+    "рост",
+    "падение",
+    "wow",
 ]
 
 
@@ -57,6 +79,7 @@ def create_analytics_agent():
         # Intent: weekly business report
         if any(kw in user_lower for kw in _WEEKLY_KEYWORDS):
             from kronos.analytics.weekly_report import generate_weekly_report
+
             report, _ = await generate_weekly_report()
             content = report
 
@@ -91,12 +114,14 @@ def create_analytics_agent():
         # Intent: daily pulse
         elif any(kw in user_lower for kw in _PULSE_KEYWORDS):
             from kronos.analytics.pulse import generate_daily_pulse
+
             pulse, _ = await generate_daily_pulse()
             content = pulse
 
         # Intent: specific question
         else:
             from kronos.analytics.pulse import answer_health_query
+
             content = await answer_health_query(user_msg)
 
         return AgentResult(messages=messages, content=content)

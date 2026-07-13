@@ -85,7 +85,8 @@ class SeoGeoStore:
 
     # ── positions ──────────────────────────────────────────────────────
     def record_position(
-        self, *,
+        self,
+        *,
         site_id: str,
         engine: str,
         keyword: str,
@@ -102,16 +103,21 @@ class SeoGeoStore:
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 datetime.now(UTC).isoformat(),
-                site_id, engine, keyword, locale, tier, category, position, url, error,
+                site_id,
+                engine,
+                keyword,
+                locale,
+                tier,
+                category,
+                position,
+                url,
+                error,
             ),
         )
         self._conn.commit()
 
     def latest_positions(self, site_id: str, engine: str | None = None) -> list[dict]:
-        sql = (
-            "SELECT keyword, engine, position, url, checked_at, tier"
-            " FROM positions WHERE site_id = ?"
-        )
+        sql = "SELECT keyword, engine, position, url, checked_at, tier FROM positions WHERE site_id = ?"
         params: list = [site_id]
         if engine:
             sql += " AND engine = ?"
@@ -141,7 +147,8 @@ class SeoGeoStore:
 
     # ── geo_citations ─────────────────────────────────────────────────
     def record_citation(
-        self, *,
+        self,
+        *,
         site_id: str,
         engine: str,
         question: str,
@@ -159,8 +166,15 @@ class SeoGeoStore:
             " (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 datetime.now(UTC).isoformat(),
-                site_id, engine, question, locale, answer[:8000],
-                1 if cited else 0, cited_url, competitors_cited, error,
+                site_id,
+                engine,
+                question,
+                locale,
+                answer[:8000],
+                1 if cited else 0,
+                cited_url,
+                competitors_cited,
+                error,
             ),
         )
         self._conn.commit()
@@ -178,6 +192,7 @@ class SeoGeoStore:
     def competitor_mentions(self, site_id: str, days: int = 7) -> dict[str, int]:
         """Returns {competitor_name: count} — who LLMs mention most for this site."""
         import json as _json
+
         rows = self._conn.execute(
             "SELECT competitors_cited FROM geo_citations"
             f" WHERE site_id=? AND checked_at >= datetime('now', '-{days} days')"
@@ -209,7 +224,8 @@ class SeoGeoStore:
 
     # ── gsc_metrics ───────────────────────────────────────────────────
     def record_gsc(
-        self, *,
+        self,
+        *,
         site_id: str,
         window_days: int,
         query: str,
@@ -225,7 +241,14 @@ class SeoGeoStore:
             "  ctr, position, country) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 datetime.now(UTC).strftime("%Y-%m-%d"),
-                site_id, window_days, query, clicks, impressions, ctr, position, country,
+                site_id,
+                window_days,
+                query,
+                clicks,
+                impressions,
+                ctr,
+                position,
+                country,
             ),
         )
         self._conn.commit()

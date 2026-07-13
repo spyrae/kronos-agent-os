@@ -22,7 +22,7 @@ class Anomaly:
     expected: float
     z_score: float
     direction: str  # "spike" or "drop"
-    severity: str   # "critical" (z > 3) or "warning" (z > 2)
+    severity: str  # "critical" (z > 3) or "warning" (z > 2)
 
     def format_alert(self) -> str:
         """Format anomaly for Telegram alert."""

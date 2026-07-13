@@ -45,7 +45,9 @@ def test_dockerfile_installs_after_copying_package_source():
     lines = (ROOT / "Dockerfile").read_text(encoding="utf-8").splitlines()
 
     install_idx = next(i for i, line in enumerate(lines) if "pip install --no-cache-dir -e ." in line)
-    metadata_copy_idx = next(i for i, line in enumerate(lines) if line.strip() == "COPY pyproject.toml README.md LICENSE MANIFEST.in ./")
+    metadata_copy_idx = next(
+        i for i, line in enumerate(lines) if line.strip() == "COPY pyproject.toml README.md LICENSE MANIFEST.in ./"
+    )
     kronos_copy_idx = next(i for i, line in enumerate(lines) if line.strip() == "COPY kronos ./kronos")
     dashboard_copy_idx = next(i for i, line in enumerate(lines) if line.strip() == "COPY dashboard ./dashboard")
     aso_copy_idx = next(i for i, line in enumerate(lines) if line.strip() == "COPY aso ./aso")

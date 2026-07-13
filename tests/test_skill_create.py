@@ -96,14 +96,16 @@ async def test_analyze_for_new_skills_deduplicates_existing_skill(skill_workspac
         "# research-workflow\n\nExisting protocol",
         {"name": "research-workflow", "description": "Reusable market research workflow"},
     )
-    response = json.dumps({
-        "found": True,
-        "name": "research-workflow",
-        "description": "Reusable market research workflow",
-        "trigger": "research",
-        "protocol": "do research",
-        "tools": [],
-    })
+    response = json.dumps(
+        {
+            "found": True,
+            "name": "research-workflow",
+            "description": "Reusable market research workflow",
+            "trigger": "research",
+            "protocol": "do research",
+            "tools": [],
+        }
+    )
     monkeypatch.setattr(skill_create, "get_model", lambda _tier: FakeModel(response))
     monkeypatch.setattr(skill_create, "send_bot_api", lambda *_args, **_kwargs: None)
 
@@ -159,9 +161,7 @@ def test_skill_improve_matches_auto_created_skill_by_metadata():
 
 
 @pytest.mark.asyncio
-async def test_skill_improve_proposes_without_overwriting_active(
-    skill_workspace, tmp_path, monkeypatch
-):
+async def test_skill_improve_proposes_without_overwriting_active(skill_workspace, tmp_path, monkeypatch):
     """The weekly improver must never overwrite a live SKILL.md.
 
     It writes a SKILL.proposed.md next to the skill for human review; the
@@ -184,15 +184,16 @@ async def test_skill_improve_proposes_without_overwriting_active(
     # Keep the text free of other skills' keywords ("market" → investment).
     now = datetime.now(UTC)
     entries = [
-        {"ts": (now - timedelta(hours=i)).isoformat(), "tier": "T1",
-         "input_preview": f"research this topic deeply, iteration {i}"}
+        {
+            "ts": (now - timedelta(hours=i)).isoformat(),
+            "tier": "T1",
+            "input_preview": f"research this topic deeply, iteration {i}",
+        }
         for i in range(skill_improve.MIN_INTERACTIONS)
     ]
     data_dir = tmp_path / "data"
     (data_dir / "logs").mkdir(parents=True)
-    (data_dir / "logs" / "audit.jsonl").write_text(
-        "\n".join(json.dumps(e) for e in entries), encoding="utf-8"
-    )
+    (data_dir / "logs" / "audit.jsonl").write_text("\n".join(json.dumps(e) for e in entries), encoding="utf-8")
     monkeypatch.setattr(settings, "db_path", str(data_dir / "session.db"))
 
     class FakeSwarm:
@@ -201,12 +202,14 @@ async def test_skill_improve_proposes_without_overwriting_active(
 
     monkeypatch.setattr(swarm_store, "get_swarm", lambda: FakeSwarm())
     monkeypatch.setattr(
-        skill_improve, "get_model",
+        skill_improve,
+        "get_model",
         lambda _tier: FakeModel("# deep-research\nPROPOSED REWRITE\n"),
     )
     sent = []
     monkeypatch.setattr(
-        skill_improve, "send_bot_api",
+        skill_improve,
+        "send_bot_api",
         lambda text, topic_id=None: sent.append((text, topic_id)),
     )
 

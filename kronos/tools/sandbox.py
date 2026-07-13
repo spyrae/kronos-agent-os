@@ -75,7 +75,8 @@ def build_sandbox_command(
     """Build the Docker command for a single sandboxed execution."""
     network_flag = "bridge" if network else "none"
     return [
-        "docker", "run",
+        "docker",
+        "run",
         "--rm",
         f"--memory={memory_limit}",
         f"--network={network_flag}",
@@ -87,9 +88,11 @@ def build_sandbox_command(
         "--security-opt=no-new-privileges",
         "--user=10001:10001",
         "--workdir=/code",
-        "-v", f"{tmpdir}:/code:ro",
+        "-v",
+        f"{tmpdir}:/code:ro",
         SANDBOX_IMAGE,
-        "python", "/sandbox/runner.py",
+        "python",
+        "/sandbox/runner.py",
     ]
 
 
@@ -141,9 +144,7 @@ async def execute_sandboxed(
         )
 
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
-            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except TimeoutError:
             proc.kill()
             await proc.wait()

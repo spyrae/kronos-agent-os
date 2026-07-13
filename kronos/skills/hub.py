@@ -110,10 +110,7 @@ def import_skill(source: str, store: SkillStore) -> str:
     # Resolve source to a concrete URL
     url = _resolve_source(source)
     if not url:
-        return (
-            f"Invalid source: '{source}'. "
-            "Use a URL or 'github:user/repo/skill-name' format."
-        )
+        return f"Invalid source: '{source}'. Use a URL or 'github:user/repo/skill-name' format."
 
     # Fetch SKILL.md content
     try:
@@ -130,9 +127,7 @@ def import_skill(source: str, store: SkillStore) -> str:
     name = meta["name"].strip()
     existing = store.get(name)
     if existing:
-        return (
-            f"Skill '{name}' already exists. Remove it first to re-import."
-        )
+        return f"Skill '{name}' already exists. Remove it first to re-import."
 
     # External skills are reviewable drafts by default. Approval is explicit.
     original_status = meta.get("status", "active")

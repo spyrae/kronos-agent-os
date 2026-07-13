@@ -22,9 +22,8 @@ def _api_get(path: str, params: dict | None = None) -> dict | list:
 
     # Langfuse uses Basic auth with public_key:secret_key
     import base64
-    credentials = base64.b64encode(
-        f"{settings.langfuse_public_key}:{settings.langfuse_secret_key}".encode()
-    ).decode()
+
+    credentials = base64.b64encode(f"{settings.langfuse_public_key}:{settings.langfuse_secret_key}".encode()).decode()
 
     req = urllib.request.Request(
         url,
@@ -48,30 +47,34 @@ def collect() -> dict:
 
     try:
         # Get traces for last 24h
-        traces = _api_get("/traces", {
-            "page": "1",
-            "limit": "1",  # just to get total count from meta
-            "fromTimestamp": yesterday.isoformat(),
-        })
+        traces = _api_get(
+            "/traces",
+            {
+                "page": "1",
+                "limit": "1",  # just to get total count from meta
+                "fromTimestamp": yesterday.isoformat(),
+            },
+        )
 
         total_traces = traces.get("meta", {}).get("totalItems", 0)
 
         # Get observations (generations) for cost/latency stats
-        observations = _api_get("/observations", {
-            "page": "1",
-            "limit": "50",
-            "type": "GENERATION",
-            "fromStartTime": yesterday.isoformat(),
-        })
+        observations = _api_get(
+            "/observations",
+            {
+                "page": "1",
+                "limit": "50",
+                "type": "GENERATION",
+                "fromStartTime": yesterday.isoformat(),
+            },
+        )
 
         obs_list = observations.get("data", [])
         total_observations = observations.get("meta", {}).get("totalItems", 0)
 
         # Calculate stats from sample
         total_cost = sum(o.get("calculatedTotalCost", 0) or 0 for o in obs_list)
-        latencies = [
-            o.get("latency", 0) or 0 for o in obs_list if o.get("latency")
-        ]
+        latencies = [o.get("latency", 0) or 0 for o in obs_list if o.get("latency")]
         avg_latency_ms = round(sum(latencies) / len(latencies)) if latencies else None
 
         # Error rate

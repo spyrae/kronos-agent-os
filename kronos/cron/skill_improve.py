@@ -73,6 +73,7 @@ async def run_skill_improve() -> None:
     cutoff = time.time() - (LOOKBACK_DAYS * 86400)
 
     from kronos.skills.store import SkillStore
+
     skill_store = SkillStore(settings.workspace_path)
     known_skills = skill_store.list_skills()
 
@@ -96,10 +97,7 @@ async def run_skill_improve() -> None:
                 continue
 
     # Filter skills with enough interactions
-    candidates = {
-        skill: ints for skill, ints in skill_interactions.items()
-        if len(ints) >= MIN_INTERACTIONS
-    }
+    candidates = {skill: ints for skill, ints in skill_interactions.items() if len(ints) >= MIN_INTERACTIONS}
 
     if not candidates:
         log.info("No skills with >= %d interactions, skipping", MIN_INTERACTIONS)
@@ -111,6 +109,7 @@ async def run_skill_improve() -> None:
 
     for skill_name, interactions in candidates.items():
         from kronos.workspace import ws
+
         skill = skill_store.get(skill_name)
         skill_path = skill.path if skill else ws.skill_path(skill_name)
         if not skill_path.exists():
@@ -128,15 +127,13 @@ async def run_skill_improve() -> None:
 
         current_content = resolved.read_text(encoding="utf-8")
         recent = interactions[-10:]
-        interactions_text = "\n".join(
-            f"- [{e.get('tier', '?')}] {e.get('input_preview', '')[:80]}"
-            for e in recent
-        )
+        interactions_text = "\n".join(f"- [{e.get('tier', '?')}] {e.get('input_preview', '')[:80]}" for e in recent)
 
         # Add feedback data for this skill
         feedback_text = ""
         try:
             from kronos.swarm_store import get_swarm
+
             swarm = get_swarm()
             satisfaction = swarm.get_satisfaction_rate(
                 agent_name=settings.agent_name,
@@ -175,9 +172,7 @@ async def run_skill_improve() -> None:
         # the active SKILL.md is never overwritten automatically.
         proposal_path = resolved.parent / "SKILL.proposed.md"
         proposal_path.write_text(reply, encoding="utf-8")
-        improvements.append(
-            f"**{skill_name}** — предложение на review: {proposal_path.name}"
-        )
+        improvements.append(f"**{skill_name}** — предложение на review: {proposal_path.name}")
         log.info(
             "Skill improvement proposed (NOT applied): %s → %s",
             skill_name,
@@ -187,8 +182,7 @@ async def run_skill_improve() -> None:
     if improvements:
         text = (
             "🔧 Skill Improvement — предложения на ручном review "
-            "(активные skill-файлы НЕ изменены):\n\n"
-            + "\n".join(f"• {i}" for i in improvements)
+            "(активные skill-файлы НЕ изменены):\n\n" + "\n".join(f"• {i}" for i in improvements)
         )
         send_bot_api(text, topic_id=TOPIC_GENERAL)
     else:

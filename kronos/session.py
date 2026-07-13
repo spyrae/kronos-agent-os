@@ -433,8 +433,7 @@ class SessionStore:
             # after the prompt was shown, in a context that no longer holds.
             if _approval_is_stale(row[7]):
                 await db.execute(
-                    "UPDATE pending_approvals SET status = 'expired' "
-                    "WHERE approval_id = ? AND status = 'pending'",
+                    "UPDATE pending_approvals SET status = 'expired' WHERE approval_id = ? AND status = 'pending'",
                     (approval_id,),
                 )
                 await db.commit()
@@ -618,13 +617,15 @@ class SessionStore:
                     except (json.JSONDecodeError, KeyError, TypeError) as e:
                         log.warning("Skipping malformed journal message for turn %s: %s", turn_id, e)
 
-                messages.append(AIMessage(
-                    content=(
-                        "⚠️ Предыдущий ход был прерван до завершения. "
-                        "Я восстановил уже записанные шаги из журнала, "
-                        "но не продолжаю его автоматически."
-                    ),
-                ))
+                messages.append(
+                    AIMessage(
+                        content=(
+                            "⚠️ Предыдущий ход был прерван до завершения. "
+                            "Я восстановил уже записанные шаги из журнала, "
+                            "но не продолжаю его автоматически."
+                        ),
+                    )
+                )
                 trimmed = messages[-MAX_HISTORY:] if len(messages) > MAX_HISTORY else messages
                 data = json.dumps([_serialize_message(m) for m in trimmed], ensure_ascii=False)
                 await db.execute(
@@ -712,7 +713,9 @@ class SessionStore:
         self._index_to_swarm_fts(thread_id, trimmed)
 
     def _index_to_swarm_fts(
-        self, thread_id: str, messages: list[BaseMessage],
+        self,
+        thread_id: str,
+        messages: list[BaseMessage],
     ) -> int:
         """Index session messages into swarm FTS. Non-blocking, non-fatal."""
         if not self._agent_name:

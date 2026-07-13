@@ -27,10 +27,7 @@ RESEARCH_SYSTEM_PROMPT = """Ты — Research Agent в системе Kronos. Т
 
 def create_research_agent(tools: list[BaseTool], on_tool_event=None):
     """Create research agent with search/extraction tools."""
-    research_tools = [
-        t for t in tools
-        if any(prefix in t.name.lower() for prefix in RESEARCH_TOOL_PREFIXES)
-    ]
+    research_tools = [t for t in tools if any(prefix in t.name.lower() for prefix in RESEARCH_TOOL_PREFIXES)]
 
     if not research_tools:
         return None

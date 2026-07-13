@@ -10,8 +10,8 @@ from kronos.db import SafeDB
 
 class FakeGmail:
     def __init__(self, by_source, messages, archive_ok=True):
-        self.by_source = by_source          # {"grab": [{"message_id": "g1"}], ...}
-        self.messages = messages            # {"g1": EmailMessage(...)}
+        self.by_source = by_source  # {"grab": [{"message_id": "g1"}], ...}
+        self.messages = messages  # {"g1": EmailMessage(...)}
         self.archive_ok = archive_ok
         self.archived = []
         self.searched = []
@@ -44,16 +44,21 @@ class Writer:
 def _extractor(mapping):
     def _ex(email, model=None):
         return list(mapping.get(email.message_id, []))
+
     return _ex
 
 
 def _auditor(ok=True, category=None):
     def _au(text, exp, model=None):
         return AuditVerdict(
-            ok=ok, is_expense=ok, amount_matches=ok,
-            category=category or exp.category, confidence=0.9,
+            ok=ok,
+            is_expense=ok,
+            amount_matches=ok,
+            category=category or exp.category,
+            confidence=0.9,
             issues="" if ok else "amount mismatch",
         )
+
     return _au
 
 
@@ -83,9 +88,12 @@ def _configured(monkeypatch):
 async def _run(gmail, ledger, notes, *, mapping, auditor=None, writer=None):
     writer = writer or Writer()
     result = await proc.run_email_expenses(
-        gmail_client=gmail, ledger=ledger,
-        extractor=_extractor(mapping), auditor=auditor or _auditor(ok=True),
-        expense_writer=writer, notifier=notes,
+        gmail_client=gmail,
+        ledger=ledger,
+        extractor=_extractor(mapping),
+        auditor=auditor or _auditor(ok=True),
+        expense_writer=writer,
+        notifier=notes,
     )
     return result, writer
 
@@ -122,9 +130,9 @@ async def test_archiving_disabled_by_default_keeps_email(ledger, notes, monkeypa
     counts, writer = await _run(gmail, ledger, notes, mapping=mapping)
 
     assert counts["recorded"] == 1
-    assert counts["archived"] == 0          # not archived
-    assert gmail.archived == []             # inbox untouched
-    assert len(writer.calls) == 1           # but still written to Notion
+    assert counts["archived"] == 0  # not archived
+    assert gmail.archived == []  # inbox untouched
+    assert len(writer.calls) == 1  # but still written to Notion
     assert ledger.is_processed("g1") is True  # ledger still guards re-runs
     assert ledger.get("g1")["status"] == "recorded"  # not 'archived'
     assert "Архив: выкл" in notes.captured[0][0]
@@ -147,8 +155,8 @@ async def test_cross_source_duplicate_not_written_twice(ledger, notes, monkeypat
 
     counts, writer = await _run(gmail, ledger, notes, mapping=mapping)
 
-    assert counts["recorded"] == 1        # only Grab written
-    assert counts["duplicates"] == 1      # bank copy deduped
+    assert counts["recorded"] == 1  # only Grab written
+    assert counts["duplicates"] == 1  # bank copy deduped
     assert len(writer.calls) == 1
     assert writer.calls[0]["ref"] == "g1"
     assert set(gmail.archived) == {"g1", "w1"}  # both archived
@@ -166,14 +174,14 @@ async def test_low_confidence_goes_to_pending(ledger, notes):
 
     assert counts["pending"] == 1
     assert counts["recorded"] == 0
-    assert writer.calls == []             # not written
-    assert gmail.archived == []           # not archived until resolved
+    assert writer.calls == []  # not written
+    assert gmail.archived == []  # not archived until resolved
     assert ledger.is_processed("p1") is False
     assert ledger.has_pending("p1") is True
     report = notes.captured[0][0]
     assert "Куда отнести эти траты?" in report
     pid = ledger.list_pending()[0]["id"]
-    assert f"#{pid}" in report            # pending shown WITH its id so it can be resolved
+    assert f"#{pid}" in report  # pending shown WITH its id so it can be resolved
     assert "ATM withdrawal" in report
 
 
@@ -181,9 +189,15 @@ async def test_low_confidence_goes_to_pending(ledger, notes):
 async def test_reasks_open_pending_from_previous_runs(ledger, notes):
     # A pending left over from an earlier run (user never answered)
     old = ledger.add_pending(
-        message_id="old1", source="wondr", description="PEYIA BALI",
-        amount=494340, currency="IDR", amount_idr=494340, expense_date="2026-07-05",
-        guessed_category="Other", reason="low category confidence",
+        message_id="old1",
+        source="wondr",
+        description="PEYIA BALI",
+        amount=494340,
+        currency="IDR",
+        amount_idr=494340,
+        expense_date="2026-07-05",
+        guessed_category="Other",
+        reason="low category confidence",
     )
     # This run finds nothing new — the report must still re-ask the old pending.
     gmail = FakeGmail({"grab": []}, {})
@@ -222,7 +236,7 @@ async def test_non_expense_is_skipped(ledger, notes):
     assert counts["skipped"] == 1
     assert counts["recorded"] == 0
     assert gmail.archived == []
-    assert ledger.is_processed("w1") is True   # handled (skipped)
+    assert ledger.is_processed("w1") is True  # handled (skipped)
     # A report is ALWAYS posted so the run is visible, even with nothing recorded.
     assert notes.captured
     assert "Записано: 0" in notes.captured[0][0]
@@ -238,15 +252,19 @@ async def test_dry_run_writes_nothing_but_reports(ledger, notes):
     writer = Writer()
 
     counts = await proc.run_email_expenses(
-        gmail_client=gmail, ledger=ledger,
-        extractor=_extractor(mapping), auditor=_auditor(ok=True),
-        expense_writer=writer, notifier=notes, dry_run=True,
+        gmail_client=gmail,
+        ledger=ledger,
+        extractor=_extractor(mapping),
+        auditor=_auditor(ok=True),
+        expense_writer=writer,
+        notifier=notes,
+        dry_run=True,
     )
 
-    assert counts["recorded"] == 1          # would record
-    assert writer.calls == []               # but nothing written
-    assert gmail.archived == []             # nothing archived
-    assert ledger.is_processed("g1") is False   # ledger untouched
+    assert counts["recorded"] == 1  # would record
+    assert writer.calls == []  # but nothing written
+    assert gmail.archived == []  # nothing archived
+    assert ledger.is_processed("g1") is False  # ledger untouched
     assert ledger.has_pending("g1") is False
     report = notes.captured[0][0]
     assert "DRY-RUN" in report
@@ -276,14 +294,13 @@ async def test_skips_when_not_kronos(monkeypatch, ledger, notes):
     counts, writer = await _run(gmail, ledger, notes, mapping={"g1": []})
 
     assert counts["recorded"] == 0
-    assert gmail.searched == []            # gate returned before any work
+    assert gmail.searched == []  # gate returned before any work
     assert writer.calls == []
 
 
 @pytest.mark.asyncio
 async def test_already_processed_is_not_refetched(ledger, notes):
-    ledger.record(message_id="g1", source="grab", status="archived",
-                  amount_idr=41500, expense_date="2026-07-05")
+    ledger.record(message_id="g1", source="grab", status="archived", amount_idr=41500, expense_date="2026-07-05")
     gmail = FakeGmail({"grab": [{"message_id": "g1"}]}, {"g1": EmailMessage("g1", "x", "grab")})
 
     counts, writer = await _run(gmail, ledger, notes, mapping={"g1": [ExtractedExpense("x", 1, "IDR", "Food", 0.9)]})

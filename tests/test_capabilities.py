@@ -106,11 +106,7 @@ def test_sandbox_command_uses_restrictive_docker_flags():
 def test_dynamic_tool_validation_rejects_top_level_execution():
     from kronos.tools.dynamic import validate_code
 
-    valid, reason = validate_code(
-        "print('side effect')\n\n"
-        "async def sample_tool() -> str:\n"
-        "    return 'ok'\n"
-    )
+    valid, reason = validate_code("print('side effect')\n\nasync def sample_tool() -> str:\n    return 'ok'\n")
 
     assert valid is False
     assert "Top-level statements" in reason
@@ -122,13 +118,15 @@ async def test_dynamic_tool_creation_requires_ready_sandbox_image(monkeypatch):
 
     class FakeModel:
         def invoke(self, _messages):
-            return type("Response", (), {
-                "content": (
-                    "async def hello_tool(name: str) -> str:\n"
-                    "    \"\"\"Say hello.\"\"\"\n"
-                    "    return f'hello {name}'\n"
-                )
-            })()
+            return type(
+                "Response",
+                (),
+                {
+                    "content": (
+                        'async def hello_tool(name: str) -> str:\n    """Say hello."""\n    return f\'hello {name}\'\n'
+                    )
+                },
+            )()
 
     monkeypatch.setattr(settings, "enable_dynamic_tools", True)
     monkeypatch.setattr(settings, "require_dynamic_tool_sandbox", True)
@@ -152,13 +150,15 @@ async def test_dynamic_tool_can_register_from_ast_metadata_without_required_sand
 
     class FakeModel:
         def invoke(self, _messages):
-            return type("Response", (), {
-                "content": (
-                    "async def hello_tool(name: str) -> str:\n"
-                    "    \"\"\"Say hello.\"\"\"\n"
-                    "    return f'hello {name}'\n"
-                )
-            })()
+            return type(
+                "Response",
+                (),
+                {
+                    "content": (
+                        'async def hello_tool(name: str) -> str:\n    """Say hello."""\n    return f\'hello {name}\'\n'
+                    )
+                },
+            )()
 
     monkeypatch.setattr(settings, "enable_dynamic_tools", True)
     monkeypatch.setattr(settings, "require_dynamic_tool_sandbox", False)

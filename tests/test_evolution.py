@@ -33,9 +33,7 @@ def evo_env(tmp_path, monkeypatch):
 def test_create_list_and_get(evo_env):
     from kronos import evolution
 
-    pid = evolution.create_proposal(
-        agent_name="kronos", target="soul", rationale="be warmer", proposal="Add warmth."
-    )
+    pid = evolution.create_proposal(agent_name="kronos", target="soul", rationale="be warmer", proposal="Add warmth.")
     assert pid > 0
     pending = evolution.list_pending("kronos")
     assert len(pending) == 1
@@ -64,9 +62,7 @@ def test_apply_proposal_appends_to_soul(evo_env):
     import kronos.workspace as _ws
     from kronos import evolution
 
-    path = evolution.apply_proposal(
-        {"target": "soul", "rationale": "be warmer", "proposal": "Add a warm greeting."}
-    )
+    path = evolution.apply_proposal({"target": "soul", "rationale": "be warmer", "proposal": "Add a warm greeting."})
     content = _ws.ws.soul.read_text(encoding="utf-8")
     assert "Add a warm greeting." in content
     assert "Evolution" in content and "be warmer" in content
@@ -98,9 +94,7 @@ async def test_persona_command_list_approve_flow(evo_env):
 
     assert "Нет предложений" in await _handle_persona_command("/persona list")
 
-    pid = evolution.create_proposal(
-        agent_name="kronos", target="soul", rationale="warmer", proposal="Be warm."
-    )
+    pid = evolution.create_proposal(agent_name="kronos", target="soul", rationale="warmer", proposal="Be warm.")
     assert f"#{pid}" in await _handle_persona_command("/persona")  # default = list
 
     result = await _handle_persona_command(f"/persona approve {pid}")
@@ -114,9 +108,7 @@ async def test_persona_command_reject(evo_env):
     from kronos import evolution
     from kronos.bridge import _handle_persona_command
 
-    pid = evolution.create_proposal(
-        agent_name="kronos", target="identity", rationale="x", proposal="y"
-    )
+    pid = evolution.create_proposal(agent_name="kronos", target="identity", rationale="x", proposal="y")
     assert "Отклонил" in await _handle_persona_command(f"/persona reject {pid}")
     assert evolution.list_pending("kronos") == []
 

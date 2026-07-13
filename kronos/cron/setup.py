@@ -173,5 +173,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
         nexus_jobs_registered = 4
 
-    total = 19 + nexus_jobs_registered  # +reminders +handoff/council/memory intake +persona-evolution; signal-jobs, travel insights, people-scout and group-digest paused
+    total = (
+        19 + nexus_jobs_registered
+    )  # +reminders +handoff/council/memory intake +persona-evolution; signal-jobs, travel insights, people-scout and group-digest paused
     log.info("%d cron jobs registered for agent '%s'", total, me)

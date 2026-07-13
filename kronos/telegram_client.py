@@ -26,6 +26,7 @@ _userbot: TelegramClient | None = None
 # Bot client (set by bridge)
 # ---------------------------------------------------------------------------
 
+
 def set_client(client: TelegramClient) -> None:
     global _client
     _client = client
@@ -38,6 +39,7 @@ def get_client() -> TelegramClient | None:
 # ---------------------------------------------------------------------------
 # Userbot client (lazy init from session file)
 # ---------------------------------------------------------------------------
+
 
 async def get_userbot() -> TelegramClient | None:
     """Get or create userbot client for reading groups.

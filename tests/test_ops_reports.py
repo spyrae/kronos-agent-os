@@ -40,7 +40,13 @@ def test_cost_stats_reads_default_agent_log_dir_without_manual_override(tmp_path
         logs / "cost.jsonl",
         [
             {"ts": f"{today}T01:00:00+0000", "tier": "lite", "input_tokens": 10, "output_tokens": 20, "cost_usd": 0.01},
-            {"ts": f"{old}T01:00:00+0000", "tier": "standard", "input_tokens": 30, "output_tokens": 40, "cost_usd": 0.02},
+            {
+                "ts": f"{old}T01:00:00+0000",
+                "tier": "standard",
+                "input_tokens": 30,
+                "output_tokens": 40,
+                "cost_usd": 0.02,
+            },
         ],
     )
     _write_jsonl(
@@ -75,7 +81,15 @@ def test_cost_stats_aggregates_agent_log_dirs(tmp_path: Path) -> None:
     )
     _write_jsonl(
         app / "data" / "beta" / "logs" / "cost.jsonl",
-        [{"ts": f"{today}T02:00:00+0000", "tier": "standard", "input_tokens": 30, "output_tokens": 40, "cost_usd": 0.02}],
+        [
+            {
+                "ts": f"{today}T02:00:00+0000",
+                "tier": "standard",
+                "input_tokens": 30,
+                "output_tokens": 40,
+                "cost_usd": 0.02,
+            }
+        ],
     )
     env = _clean_env(app)
     env["KAOS_LOG_MODE"] = "aggregate"
@@ -154,7 +168,9 @@ def test_daily_status_reports_resolved_audit_source(tmp_path: Path) -> None:
     _fake_command(fake_bin, "uptime", 'echo "up 1 day"\n')
     _fake_command(fake_bin, "df", 'printf "Filesystem Size Used Avail Use%% Mounted\\n/dev/disk 10G 1G 9G 10%% /\\n"\n')
     _fake_command(fake_bin, "free", 'printf "      total used free\\nMem:  10G  2G   8G\\n"\n')
-    _fake_command(fake_bin, "journalctl", 'printf "Jun 19 All checks passed.\\nJun 19 FAIL: Bridge /health not responding\\n"\n')
+    _fake_command(
+        fake_bin, "journalctl", 'printf "Jun 19 All checks passed.\\nJun 19 FAIL: Bridge /health not responding\\n"\n'
+    )
     env = _clean_env(app)
     env["AGENT_NAME"] = "kronos"
     env["PATH"] = f"{fake_bin}:{env['PATH']}"

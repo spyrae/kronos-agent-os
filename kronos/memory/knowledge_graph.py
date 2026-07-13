@@ -70,6 +70,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 
 # --- Entity operations ---
 
+
 def add_entity(name: str, entity_type: str, properties: dict | None = None) -> int:
     """Add or update an entity. Returns entity ID."""
     db = _get_db()
@@ -152,10 +153,14 @@ def search_entities(query: str, entity_type: str | None = None, limit: int = 10)
 
 # --- Relation operations ---
 
+
 def add_relation(
-    source_name: str, source_type: str,
-    target_name: str, target_type: str,
-    relation_type: str, properties: dict | None = None,
+    source_name: str,
+    source_type: str,
+    target_name: str,
+    target_type: str,
+    relation_type: str,
+    properties: dict | None = None,
 ) -> int:
     """Add a relation between two entities (creates entities if needed)."""
     source_id = add_entity(source_name, source_type)
@@ -236,10 +241,7 @@ def get_graph_context(query: str, limit: int = 5) -> str:
     for entity in entities:
         connections = get_connections(entity["name"])
         if connections:
-            conn_text = ", ".join(
-                f"{c['relation']}→{c['entity']}({c['entity_type']})"
-                for c in connections[:5]
-            )
+            conn_text = ", ".join(f"{c['relation']}→{c['entity']}({c['entity_type']})" for c in connections[:5])
             parts.append(f"{entity['name']} ({entity['type']}): {conn_text}")
         else:
             parts.append(f"{entity['name']} ({entity['type']})")

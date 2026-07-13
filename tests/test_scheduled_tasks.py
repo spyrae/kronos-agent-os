@@ -24,8 +24,13 @@ def isolated_db(tmp_path, monkeypatch):
 
 def _add(run_at, message="ping", recur=0, agent="kronos", chat=42):
     return scheduled_tasks.add_task(
-        agent_name=agent, chat_id=chat, topic_id=None, thread_id=str(chat),
-        run_at=run_at, message=message, recur_seconds=recur,
+        agent_name=agent,
+        chat_id=chat,
+        topic_id=None,
+        thread_id=str(chat),
+        run_at=run_at,
+        message=message,
+        recur_seconds=recur,
     )
 
 
@@ -160,8 +165,14 @@ async def test_run_due_followup_invokes_agent_and_sends_result(isolated_db, monk
 
     now = time.time()
     scheduled_tasks.add_task(
-        agent_name="kronos", chat_id=7, topic_id=None, thread_id="7",
-        run_at=now - 1, message="do the thing", recur_seconds=0, kind="followup",
+        agent_name="kronos",
+        chat_id=7,
+        topic_id=None,
+        thread_id="7",
+        run_at=now - 1,
+        message="do the thing",
+        recur_seconds=0,
+        kind="followup",
     )
 
     class FakeAgent:
@@ -171,7 +182,8 @@ async def test_run_due_followup_invokes_agent_and_sends_result(isolated_db, monk
     monkeypatch.setattr("kronos.bridge._agent", FakeAgent())
     sent: list[str] = []
     monkeypatch.setattr(
-        cron_reminders, "send_webhook",
+        cron_reminders,
+        "send_webhook",
         lambda text, *a, **k: sent.append(text) or True,
     )
 
@@ -186,8 +198,14 @@ async def test_run_due_followup_retries_when_agent_not_ready(isolated_db, monkey
 
     now = time.time()
     scheduled_tasks.add_task(
-        agent_name="kronos", chat_id=7, topic_id=None, thread_id="7",
-        run_at=now - 1, message="x", recur_seconds=0, kind="followup",
+        agent_name="kronos",
+        chat_id=7,
+        topic_id=None,
+        thread_id="7",
+        run_at=now - 1,
+        message="x",
+        recur_seconds=0,
+        kind="followup",
     )
     monkeypatch.setattr("kronos.bridge._agent", None)
     sent: list[int] = []

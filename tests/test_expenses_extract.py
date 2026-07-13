@@ -83,8 +83,7 @@ def test_extract_handles_non_json():
 
 def test_audit_ok_verdict():
     model = FakeModel(
-        '{"ok":true,"is_expense":true,"amount_matches":true,"category":"Food",'
-        '"confidence":0.9,"issues":""}'
+        '{"ok":true,"is_expense":true,"amount_matches":true,"category":"Food","confidence":0.9,"issues":""}'
     )
     exp = ExtractedExpense("GrabFood", 41500, "IDR", "Food", 0.9, "2026-07-05")
     verdict = audit_expense("Grab receipt 41,500 IDR", exp, model=model)

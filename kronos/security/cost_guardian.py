@@ -63,7 +63,9 @@ class CostGuardian:
         if daily_cost >= self.daily_limit * 0.8:
             log.info(
                 "Cost guardian: daily budget at %.0f%% ($%.2f / $%.2f)",
-                (daily_cost / self.daily_limit) * 100, daily_cost, self.daily_limit,
+                (daily_cost / self.daily_limit) * 100,
+                daily_cost,
+                self.daily_limit,
             )
 
         return True, ""

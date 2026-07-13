@@ -48,10 +48,16 @@ async def test_swarm_runs_builds_from_claims_and_messages(tmp_path, monkeypatch)
             );
             CREATE TABLE swarm_metrics (metric TEXT PRIMARY KEY, value INTEGER);
         """)
-        conn.execute("INSERT INTO reply_claims VALUES (1, 10, 0, 100, 101, 'researcher', 2, 10.0, 'claimed', 'research angle', NULL, 1.0)")
-        conn.execute("INSERT INTO reply_claims VALUES (2, 10, 0, 100, 102, 'synthesizer', 1, 12.0, 'sent', 'final answer', 201, 2.0)")
+        conn.execute(
+            "INSERT INTO reply_claims VALUES (1, 10, 0, 100, 101, 'researcher', 2, 10.0, 'claimed', 'research angle', NULL, 1.0)"
+        )
+        conn.execute(
+            "INSERT INTO reply_claims VALUES (2, 10, 0, 100, 102, 'synthesizer', 1, 12.0, 'sent', 'final answer', 201, 2.0)"
+        )
         conn.execute("INSERT INTO swarm_messages VALUES (100, NULL, 10, 0, 'user', NULL, 'plan launch', 1.0)")
-        conn.execute("INSERT INTO swarm_messages VALUES (201, 100, 10, 0, 'agent', 'synthesizer', 'final synthesis', 3.0)")
+        conn.execute(
+            "INSERT INTO swarm_messages VALUES (201, 100, 10, 0, 'agent', 'synthesizer', 'final synthesis', 3.0)"
+        )
         conn.execute("INSERT INTO swarm_metrics VALUES ('duplicate_replies_avoided', 4)")
 
     result = await swarm.list_swarm_runs()

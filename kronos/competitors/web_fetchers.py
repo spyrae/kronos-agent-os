@@ -19,16 +19,29 @@ log = logging.getLogger("kronos.competitors.web_fetchers")
 
 # Relevant press/tech domains for filtering
 RELEVANT_PRESS_DOMAINS = {
-    "techcrunch.com", "skift.com", "phocuswire.com", "producthunt.com",
-    "theverge.com", "thenextweb.com", "venturebeat.com", "wired.com",
-    "engadget.com", "mashable.com", "travelweekly.com", "travelpulse.com",
-    "arstechnica.com", "fastcompany.com", "bloomberg.com", "reuters.com",
+    "techcrunch.com",
+    "skift.com",
+    "phocuswire.com",
+    "producthunt.com",
+    "theverge.com",
+    "thenextweb.com",
+    "venturebeat.com",
+    "wired.com",
+    "engadget.com",
+    "mashable.com",
+    "travelweekly.com",
+    "travelpulse.com",
+    "arstechnica.com",
+    "fastcompany.com",
+    "bloomberg.com",
+    "reuters.com",
 }
 
 
 # ---------------------------------------------------------------------------
 # Website change detection
 # ---------------------------------------------------------------------------
+
 
 async def check_website(
     comp: CompetitorConfig,
@@ -80,11 +93,15 @@ async def _check_single_page(
     prev = store.get_latest_snapshot(comp.id, channel)
 
     # Save current snapshot
-    store.save_snapshot(comp.id, channel, {
-        "content": content,
-        "content_hash": content_hash,
-        "url": url,
-    })
+    store.save_snapshot(
+        comp.id,
+        channel,
+        {
+            "content": content,
+            "content_hash": content_hash,
+            "url": url,
+        },
+    )
 
     if prev is None:
         return None  # First check, baseline
@@ -141,6 +158,7 @@ async def _llm_diff(old_content: str, new_content: str, url: str) -> str | None:
 # Blog / Changelog monitoring
 # ---------------------------------------------------------------------------
 
+
 def check_blog_rss(
     comp: CompetitorConfig,
     store: CompetitorStore,
@@ -182,15 +200,17 @@ def check_blog_rss(
         title = entry.get("title", "Untitled")
         summary = entry.get("summary", "")[:300]
 
-        changes.append(Change(
-            competitor_id=comp.id,
-            competitor_name=comp.name,
-            channel="blog_rss",
-            change_type=ChangeType.BLOG_POST,
-            severity=Severity.IMPORTANT,
-            summary=f'{comp.name} published: "{title}"',
-            details={"url": entry_url, "summary": summary},
-        ))
+        changes.append(
+            Change(
+                competitor_id=comp.id,
+                competitor_name=comp.name,
+                channel="blog_rss",
+                change_type=ChangeType.BLOG_POST,
+                severity=Severity.IMPORTANT,
+                summary=f'{comp.name} published: "{title}"',
+                details={"url": entry_url, "summary": summary},
+            )
+        )
 
     # Update known URLs (keep last 100)
     all_urls = list(known_urls | set(new_urls))[-100:]
@@ -225,15 +245,17 @@ def check_blog_search(
         if r.url in known_urls:
             continue
         new_urls.append(r.url)
-        changes.append(Change(
-            competitor_id=comp.id,
-            competitor_name=comp.name,
-            channel="blog_search",
-            change_type=ChangeType.BLOG_POST,
-            severity=Severity.IMPORTANT,
-            summary=f'{comp.name} published: "{r.title}"',
-            details={"url": r.url, "summary": r.description[:300]},
-        ))
+        changes.append(
+            Change(
+                competitor_id=comp.id,
+                competitor_name=comp.name,
+                channel="blog_search",
+                change_type=ChangeType.BLOG_POST,
+                severity=Severity.IMPORTANT,
+                summary=f'{comp.name} published: "{r.title}"',
+                details={"url": r.url, "summary": r.description[:300]},
+            )
+        )
 
     all_urls = list(known_urls | set(new_urls))[-100:]
     store.save_snapshot(comp.id, "blog_search", {"known_urls": all_urls})
@@ -244,6 +266,7 @@ def check_blog_search(
 # ---------------------------------------------------------------------------
 # Social media monitoring (Twitter)
 # ---------------------------------------------------------------------------
+
 
 def check_twitter(
     comp: CompetitorConfig,
@@ -284,15 +307,17 @@ def check_twitter(
             continue
 
         new_urls.append(r.url)
-        changes.append(Change(
-            competitor_id=comp.id,
-            competitor_name=comp.name,
-            channel="twitter",
-            change_type=ChangeType.SOCIAL_POST,
-            severity=Severity.INFO,
-            summary=f"{comp.name} (@{comp.twitter}): {r.title[:120]}",
-            details={"url": r.url},
-        ))
+        changes.append(
+            Change(
+                competitor_id=comp.id,
+                competitor_name=comp.name,
+                channel="twitter",
+                change_type=ChangeType.SOCIAL_POST,
+                severity=Severity.INFO,
+                summary=f"{comp.name} (@{comp.twitter}): {r.title[:120]}",
+                details={"url": r.url},
+            )
+        )
 
     all_urls = list(known_urls | set(new_urls))[-50:]
     store.save_snapshot(comp.id, "twitter", {"known_urls": all_urls})
@@ -316,9 +341,15 @@ def _is_relevant_tweet(result, comp: CompetitorConfig) -> bool:
 
     # Exclude common noise patterns
     noise_patterns = [
-        "limbus", "limbuscompany",  # r/limbuscompany noise for "lambus"
-        "tv series", "tv show", "season", "episode", "trailer",
-        "from season", "from series",
+        "limbus",
+        "limbuscompany",  # r/limbuscompany noise for "lambus"
+        "tv series",
+        "tv show",
+        "season",
+        "episode",
+        "trailer",
+        "from season",
+        "from series",
     ]
     if any(p in text for p in noise_patterns):
         return False
@@ -329,6 +360,7 @@ def _is_relevant_tweet(result, comp: CompetitorConfig) -> bool:
 # ---------------------------------------------------------------------------
 # Press / news mentions
 # ---------------------------------------------------------------------------
+
 
 def check_press(
     comp: CompetitorConfig,
@@ -356,15 +388,17 @@ def check_press(
             continue
 
         new_urls.append(r.url)
-        changes.append(Change(
-            competitor_id=comp.id,
-            competitor_name=comp.name,
-            channel="press",
-            change_type=ChangeType.PRESS_MENTION,
-            severity=Severity.IMPORTANT,
-            summary=f"{comp.name} in press: {r.title[:120]}",
-            details={"url": r.url, "source": r.description[:200]},
-        ))
+        changes.append(
+            Change(
+                competitor_id=comp.id,
+                competitor_name=comp.name,
+                channel="press",
+                change_type=ChangeType.PRESS_MENTION,
+                severity=Severity.IMPORTANT,
+                summary=f"{comp.name} in press: {r.title[:120]}",
+                details={"url": r.url, "source": r.description[:200]},
+            )
+        )
 
     all_urls = list(known_urls | set(new_urls))[-50:]
     store.save_snapshot(comp.id, "press", {"known_urls": all_urls})
@@ -375,6 +409,7 @@ def check_press(
 # ---------------------------------------------------------------------------
 # ProductHunt launches
 # ---------------------------------------------------------------------------
+
 
 def check_producthunt(
     comp: CompetitorConfig,
@@ -402,15 +437,17 @@ def check_producthunt(
         if "producthunt.com/posts/" not in r.url:
             continue
 
-        changes.append(Change(
-            competitor_id=comp.id,
-            competitor_name=comp.name,
-            channel="producthunt",
-            change_type=ChangeType.PRODUCTHUNT_LAUNCH,
-            severity=Severity.CRITICAL,
-            summary=f"{comp.name} launched on ProductHunt: {r.title[:120]}",
-            details={"url": r.url},
-        ))
+        changes.append(
+            Change(
+                competitor_id=comp.id,
+                competitor_name=comp.name,
+                channel="producthunt",
+                change_type=ChangeType.PRODUCTHUNT_LAUNCH,
+                severity=Severity.CRITICAL,
+                summary=f"{comp.name} launched on ProductHunt: {r.title[:120]}",
+                details={"url": r.url},
+            )
+        )
 
     all_urls = list(known_urls | {r.url for r in results})[-20:]
     store.save_snapshot(comp.id, "producthunt", {"known_urls": all_urls})
@@ -426,12 +463,12 @@ def check_producthunt(
 # a press/blog mention, not hiring activity.
 _JOB_BOARD_HOSTS = (
     "linkedin.com/jobs/",
-    "linkedin.com/company/",       # only when path also contains /jobs/ — checked below
+    "linkedin.com/company/",  # only when path also contains /jobs/ — checked below
     "jobs.lever.co/",
     "boards.greenhouse.io/",
     "ashbyhq.com/",
     "wellfound.com/jobs/",
-    "wellfound.com/company/",      # path /jobs/ checked below
+    "wellfound.com/company/",  # path /jobs/ checked below
     "angel.co/jobs/",
     "ycombinator.com/jobs/",
     "ycombinator.com/companies/",  # path /jobs checked below
@@ -452,20 +489,46 @@ _JOB_BOARD_HOSTS = (
 # Required hiring signal in title/description — filters out generic "best apps"
 # articles that mention the competitor as one of many examples.
 _HIRING_KEYWORDS = (
-    "hiring", "we're hiring", "join our team", "open position", "open role",
-    "now hiring", "apply now", "career", "careers",
+    "hiring",
+    "we're hiring",
+    "join our team",
+    "open position",
+    "open role",
+    "now hiring",
+    "apply now",
+    "career",
+    "careers",
     # Common role names so a posting like "Senior iOS Engineer" counts even
     # when the title omits the word 'hiring'.
-    "engineer", "developer", "designer", "manager", "lead", "head of",
-    "founding", "director", "marketing", "sales",
+    "engineer",
+    "developer",
+    "designer",
+    "manager",
+    "lead",
+    "head of",
+    "founding",
+    "director",
+    "marketing",
+    "sales",
 )
 
 # Anti-keywords that signal "article about hiring trends" rather than an
 # actual posting.
 _NEGATIVE_KEYWORDS = (
-    "best ", "top ", " vs ", "vs.", "alternative", "comparison",
-    "review", "guide to", "how to", "trends", "what is", "compared",
-    "list of", "ranking",
+    "best ",
+    "top ",
+    " vs ",
+    "vs.",
+    "alternative",
+    "comparison",
+    "review",
+    "guide to",
+    "how to",
+    "trends",
+    "what is",
+    "compared",
+    "list of",
+    "ranking",
 )
 
 
@@ -529,15 +592,17 @@ def check_jobs(
             log.debug("Skipping non-posting for %s: %s", comp.name, r.url)
             continue
 
-        changes.append(Change(
-            competitor_id=comp.id,
-            competitor_name=comp.name,
-            channel="jobs",
-            change_type=ChangeType.JOB_POSTING,
-            severity=Severity.INFO,
-            summary=f"{comp.name} hiring: {r.title[:120]}",
-            details={"url": r.url, "description": r.description[:200]},
-        ))
+        changes.append(
+            Change(
+                competitor_id=comp.id,
+                competitor_name=comp.name,
+                channel="jobs",
+                change_type=ChangeType.JOB_POSTING,
+                severity=Severity.INFO,
+                summary=f"{comp.name} hiring: {r.title[:120]}",
+                details={"url": r.url, "description": r.description[:200]},
+            )
+        )
 
     # Track ALL returned URLs (not just accepted ones) so we don't re-evaluate
     # the same article-style hits next week.
@@ -550,6 +615,7 @@ def check_jobs(
 # ---------------------------------------------------------------------------
 # Aggregate all web channels
 # ---------------------------------------------------------------------------
+
 
 async def check_all_web_channels(
     comp: CompetitorConfig,

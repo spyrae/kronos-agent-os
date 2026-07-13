@@ -56,16 +56,20 @@ async def test_approval_queue_create_deduplicate_and_deny(tmp_path, monkeypatch)
     monkeypatch.setattr(config.settings, "workspace_path", str(tmp_path / "workspace"))
     monkeypatch.setattr(config.settings, "enable_server_ops", False)
 
-    created = await config.create_approval(config.ApprovalCreate(
-        capability="server_ops",
-        action="enable",
-        reason="need incident diagnostics",
-    ))
-    duplicate = await config.create_approval(config.ApprovalCreate(
-        capability="server_ops",
-        action="enable",
-        reason="same request",
-    ))
+    created = await config.create_approval(
+        config.ApprovalCreate(
+            capability="server_ops",
+            action="enable",
+            reason="need incident diagnostics",
+        )
+    )
+    duplicate = await config.create_approval(
+        config.ApprovalCreate(
+            capability="server_ops",
+            action="enable",
+            reason="same request",
+        )
+    )
     queue = await config.get_approvals()
 
     assert created["approval"]["status"] == "pending"
@@ -107,12 +111,14 @@ def test_env_path_uses_cwd_env_file(tmp_path, monkeypatch):
 async def test_get_env_vars_masks_secrets(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "\n".join([
-            "OPENAI_API_KEY=abcd1234efgh5678",
-            "AGENT_NAME=kaos",
-            "# COMMENT=ignored",
-            "",
-        ]),
+        "\n".join(
+            [
+                "OPENAI_API_KEY=abcd1234efgh5678",
+                "AGENT_NAME=kaos",
+                "# COMMENT=ignored",
+                "",
+            ]
+        ),
         encoding="utf-8",
     )
     monkeypatch.setenv("KAOS_ENV_FILE", str(env_file))

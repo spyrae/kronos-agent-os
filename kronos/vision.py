@@ -104,13 +104,15 @@ async def _analyze_with_openai_api(
     data_url = _to_data_url(image_bytes, mime_type)
     response = await client.responses.create(
         model=settings.kaos_vision_model,
-        input=[{
-            "role": "user",
-            "content": [
-                {"type": "input_text", "text": instruction},
-                {"type": "input_image", "image_url": data_url, "detail": detail},
-            ],
-        }],
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": instruction},
+                    {"type": "input_image", "image_url": data_url, "detail": detail},
+                ],
+            }
+        ],
     )
     return VisionResult(
         text=_extract_response_text(response),
@@ -196,10 +198,7 @@ async def _analyze_with_codex_cli(
 def _build_prompt(*, prompt: str, context: str) -> str:
     parts = [prompt.strip() or DEFAULT_VISION_PROMPT]
     if context.strip():
-        parts.append(
-            "Контекст сообщения пользователя/caption:\n"
-            f"{context.strip()}"
-        )
+        parts.append(f"Контекст сообщения пользователя/caption:\n{context.strip()}")
     return "\n\n".join(parts)
 
 

@@ -35,38 +35,40 @@ PEER_REVIEWER_ID = 2002
 ALLOWED_USERS = {USER_ID}
 
 AGENT_PROFILES.clear()
-AGENT_PROFILES.update({
-    "kronos": {
-        "username": "kronosagnt",
-        "aliases": ["kronos"],
-        "role": "primary coordinator",
-    },
-    "analyst": {
-        "username": "analystagnt",
-        "aliases": ["analyst"],
-        "role": "analysis and research",
-    },
-    "operator": {
-        "username": "operatoragnt",
-        "aliases": ["operator"],
-        "role": "execution and momentum",
-    },
-    "reviewer": {
-        "username": "revieweragnt",
-        "aliases": ["reviewer"],
-        "role": "risk review",
-    },
-    "creative": {
-        "username": "creativeagnt",
-        "aliases": ["creative"],
-        "role": "creative direction",
-    },
-    "strategist": {
-        "username": "strategistagnt",
-        "aliases": ["strategist"],
-        "role": "strategy",
-    },
-})
+AGENT_PROFILES.update(
+    {
+        "kronos": {
+            "username": "kronosagnt",
+            "aliases": ["kronos"],
+            "role": "primary coordinator",
+        },
+        "analyst": {
+            "username": "analystagnt",
+            "aliases": ["analyst"],
+            "role": "analysis and research",
+        },
+        "operator": {
+            "username": "operatoragnt",
+            "aliases": ["operator"],
+            "role": "execution and momentum",
+        },
+        "reviewer": {
+            "username": "revieweragnt",
+            "aliases": ["reviewer"],
+            "role": "risk review",
+        },
+        "creative": {
+            "username": "creativeagnt",
+            "aliases": ["creative"],
+            "role": "creative direction",
+        },
+        "strategist": {
+            "username": "strategistagnt",
+            "aliases": ["strategist"],
+            "role": "strategy",
+        },
+    }
+)
 
 
 def _make_router(agent_name: str = "operator") -> GroupRouter:
@@ -137,7 +139,8 @@ class TestAddressingInfo:
     async def test_at_username_of_other_agent_marks_explicit_to_other(self):
         router = _make_router("operator")
         event = _make_event(
-            text="@analystagnt а ты что думаешь?", sender_id=USER_ID,
+            text="@analystagnt а ты что думаешь?",
+            sender_id=USER_ID,
         )
         info = await router._analyze_addressing(event, event.raw_text)
         assert info.explicit_to_me is False
@@ -148,7 +151,8 @@ class TestAddressingInfo:
     async def test_at_username_of_self_marks_explicit_to_me(self):
         router = _make_router("operator")
         event = _make_event(
-            text="@operatoragnt запусти-ка мозги", sender_id=USER_ID,
+            text="@operatoragnt запусти-ка мозги",
+            sender_id=USER_ID,
         )
         info = await router._analyze_addressing(event, event.raw_text)
         assert info.explicit_to_me is True
@@ -211,7 +215,8 @@ class TestCrossAgentGuard:
     async def test_analyst_responds_when_analyst_is_addressed(self):
         router = _make_router("analyst")
         event = _make_event(
-            text="@analystagnt а ты что думаешь?", sender_id=USER_ID,
+            text="@analystagnt а ты что думаешь?",
+            sender_id=USER_ID,
         )
         decision = await router.decide(event, client=MagicMock())
         assert decision.should_respond is True
@@ -221,8 +226,12 @@ class TestCrossAgentGuard:
     async def test_multi_mention_each_addressed_agent_answers(self):
         """`@kronos @analyst` → both Kronos and Analyst run Tier 1, others skip."""
         for agent_name, expected in [
-            ("kronos", True), ("analyst", True),
-            ("operator", False), ("reviewer", False), ("creative", False), ("strategist", False),
+            ("kronos", True),
+            ("analyst", True),
+            ("operator", False),
+            ("reviewer", False),
+            ("creative", False),
+            ("strategist", False),
         ]:
             router = _make_router(agent_name)
             event = _make_event(
@@ -230,9 +239,7 @@ class TestCrossAgentGuard:
                 sender_id=USER_ID,
             )
             decision = await router.decide(event, client=MagicMock())
-            assert decision.should_respond is expected, (
-                f"{agent_name}: expected respond={expected}, got {decision}"
-            )
+            assert decision.should_respond is expected, f"{agent_name}: expected respond={expected}, got {decision}"
 
 
 # ------------------------------------------------------------------------------
@@ -263,7 +270,8 @@ class TestTier2Relevance:
         """Relevance check must NOT run if another agent is addressed."""
         router = _make_router("operator")
         event = _make_event(
-            text="@analystagnt про product hunt", sender_id=USER_ID,
+            text="@analystagnt про product hunt",
+            sender_id=USER_ID,
         )
         # If _check_relevance gets called at all, this mock will raise.
         with patch.object(router, "_check_relevance", new=AsyncMock(side_effect=AssertionError)):
@@ -286,11 +294,11 @@ class TestTier3PeerReaction:
         user_root = MagicMock()
         user_root.sender_id = USER_ID
         event = _make_event(
-            text="ответ на вопрос о лонче", sender_id=PEER_ANALYST_ID,
+            text="ответ на вопрос о лонче",
+            sender_id=PEER_ANALYST_ID,
             reply_msg=user_root,
         )
-        with patch.object(router, "_should_react_to_peer",
-                          new=AsyncMock(return_value=True)):
+        with patch.object(router, "_should_react_to_peer", new=AsyncMock(return_value=True)):
             decision = await router.decide(event, client=MagicMock())
         assert decision.should_respond is True
         assert decision.tier == 3
@@ -302,11 +310,11 @@ class TestTier3PeerReaction:
         peer_parent = MagicMock()
         peer_parent.sender_id = PEER_REVIEWER_ID  # another peer, not user
         event = _make_event(
-            text="добавляю свою точку зрения", sender_id=PEER_ANALYST_ID,
+            text="добавляю свою точку зрения",
+            sender_id=PEER_ANALYST_ID,
             reply_msg=peer_parent,
         )
-        with patch.object(router, "_should_react_to_peer",
-                          new=AsyncMock(side_effect=AssertionError)):
+        with patch.object(router, "_should_react_to_peer", new=AsyncMock(side_effect=AssertionError)):
             decision = await router.decide(event, client=MagicMock())
         assert decision.should_respond is False
         assert "not replying to a user" in decision.reason
@@ -323,7 +331,8 @@ class TestTier3PeerReaction:
     async def test_peer_at_mentioning_me_bypasses_tier3_as_tier1(self):
         router = _make_router("kronos")
         event = _make_event(
-            text="@kronosagnt что скажешь?", sender_id=PEER_ANALYST_ID,
+            text="@kronosagnt что скажешь?",
+            sender_id=PEER_ANALYST_ID,
         )
         decision = await router.decide(event, client=MagicMock())
         assert decision.should_respond is True
@@ -340,12 +349,9 @@ class TestTier3PeerReaction:
         router = _make_router("kronos")
         user_root = MagicMock()
         user_root.sender_id = USER_ID
-        e1 = _make_event(text="вопрос A", sender_id=PEER_ANALYST_ID,
-                         msg_id=500, reply_msg=user_root)
-        e2 = _make_event(text="вопрос B", sender_id=PEER_ANALYST_ID,
-                         msg_id=501, reply_msg=user_root)
-        with patch.object(router, "_should_react_to_peer",
-                          new=AsyncMock(return_value=True)):
+        e1 = _make_event(text="вопрос A", sender_id=PEER_ANALYST_ID, msg_id=500, reply_msg=user_root)
+        e2 = _make_event(text="вопрос B", sender_id=PEER_ANALYST_ID, msg_id=501, reply_msg=user_root)
+        with patch.object(router, "_should_react_to_peer", new=AsyncMock(return_value=True)):
             d1 = await router.decide(e1, client=MagicMock())
             assert d1.should_respond is True
             d2 = await router.decide(e2, client=MagicMock())
@@ -384,10 +390,15 @@ class TestShouldStillRespond:
         class AsyncIter:
             def __init__(self, items):
                 self._it = iter(items)
-            def __aiter__(self): return self
+
+            def __aiter__(self):
+                return self
+
             async def __anext__(self):
-                try: return next(self._it)
-                except StopIteration: raise StopAsyncIteration
+                try:
+                    return next(self._it)
+                except StopIteration:
+                    raise StopAsyncIteration
 
         client = MagicMock()
         client.iter_messages = MagicMock(return_value=AsyncIter(peers))
@@ -411,10 +422,15 @@ class TestShouldStillRespond:
         class AsyncIter:
             def __init__(self, items):
                 self._it = iter(items)
-            def __aiter__(self): return self
+
+            def __aiter__(self):
+                return self
+
             async def __anext__(self):
-                try: return next(self._it)
-                except StopIteration: raise StopAsyncIteration
+                try:
+                    return next(self._it)
+                except StopIteration:
+                    raise StopAsyncIteration
 
         client = MagicMock()
         client.iter_messages = MagicMock(return_value=AsyncIter(peers))

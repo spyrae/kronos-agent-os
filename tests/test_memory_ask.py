@@ -20,11 +20,13 @@ def swarm(tmp_path, monkeypatch):
 
     original = {name: dict(prof) for name, prof in AGENT_PROFILES.items()}
     AGENT_PROFILES.clear()
-    AGENT_PROFILES.update({
-        "kronos": {"username": "kronosagnt", "aliases": ["kronos"], "role": "strategist"},
-        "nexus": {"username": "nexusagnt", "aliases": ["nexus"], "role": "analyst"},
-        "lacuna": {"username": "lacunaagnt", "aliases": ["lacuna"], "role": "creative"},
-    })
+    AGENT_PROFILES.update(
+        {
+            "kronos": {"username": "kronosagnt", "aliases": ["kronos"], "role": "strategist"},
+            "nexus": {"username": "nexusagnt", "aliases": ["nexus"], "role": "analyst"},
+            "lacuna": {"username": "lacunaagnt", "aliases": ["lacuna"], "role": "creative"},
+        }
+    )
 
     from kronos import db as _db
 
@@ -42,8 +44,12 @@ def swarm(tmp_path, monkeypatch):
 
 def _req(swarm, to_agent="nexus", query="what about X", chat=1):
     return swarm.create_memory_request(
-        chat_id=chat, topic_id=None, thread_id=str(chat),
-        from_agent="kronos", to_agent=to_agent, query=query,
+        chat_id=chat,
+        topic_id=None,
+        thread_id=str(chat),
+        from_agent="kronos",
+        to_agent=to_agent,
+        query=query,
     )
 
 
@@ -67,9 +73,7 @@ def test_tool_creates_request_with_chat_and_topic(swarm):
 
     token = set_tool_audit_context(agent="kronos", thread_id="8:4", session_id="8")
     try:
-        result = ask_agent_memory.invoke(
-            {"to_agent": "nexus", "query": "past decisions on pricing"}
-        )
+        result = ask_agent_memory.invoke({"to_agent": "nexus", "query": "past decisions on pricing"})
     finally:
         reset_tool_audit_context(token)
 
@@ -115,9 +119,7 @@ async def test_intake_answers_from_memory_and_delivers(swarm, monkeypatch):
 
     monkeypatch.setattr("kronos.bridge._agent", FakeAgent())
     sent: list[str] = []
-    monkeypatch.setattr(
-        cron_mem, "send_webhook", lambda text, *a, **k: sent.append(text) or True
-    )
+    monkeypatch.setattr(cron_mem, "send_webhook", lambda text, *a, **k: sent.append(text) or True)
 
     await cron_mem.run_memory_intake()
 

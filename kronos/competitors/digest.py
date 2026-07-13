@@ -90,7 +90,9 @@ class CompetitorMonitor:
 
         log.info(
             "Checked %d competitors, found %d changes (baseline=%s)",
-            checked, len(all_changes), is_baseline,
+            checked,
+            len(all_changes),
+            is_baseline,
         )
 
         # First run: save baseline, no digest
@@ -115,11 +117,16 @@ class CompetitorMonitor:
         changes: list[Change] = []
 
         # Upsert competitor record
-        self.store.upsert_competitor(comp.id, comp.name, comp.tier, {
-            "ios_id": comp.ios_id,
-            "android_package": comp.android_package,
-            "website": comp.website,
-        })
+        self.store.upsert_competitor(
+            comp.id,
+            comp.name,
+            comp.tier,
+            {
+                "ios_id": comp.ios_id,
+                "android_package": comp.android_package,
+                "website": comp.website,
+            },
+        )
 
         # --- Phase 1: App Store / Play Store ---
         snapshots = await fetch_all_for_competitor(comp.ios_id, comp.android_package)
@@ -176,10 +183,7 @@ class CompetitorMonitor:
             for c in version_updates:
                 notes = c.details.get("release_notes", "")
                 if notes and notes != "No notes":
-                    notes_section += (
-                        f"\n{c.competitor_name} "
-                        f"{c.details.get('new_version', '')}: {notes[:500]}"
-                    )
+                    notes_section += f"\n{c.competitor_name} {c.details.get('new_version', '')}: {notes[:500]}"
             prompt += notes_section
 
         # Add blog post details

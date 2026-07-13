@@ -21,11 +21,13 @@ def swarm(tmp_path, monkeypatch):
 
     original = {name: dict(prof) for name, prof in AGENT_PROFILES.items()}
     AGENT_PROFILES.clear()
-    AGENT_PROFILES.update({
-        "kronos": {"username": "kronosagnt", "aliases": ["kronos"], "role": "strategist"},
-        "nexus": {"username": "nexusagnt", "aliases": ["nexus"], "role": "analyst"},
-        "lacuna": {"username": "lacunaagnt", "aliases": ["lacuna"], "role": "creative"},
-    })
+    AGENT_PROFILES.update(
+        {
+            "kronos": {"username": "kronosagnt", "aliases": ["kronos"], "role": "strategist"},
+            "nexus": {"username": "nexusagnt", "aliases": ["nexus"], "role": "analyst"},
+            "lacuna": {"username": "lacunaagnt", "aliases": ["lacuna"], "role": "creative"},
+        }
+    )
 
     from kronos import db as _db
 
@@ -43,8 +45,12 @@ def swarm(tmp_path, monkeypatch):
 
 def _council(swarm, initiator="kronos", participants=("nexus", "lacuna"), chat=1):
     return swarm.create_council(
-        chat_id=chat, topic_id=None, thread_id=str(chat), initiator=initiator,
-        question="what to build next?", participants=list(participants),
+        chat_id=chat,
+        topic_id=None,
+        thread_id=str(chat),
+        initiator=initiator,
+        question="what to build next?",
+        participants=list(participants),
     )
 
 
@@ -81,9 +87,7 @@ def test_convene_tool_creates_session(swarm):
 
     token = set_tool_audit_context(agent="kronos", thread_id="9:2", session_id="9")
     try:
-        result = convene_council.invoke(
-            {"question": "strategy?", "participants": ["nexus", "lacuna"]}
-        )
+        result = convene_council.invoke({"question": "strategy?", "participants": ["nexus", "lacuna"]})
     finally:
         reset_tool_audit_context(token)
     assert "консилиум" in result.lower()
@@ -110,9 +114,7 @@ def test_convene_tool_drops_self_from_participants(swarm):
     token = set_tool_audit_context(agent="kronos", thread_id="9", session_id="9")
     try:
         # kronos (self) is filtered out → only nexus left → too few
-        result = convene_council.invoke(
-            {"question": "q", "participants": ["kronos", "nexus"]}
-        )
+        result = convene_council.invoke({"question": "q", "participants": ["kronos", "nexus"]})
     finally:
         reset_tool_audit_context(token)
     assert "минимум 2" in result
@@ -133,9 +135,7 @@ async def test_intake_participant_submits_position(swarm, monkeypatch):
     await cron_council.run_council_intake()
 
     positions = swarm.get_positions(sid)
-    assert any(
-        p["agent_name"] == "nexus" and p["position"] == "nexus position" for p in positions
-    )
+    assert any(p["agent_name"] == "nexus" and p["position"] == "nexus position" for p in positions)
 
 
 async def test_intake_initiator_synthesizes_when_ready(swarm, monkeypatch):
@@ -152,9 +152,7 @@ async def test_intake_initiator_synthesizes_when_ready(swarm, monkeypatch):
 
     monkeypatch.setattr("kronos.bridge._agent", FakeAgent())
     sent: list[str] = []
-    monkeypatch.setattr(
-        cron_council, "send_webhook", lambda text, *a, **k: sent.append(text) or True
-    )
+    monkeypatch.setattr(cron_council, "send_webhook", lambda text, *a, **k: sent.append(text) or True)
 
     await cron_council.run_council_intake()
 

@@ -127,7 +127,11 @@ class KnowledgeQueue:
     def load_task(self, task_id_or_path: str | Path) -> dict[str, Any]:
         """Load and validate a task by id or path."""
         raw_path = Path(task_id_or_path)
-        path = raw_path if raw_path.suffix == ".json" or raw_path.name.endswith(TASK_SUFFIX) else self.task_path(str(raw_path))
+        path = (
+            raw_path
+            if raw_path.suffix == ".json" or raw_path.name.endswith(TASK_SUFFIX)
+            else self.task_path(str(raw_path))
+        )
         if not path.is_absolute():
             path = self.workspace.root / path
             if not path.exists():

@@ -51,8 +51,7 @@ def _filter_complex_sessions(entries: list[dict]) -> list[dict]:
     return [
         e
         for e in entries
-        if e.get("tool_calls_count", 0) >= MIN_TOOL_CALLS
-        or e.get("supervisor_steps", 0) >= MIN_SUPERVISOR_STEPS
+        if e.get("tool_calls_count", 0) >= MIN_TOOL_CALLS or e.get("supervisor_steps", 0) >= MIN_SUPERVISOR_STEPS
     ]
 
 
@@ -144,20 +143,14 @@ async def analyze_for_new_skills(entries: list[dict] | None = None) -> str | Non
         tools = e.get("tool_calls_count", 0)
         steps = e.get("supervisor_steps", 0)
         examples.append(f"- {ref}: {inp}")
-        summaries.append(
-            f"[ref={ref}, tools={tools}, steps={steps}] User: {inp} → Agent: {out}"
-        )
+        summaries.append(f"[ref={ref}, tools={tools}, steps={steps}] User: {inp} → Agent: {out}")
 
     sessions_text = "\n".join(summaries)
 
     # Load existing skills for dedup
     skill_store = SkillStore(settings.workspace_path)
-    existing_skills = [
-        f"{s.name}: {s.description}" for s in skill_store.list_skills()
-    ]
-    existing_text = (
-        "\n".join(existing_skills) if existing_skills else "(нет существующих скиллов)"
-    )
+    existing_skills = [f"{s.name}: {s.description}" for s in skill_store.list_skills()]
+    existing_text = "\n".join(existing_skills) if existing_skills else "(нет существующих скиллов)"
 
     prompt = f"""Проанализируй сложные сессии агента и определи, есть ли повторяемый паттерн,
 который стоит оформить как навык (skill).
@@ -191,9 +184,7 @@ async def analyze_for_new_skills(entries: list[dict] | None = None) -> str | Non
     from langchain_core.messages import HumanMessage
 
     response = model.invoke([HumanMessage(content=prompt)])
-    reply = (
-        response.content if isinstance(response.content, str) else str(response.content)
-    )
+    reply = response.content if isinstance(response.content, str) else str(response.content)
 
     data = _extract_json_object(reply)
     if not data:
@@ -268,8 +259,7 @@ async def analyze_for_new_skills(entries: list[dict] | None = None) -> str | Non
     skill_store.add_skill(name, content, meta)
 
     send_bot_api(
-        f"Draft skill создан: <b>{name}</b>\n{description}\n\n"
-        f"Скажи 'одобрить skill {name}' для активации.",
+        f"Draft skill создан: <b>{name}</b>\n{description}\n\nСкажи 'одобрить skill {name}' для активации.",
         topic_id=TOPIC_GENERAL,
     )
 

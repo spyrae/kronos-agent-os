@@ -119,6 +119,7 @@ async def _get_history_context() -> str:
     """Retrieve previous weekly metrics from Mem0 for WoW comparison."""
     try:
         from kronos.memory.store import search_memories
+
         memories = search_memories(
             "weekly business report metrics MRR DAU revenue",
             user_id="analytics",
@@ -180,6 +181,7 @@ async def generate_weekly_report() -> tuple[str, dict]:
 
     # Trend analysis from metric_store
     from kronos.analytics.trends import analyze_trends, format_trends_summary
+
     trends = analyze_trends()
     trends_text = format_trends_summary(trends)
 

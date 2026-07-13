@@ -75,10 +75,12 @@ def test_codex_cli_bound_tools_parse_final(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     model = ChatCodexCLI().bind_tools([lookup_city])
-    response = model.invoke([
-        HumanMessage(content="Найди город"),
-        ToolMessage(content="Ubud: ok", tool_call_id="call_1"),
-    ])
+    response = model.invoke(
+        [
+            HumanMessage(content="Найди город"),
+            ToolMessage(content="Ubud: ok", tool_call_id="call_1"),
+        ]
+    )
 
     assert response.content == "Готово"
     assert not response.tool_calls

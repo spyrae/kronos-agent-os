@@ -87,10 +87,7 @@ def test_add_expense_updates_budget_after_notion_success(monkeypatch, tmp_path):
     assert captured_properties["Amount_USD"] == {"number": 25.25}
     assert captured_properties["Rate"] == {"number": 233.5}
     assert captured_properties["Rate_USD"] == {"number": 16300.0}
-    assert (
-        "| 1 | 01.06.2026 | 5,000,000 | 4,588,500 | 233.5 | 16300 | Test |"
-        in budget_file.read_text()
-    )
+    assert "| 1 | 01.06.2026 | 5,000,000 | 4,588,500 | 233.5 | 16300 | Test |" in budget_file.read_text()
 
 
 def test_add_expense_idr_legacy_tranche_yields_no_usd(monkeypatch, tmp_path):
