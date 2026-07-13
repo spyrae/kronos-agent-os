@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
-import { getToken, setToken, api } from './api/client';
+import { login as apiLogin, logout as apiLogout, checkAuth, api } from './api/client';
 import FleetPage from './pages/FleetPage';
 import OverviewPage from './pages/OverviewPage';
 import PersonaPage from './pages/PersonaPage';
@@ -32,17 +32,10 @@ function Login() {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL || ''}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
-      if (!res.ok) { setError('Invalid credentials'); setLoading(false); return; }
-      const data = await res.json();
-      setToken(data.token);
+      await apiLogin(username, password);
       window.location.reload();
-    } catch {
-      setError('Connection failed');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Connection failed');
       setLoading(false);
     }
   };
@@ -285,7 +278,7 @@ function Layout({ children }: { children: React.ReactNode }) {
         <div style={{ padding: '0.75rem 0.5rem', borderTop: '1px solid #1a1a1a', marginTop: '0.5rem' }}>
           <div style={{ fontSize: '0.65rem', color: '#333', marginBottom: '0.5rem' }}>{version ? `v${version} · ` : ''}Kronos Agent OS</div>
           <button
-            onClick={() => { localStorage.removeItem('kronos_token'); window.location.reload(); }}
+            onClick={() => { apiLogout().finally(() => window.location.reload()); }}
             style={{
               background: 'none', border: '1px solid #1a1a1a', borderRadius: '6px',
               color: '#555', cursor: 'pointer', fontSize: '0.75rem', padding: '0.35rem 0.75rem',
@@ -306,7 +299,19 @@ function Layout({ children }: { children: React.ReactNode }) {
 /* ── App ── */
 
 export default function App() {
-  if (!getToken()) return <Login />;
+  // The session cookie is HttpOnly, so JS can't read it — probe /api/auth/me
+  // on load to decide between the app and the login screen.
+  const [authed, setAuthed] = useState<boolean | null>(null);
+  useEffect(() => { checkAuth().then(setAuthed); }, []);
+
+  if (authed === null) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#09090b', color: '#555' }}>
+        Loading…
+      </div>
+    );
+  }
+  if (!authed) return <Login />;
   return (
     <BrowserRouter>
       <Layout>
