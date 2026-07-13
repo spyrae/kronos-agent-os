@@ -137,9 +137,9 @@ class SeoGeoStore:
         ).fetchone()
         prev = self._conn.execute(
             "SELECT position FROM positions WHERE site_id=? AND engine=? AND keyword=?"
-            f" AND checked_at <= datetime('now', '-{days} days')"
+            " AND checked_at <= datetime('now', ?)"
             " ORDER BY checked_at DESC LIMIT 1",
-            (site_id, engine, keyword),
+            (site_id, engine, keyword, f"-{days} days"),
         ).fetchone()
         if not cur or not prev or cur["position"] is None or prev["position"] is None:
             return None
@@ -183,9 +183,9 @@ class SeoGeoStore:
         """Returns {engine: pct} citation rate for the site over the last N days."""
         rows = self._conn.execute(
             "SELECT engine, AVG(cited) * 100 AS rate FROM geo_citations"
-            f" WHERE site_id=? AND checked_at >= datetime('now', '-{days} days')"
+            " WHERE site_id=? AND checked_at >= datetime('now', ?)"
             " AND error IS NULL GROUP BY engine",
-            (site_id,),
+            (site_id, f"-{days} days"),
         ).fetchall()
         return {r["engine"]: round(r["rate"], 1) for r in rows}
 
@@ -195,9 +195,9 @@ class SeoGeoStore:
 
         rows = self._conn.execute(
             "SELECT competitors_cited FROM geo_citations"
-            f" WHERE site_id=? AND checked_at >= datetime('now', '-{days} days')"
+            " WHERE site_id=? AND checked_at >= datetime('now', ?)"
             " AND error IS NULL AND competitors_cited IS NOT NULL",
-            (site_id,),
+            (site_id, f"-{days} days"),
         ).fetchall()
         counter: dict[str, int] = {}
         for r in rows:
@@ -215,10 +215,10 @@ class SeoGeoStore:
         rows = self._conn.execute(
             "SELECT engine, question, locale, answer, cited, competitors_cited"
             " FROM geo_citations"
-            f" WHERE site_id=? AND checked_at >= datetime('now', '-{days} days')"
+            " WHERE site_id=? AND checked_at >= datetime('now', ?)"
             " AND error IS NULL AND length(answer) > 50"
             " ORDER BY cited DESC, length(answer) DESC LIMIT ?",
-            (site_id, n),
+            (site_id, f"-{days} days", n),
         ).fetchall()
         return [dict(r) for r in rows]
 
