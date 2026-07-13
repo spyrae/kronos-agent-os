@@ -314,6 +314,22 @@ def _schema(conn) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_memory_requests_intake
             ON memory_requests(to_agent, state, created_at);
+
+        -- Per-day, per-agent cost ledger. All six agents write here so the
+        -- daily budget is swarm-wide: one agent can't quietly burn the whole
+        -- limit on its own while the other five each read a private total.
+        -- UPSERT-incremented per LLM call by the cost-tracking callback and
+        -- read by CostGuardian for the daily cap.
+        CREATE TABLE IF NOT EXISTS swarm_costs (
+            day TEXT NOT NULL,
+            agent TEXT NOT NULL,
+            requests INTEGER NOT NULL DEFAULT 0,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (day, agent)
+        );
         """
     )
 
@@ -897,6 +913,66 @@ class SwarmStore:
     def get_metrics(self) -> dict[str, int]:
         rows = self._db.read("SELECT metric, value FROM swarm_metrics")
         return {r["metric"]: int(r["value"]) for r in rows}
+
+    # ------------------------------------------------------------------
+    # Cost ledger — swarm-wide daily budget (shared across all agents)
+    # ------------------------------------------------------------------
+
+    def add_cost(
+        self,
+        *,
+        agent: str,
+        cost_usd: float,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        day: str = "",
+    ) -> None:
+        """Add one LLM call's cost to the shared per-day, per-agent ledger."""
+        bucket = day or time.strftime("%Y-%m-%d")
+        self._db.write(
+            """
+            INSERT INTO swarm_costs
+                (day, agent, requests, input_tokens, output_tokens, cost_usd, updated_at)
+            VALUES (?, ?, 1, ?, ?, ?, ?)
+            ON CONFLICT(day, agent) DO UPDATE SET
+                requests = requests + 1,
+                input_tokens = input_tokens + excluded.input_tokens,
+                output_tokens = output_tokens + excluded.output_tokens,
+                cost_usd = cost_usd + excluded.cost_usd,
+                updated_at = excluded.updated_at
+            """,
+            (bucket, agent, int(input_tokens), int(output_tokens), float(cost_usd), time.time()),
+        )
+
+    def daily_cost(self, day: str = "") -> dict:
+        """Swarm-wide cost totals for a day (default: today), summed over agents."""
+        bucket = day or time.strftime("%Y-%m-%d")
+        row = self._db.read_one(
+            """
+            SELECT COALESCE(SUM(cost_usd), 0) AS cost_usd,
+                   COALESCE(SUM(requests), 0) AS requests,
+                   COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens
+            FROM swarm_costs WHERE day = ?
+            """,
+            (bucket,),
+        )
+        return {
+            "date": bucket,
+            "cost_usd": round(float(row["cost_usd"]), 6) if row else 0.0,
+            "requests": int(row["requests"]) if row else 0,
+            "input_tokens": int(row["input_tokens"]) if row else 0,
+            "output_tokens": int(row["output_tokens"]) if row else 0,
+        }
+
+    def per_agent_daily_cost(self, day: str = "") -> dict[str, float]:
+        """Per-agent cost for a day → {agent: cost_usd}. For status/debug."""
+        bucket = day or time.strftime("%Y-%m-%d")
+        rows = self._db.read(
+            "SELECT agent, cost_usd FROM swarm_costs WHERE day = ? ORDER BY cost_usd DESC",
+            (bucket,),
+        )
+        return {r["agent"]: round(float(r["cost_usd"]), 6) for r in rows}
 
     # ------------------------------------------------------------------
     # Shared user facts — cross-agent view of the user
