@@ -1,5 +1,6 @@
 import pytest
 
+from kronos.competitors.store import CompetitorStore
 from kronos.competitors.tracker import CompetitiveTracker
 from kronos.config import settings
 
@@ -29,3 +30,14 @@ def test_update_preserves_fields_that_are_not_supplied(tracker: CompetitiveTrack
     assert row["competitor_leader"] == "Rival"
     assert row["notes"] == "Updated note"
     assert row["trend"] == "improving"
+
+
+def test_mark_digested_marks_only_selected_changes(tracker: CompetitiveTracker) -> None:
+    store = CompetitorStore()
+    first_change = store.save_change("rival", "app_store", "pricing", "info", "New price")
+    second_change = store.save_change("rival", "app_store", "feature", "info", "New feature")
+    untouched_change = store.save_change("rival", "app_store", "review", "info", "New review")
+
+    store.mark_digested([first_change, second_change])
+
+    assert [item["id"] for item in store.get_undigested_changes()] == [untouched_change]

@@ -103,10 +103,14 @@ class CompetitorStore:
     def mark_digested(self, change_ids: list[int]) -> None:
         if not change_ids:
             return
-        placeholders = ",".join("?" for _ in change_ids)
-        self._db.write(
-            f"UPDATE competitor_changes SET included_in_digest = 1 WHERE id IN ({placeholders})",
-            tuple(change_ids),
+        self._db.write_many(
+            [
+                (
+                    "UPDATE competitor_changes SET included_in_digest = 1 WHERE id = ?",
+                    (change_id,),
+                )
+                for change_id in change_ids
+            ],
         )
 
     def get_undigested_changes(self) -> list[dict]:
