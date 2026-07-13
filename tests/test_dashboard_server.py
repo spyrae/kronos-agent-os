@@ -20,29 +20,40 @@ def test_spa_static_files_falls_back_to_index_for_client_routes(tmp_path):
     assert asset.text == "asset"
 
 
-def test_ws_logs_rejects_missing_or_invalid_token():
+def test_ws_logs_rejects_missing_or_invalid_cookie():
     import pytest
     from starlette.websockets import WebSocketDisconnect
 
+    from dashboard.auth import COOKIE_NAME
     from dashboard.server import create_app
 
-    client = TestClient(create_app())
+    app = create_app()
 
-    for path in ("/ws/logs", "/ws/logs?token=bogus"):
-        with pytest.raises(WebSocketDisconnect) as exc_info:
-            with client.websocket_connect(path):
-                pass
-        assert exc_info.value.code == 4401
+    # No session cookie.
+    no_cookie = TestClient(app)
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with no_cookie.websocket_connect("/ws/logs"):
+            pass
+    assert exc_info.value.code == 4401
+
+    # Bogus session cookie.
+    bad_cookie = TestClient(app)
+    bad_cookie.cookies.set(COOKIE_NAME, "bogus")
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with bad_cookie.websocket_connect("/ws/logs"):
+            pass
+    assert exc_info.value.code == 4401
 
 
-def test_ws_logs_accepts_valid_session_token():
-    from dashboard.auth import create_session
+def test_ws_logs_accepts_valid_session_cookie():
+    from dashboard.auth import COOKIE_NAME, create_session
     from dashboard.server import create_app
     from dashboard.ws.handlers import log_clients
 
     client = TestClient(create_app())
     token = create_session()
+    client.cookies.set(COOKIE_NAME, token)
 
-    with client.websocket_connect(f"/ws/logs?token={token}"):
+    with client.websocket_connect("/ws/logs"):
         assert len(log_clients) == 1
     assert not log_clients
