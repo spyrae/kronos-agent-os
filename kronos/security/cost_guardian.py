@@ -1,15 +1,33 @@
 """Cost Guardian — enforces spending limits per session and per day.
 
-Tracks approximate costs from audit log and blocks requests
-when limits are exceeded.
+The daily cap reads the shared swarm cost ledger (``swarm_costs``), so the
+limit is swarm-wide rather than per-process; the session cap reads a
+per-process tally fed by the cost-tracking callback. Blocks requests when
+either limit is exceeded.
 """
 
 import logging
 from dataclasses import dataclass, field
 
-from kronos.audit import get_daily_cost
-
 log = logging.getLogger("kronos.security.cost_guardian")
+
+
+def _swarm_daily_cost() -> dict:
+    """Swarm-wide cost totals for today (shared across all six agents).
+
+    The daily budget is a property of the whole swarm, not of one process, so
+    it reads the shared ``swarm_costs`` ledger rather than a per-agent file.
+    Fails open (zeros) on any read error — a metrics glitch must not wedge an
+    agent by pretending the budget is blown.
+    """
+    try:
+        from kronos.swarm_store import get_swarm
+
+        return get_swarm().daily_cost()
+    except Exception as e:  # pragma: no cover - defensive
+        log.debug("Swarm daily-cost read failed, treating as $0: %s", e)
+        return {"cost_usd": 0, "requests": 0, "input_tokens": 0, "output_tokens": 0}
+
 
 # Default limits (can be overridden via config)
 DEFAULT_DAILY_LIMIT_USD = 5.0
@@ -36,7 +54,7 @@ class CostGuardian:
         Returns (allowed, reason).
         """
         # Daily limit check
-        daily = get_daily_cost()
+        daily = _swarm_daily_cost()
         daily_cost = daily.get("cost_usd", 0)
 
         if daily_cost >= self.daily_limit:
@@ -79,12 +97,12 @@ class CostGuardian:
         Soft degradation: keep answering (cheaper) instead of blocking, until
         the hard daily limit in check_budget kicks in.
         """
-        daily_cost = get_daily_cost().get("cost_usd", 0)
+        daily_cost = _swarm_daily_cost().get("cost_usd", 0)
         return daily_cost >= self.daily_limit * DEGRADE_RATIO
 
     def get_status(self) -> dict:
         """Get current cost status."""
-        daily = get_daily_cost()
+        daily = _swarm_daily_cost()
         return {
             "daily_cost": daily.get("cost_usd", 0),
             "daily_limit": self.daily_limit,

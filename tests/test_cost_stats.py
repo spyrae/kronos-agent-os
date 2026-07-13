@@ -80,9 +80,11 @@ def test_should_degrade_crosses_threshold(monkeypatch):
     from kronos.security import cost_guardian
 
     guardian = cost_guardian.CostGuardian(daily_limit=5.0)
-    monkeypatch.setattr(cost_guardian, "get_daily_cost", lambda: {"cost_usd": 4.5})  # 90%
+    # The daily total now comes from the shared swarm ledger, not the per-agent
+    # audit file — patch that source.
+    monkeypatch.setattr(cost_guardian, "_swarm_daily_cost", lambda: {"cost_usd": 4.5})  # 90%
     assert guardian.should_degrade() is True
-    monkeypatch.setattr(cost_guardian, "get_daily_cost", lambda: {"cost_usd": 1.0})  # 20%
+    monkeypatch.setattr(cost_guardian, "_swarm_daily_cost", lambda: {"cost_usd": 1.0})  # 20%
     assert guardian.should_degrade() is False
 
 

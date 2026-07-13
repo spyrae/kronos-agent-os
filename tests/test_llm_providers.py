@@ -168,13 +168,20 @@ def test_get_model_uses_openai_compatible_adapter(monkeypatch):
     model = get_model(ModelTier.STANDARD)
 
     assert isinstance(model, FakeChatOpenAI)
-    assert calls == [{
+    assert len(calls) == 1
+    kwargs = dict(calls[0])
+    # The always-on cost-tracking callback is attached to every model.
+    from kronos.security.cost_tracking import CostTrackingCallbackHandler
+
+    callbacks = kwargs.pop("callbacks", [])
+    assert any(isinstance(cb, CostTrackingCallbackHandler) for cb in callbacks)
+    assert kwargs == {
         "model": "my-model",
         "api_key": "sk-test",
         "max_tokens": 4096,
         "temperature": 0.5,
         "base_url": "https://llm.example.com/v1",
-    }]
+    }
     reset_provider_state()
 
 
