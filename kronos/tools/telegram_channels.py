@@ -11,7 +11,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from html import unescape
 
 import aiohttp
@@ -282,7 +282,7 @@ async def fetch_posts(
     before: int | None = None
     cutoff = None
     if after_date:
-        cutoff = datetime.strptime(after_date, "%Y-%m-%d").replace(tzinfo=datetime.UTC)
+        cutoff = datetime.strptime(after_date, "%Y-%m-%d").replace(tzinfo=UTC)
 
     async with aiohttp.ClientSession() as session:
         while len(collected) < limit:
@@ -299,7 +299,7 @@ async def fetch_posts(
                     try:
                         post_dt = datetime.fromisoformat(post.date)
                         if post_dt.tzinfo is None:
-                            post_dt = post_dt.replace(tzinfo=datetime.UTC)
+                            post_dt = post_dt.replace(tzinfo=UTC)
                         if post_dt < cutoff:
                             return collected[:limit]
                     except ValueError:
@@ -439,7 +439,7 @@ async def compare_channels(
 
 def _period_to_date(period: str) -> str | None:
     """Convert period string to YYYY-MM-DD date."""
-    now = datetime.now(datetime.UTC)
+    now = datetime.now(UTC)
     if period == "today":
         return now.strftime("%Y-%m-%d")
     if period == "yesterday":
