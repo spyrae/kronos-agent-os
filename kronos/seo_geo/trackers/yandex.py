@@ -19,7 +19,9 @@ import time
 import urllib.parse
 import urllib.request
 from urllib.error import HTTPError
-from xml.etree import ElementTree as ET
+
+from defusedxml import ElementTree
+from defusedxml.common import DefusedXmlException
 
 log = logging.getLogger("kronos.seo_geo.trackers.yandex")
 
@@ -114,8 +116,8 @@ def _parse_xml_results(b64_xml: str) -> list[str]:
         log.warning("Yandex base64 decode failed: %s", e)
         return []
     try:
-        root = ET.fromstring(xml)
-    except ET.ParseError as e:
+        root = ElementTree.fromstring(xml)
+    except (DefusedXmlException, ElementTree.ParseError) as e:
         log.warning("Yandex XML parse failed: %s", e)
         return []
     urls: list[str] = []

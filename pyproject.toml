@@ -62,6 +62,7 @@ dependencies = [
     # Config & utils
     "pydantic-settings>=2.14.2",
     "python-dotenv>=1.0",
+    "defusedxml>=0.7.1",
 
     # Observability
     "langfuse>=2.0",
