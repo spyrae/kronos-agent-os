@@ -32,6 +32,11 @@ MAX_HISTORY = 30
 # server?" prompt from firing hours later, in a context that no longer holds.
 APPROVAL_TTL_SECONDS = 3600
 
+_LEGACY_SESSION_DELETE_QUERIES = (
+    "DELETE FROM checkpoints WHERE thread_id = ?",
+    "DELETE FROM writes WHERE thread_id = ?",
+)
+
 
 def _approval_is_stale(requested_at: object) -> bool:
     """True if a pending approval's requested_at is older than the TTL."""
@@ -793,10 +798,10 @@ class SessionStore:
             deleted = cursor.rowcount
 
             # Also clear legacy LangGraph checkpoint tables if they exist
-            for table in ("checkpoints", "writes"):
+            for query in _LEGACY_SESSION_DELETE_QUERIES:
                 try:
                     cursor = await db.execute(
-                        f"DELETE FROM {table} WHERE thread_id = ?",
+                        query,
                         (thread_id,),
                     )
                     deleted += cursor.rowcount

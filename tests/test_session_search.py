@@ -1,5 +1,6 @@
 import time
 
+import aiosqlite
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -70,6 +71,36 @@ async def test_backfill_existing_sessions_is_idempotent(isolated_session_search)
     results = swarm.search_sessions(query="arbitration", days=30, limit=10)
     assert len(results) == 1
     assert results[0]["agent_name"] == "kronos"
+
+
+@pytest.mark.asyncio
+async def test_clear_removes_matching_legacy_session_records(isolated_session_search):
+    session_path, _ = isolated_session_search
+    store = SessionStore(str(session_path))
+    await store.save("clear-me", [HumanMessage(content="remove this")])
+
+    async with aiosqlite.connect(session_path) as db:
+        await db.execute("CREATE TABLE checkpoints (thread_id TEXT NOT NULL)")
+        await db.execute("CREATE TABLE writes (thread_id TEXT NOT NULL)")
+        await db.executemany(
+            "INSERT INTO checkpoints (thread_id) VALUES (?)",
+            [("clear-me",), ("keep-me",)],
+        )
+        await db.executemany(
+            "INSERT INTO writes (thread_id) VALUES (?)",
+            [("clear-me",), ("keep-me",)],
+        )
+        await db.commit()
+
+    assert await store.clear("clear-me") == 3
+
+    async with aiosqlite.connect(session_path) as db:
+        for query in (
+            "SELECT thread_id FROM checkpoints ORDER BY thread_id",
+            "SELECT thread_id FROM writes ORDER BY thread_id",
+        ):
+            cursor = await db.execute(query)
+            assert await cursor.fetchall() == [("keep-me",)]
 
 
 def test_session_search_filters_by_agent_and_days(isolated_session_search):
