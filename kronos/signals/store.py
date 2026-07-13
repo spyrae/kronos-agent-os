@@ -276,7 +276,9 @@ class SignalStore:
                     now,
                 ),
             )
-            item_id = int(cursor.lastrowid)
+            if cursor.lastrowid is None:
+                raise RuntimeError("Signal item insert did not return an id")
+            item_id = cursor.lastrowid
             _update_quality_stats(
                 conn,
                 source_id=item.source_id,
@@ -357,13 +359,15 @@ class SignalStore:
                     now,
                 ),
             )
-            cluster_id = int(cursor.lastrowid)
+            if cursor.lastrowid is None:
+                raise RuntimeError("Signal cluster insert did not return an id")
+            cluster_id = cursor.lastrowid
             if cluster.item_ids:
-                placeholders = ",".join("?" for _ in cluster.item_ids)
-                conn.execute(
-                    f"UPDATE signal_items SET cluster_id = ?, updated_at = ? WHERE id IN ({placeholders})",
-                    (cluster_id, now, *cluster.item_ids),
-                )
+                for item_id in cluster.item_ids:
+                    conn.execute(
+                        "UPDATE signal_items SET cluster_id = ?, updated_at = ? WHERE id = ?",
+                        (cluster_id, now, item_id),
+                    )
             for source_id in set(source_ids):
                 _increment_quality_stats(
                     conn,
@@ -374,7 +378,7 @@ class SignalStore:
                 )
             return cluster_id
 
-        return int(self._db.write_tx(tx))
+        return self._db.write_tx(tx)
 
     def get_cluster(self, cluster_id: int) -> dict[str, Any] | None:
         row = self._db.read_one("SELECT * FROM signal_clusters WHERE id = ?", (cluster_id,))
@@ -433,9 +437,11 @@ class SignalStore:
                         digests_delta=1,
                         now=now,
                     )
-            return int(cursor.lastrowid)
+            if cursor.lastrowid is None:
+                raise RuntimeError("Signal digest insert did not return an id")
+            return cursor.lastrowid
 
-        return int(self._db.write_tx(tx))
+        return self._db.write_tx(tx)
 
     def list_digests(self, *, destination: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         if destination:
@@ -465,12 +471,8 @@ class SignalStore:
     def _items_for_ids(self, item_ids: tuple[int, ...]) -> list[dict[str, Any]]:
         if not item_ids:
             return []
-        placeholders = ",".join("?" for _ in item_ids)
-        rows = self._db.read(
-            f"SELECT * FROM signal_items WHERE id IN ({placeholders})",
-            tuple(item_ids),
-        )
-        return [_decode_item(row) for row in rows]
+        rows = [self._db.read_one("SELECT * FROM signal_items WHERE id = ?", (item_id,)) for item_id in item_ids]
+        return [_decode_item(row) for row in rows if row is not None]
 
 
 def _find_duplicate(
@@ -646,8 +648,8 @@ def _increment_quality_stats(
 def _rows_for_item_ids(conn: Connection, item_ids: tuple[int, ...]) -> list[Row]:
     if not item_ids:
         return []
-    placeholders = ",".join("?" for _ in item_ids)
-    return list(conn.execute(f"SELECT * FROM signal_items WHERE id IN ({placeholders})", tuple(item_ids)).fetchall())
+    rows = [conn.execute("SELECT * FROM signal_items WHERE id = ?", (item_id,)).fetchone() for item_id in item_ids]
+    return [row for row in rows if row is not None]
 
 
 def _platform_for_source(rows: list[Row] | list[dict[str, Any]], source_id: str) -> str:
