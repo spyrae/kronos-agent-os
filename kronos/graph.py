@@ -29,8 +29,12 @@ from kronos.audit import log_tool_event, reset_tool_audit_context, set_tool_audi
 from kronos.config import settings
 from kronos.engine import (
     AgentResult,
+    SubAgentApprovalPause,
     ToolEventCallback,
+    clear_delegation_ctx,
+    current_delegation,
     execute_tool,
+    publish_delegation_ctx,
     react_loop,
     tool_requires_approval,
 )
@@ -239,12 +243,16 @@ class KronosAgent:
             )
 
         async def request_tool_approval(tool: BaseTool, tool_call: dict) -> str:
+            # current_delegation() is set when the approval originates inside a
+            # sub-agent — it records the parent delegate_to_X call so the resume
+            # re-runs that delegation with this call exempted.
             return await self._session_store.create_pending_approval(
                 turn_id=turn_id,
                 thread_id=thread_id,
                 tool_call_id=str(tool_call.get("id", "")),
                 tool_name=tool.name,
                 args=tool_call.get("args", {}) or {},
+                delegation=current_delegation(),
             )
 
         kwargs = {
@@ -254,27 +262,32 @@ class KronosAgent:
             "request_tool_approval": request_tool_approval,
         }
         if approved_tool_name:
-            # The exemption must match the EXACT call the user approved, not
-            # just the tool name. Binding to the name alone let an approved
-            # restart_service("x") wave through restart_service("y") during the
-            # resume. Compare canonical (sorted) args so only the approved call
-            # skips a fresh approval; any other args re-prompt.
-            approved_args_key = json.dumps(
-                approved_tool_args or {}, sort_keys=True, default=str
+            kwargs["needs_tool_approval"] = self._approval_scope(
+                approved_tool_name, approved_tool_args
             )
 
-            async def approval_scope(tool: BaseTool, args: dict) -> bool:
-                same_call = tool.name == approved_tool_name and (
-                    json.dumps(args or {}, sort_keys=True, default=str)
-                    == approved_args_key
-                )
-                if same_call:
-                    return False
-                return tool_requires_approval(tool, args)
-
-            kwargs["needs_tool_approval"] = approval_scope
-
         return kwargs
+
+    def _approval_scope(self, approved_tool_name: str, approved_tool_args: dict | None):
+        """Predicate exempting exactly the approved (name, args) call.
+
+        The exemption must match the EXACT call the user approved, not just the
+        tool name. Binding to the name alone let an approved restart_service("x")
+        wave through restart_service("y") during the resume. Compare canonical
+        (sorted) args so only the approved call skips a fresh approval; any other
+        args (or any other tool) re-prompt.
+        """
+        approved_args_key = json.dumps(approved_tool_args or {}, sort_keys=True, default=str)
+
+        async def approval_scope(tool: BaseTool, args: dict) -> bool:
+            same_call = tool.name == approved_tool_name and (
+                json.dumps(args or {}, sort_keys=True, default=str) == approved_args_key
+            )
+            if same_call:
+                return False
+            return tool_requires_approval(tool, args)
+
+        return approval_scope
 
     async def _run_model_loop(
         self,
@@ -336,7 +349,32 @@ class KronosAgent:
         tool_name = str(pending["tool_name"])
         messages = await self._session_store.load_turn_messages(thread_id, turn_id)
 
-        if approved:
+        args = pending.get("args", {}) or {}
+        delegation = pending.get("delegation")
+
+        # Build loop kwargs up front so a nested (sub-agent) re-run can reuse
+        # its approval hooks: the exemption for the approved call plus the
+        # pending channel for any further approval it triggers.
+        react_loop_kwargs = self._build_durable_react_loop_kwargs(
+            turn_id=turn_id,
+            thread_id=thread_id,
+            approved_tool_name=tool_name if approved else None,
+            approved_tool_args=args if approved else None,
+        )
+
+        if delegation:
+            resumed = await self._resume_delegated_approval(
+                approved=approved,
+                turn_id=turn_id,
+                delegation=delegation,
+                request_tool_approval=react_loop_kwargs["request_tool_approval"],
+                needs_tool_approval=react_loop_kwargs.get("needs_tool_approval"),
+            )
+            if resumed.get("waiting_approval"):
+                self._last_pending_approval_id = resumed["approval_id"]
+                return resumed["content"]
+            tool_message = resumed["tool_message"]
+        elif approved:
             tool = self._approval_tool_map().get(tool_name)
             cached = await self._session_store.get_tool_result(turn_id, tool_call_id)
             if cached is not None:
@@ -349,11 +387,7 @@ class KronosAgent:
             else:
                 tool_message = await execute_tool(
                     tool,
-                    {
-                        "name": tool_name,
-                        "id": tool_call_id,
-                        "args": pending.get("args", {}) or {},
-                    },
+                    {"name": tool_name, "id": tool_call_id, "args": args},
                 )
                 await self._session_store.save_tool_result(
                     turn_id=turn_id,
@@ -372,13 +406,6 @@ class KronosAgent:
             messages=[tool_message],
         )
         messages.append(tool_message)
-
-        react_loop_kwargs = self._build_durable_react_loop_kwargs(
-            turn_id=turn_id,
-            thread_id=thread_id,
-            approved_tool_name=tool_name if approved else None,
-            approved_tool_args=(pending.get("args", {}) or {}) if approved else None,
-        )
         audit_token = set_tool_audit_context(
             agent=settings.agent_name,
             thread_id=thread_id,
@@ -410,6 +437,76 @@ class KronosAgent:
             turn_id=turn_id,
         )
         return result.content
+
+    async def _resume_delegated_approval(
+        self,
+        *,
+        approved: bool,
+        turn_id: str,
+        delegation: dict,
+        request_tool_approval,
+        needs_tool_approval,
+    ) -> dict:
+        """Resume an approval that fired inside a sub-agent.
+
+        The approval-worthy tool lives in a sub-agent, not at the top level, so
+        it can't be executed directly here (it isn't in the approval tool map,
+        and running it in isolation would drop the sub-agent's remaining work).
+        Instead re-run the parent ``delegate_to_X`` call with the approved
+        sub-call exempted; the sub-agent's completed result fills the delegation
+        call's ToolMessage. A rejection short-circuits the delegation. If the
+        sub-agent hits a *different* approval-worthy tool on the re-run, it
+        pauses again (returned as ``waiting_approval``).
+
+        Returns ``{"tool_message": ToolMessage}`` or
+        ``{"waiting_approval": True, "approval_id": ..., "content": ...}``.
+        """
+        call_id = str(delegation.get("tool_call_id", ""))
+        deleg_name = str(delegation.get("tool_name", ""))
+        request = str(delegation.get("request", ""))
+
+        if not approved:
+            return {"tool_message": ToolMessage(content="[REJECTED by user]", tool_call_id=call_id)}
+
+        deleg_tool = self._approval_tool_map().get(deleg_name)
+        if deleg_tool is None:
+            return {"tool_message": ToolMessage(
+                content=f"[ERROR] Delegation tool '{deleg_name}' is no longer available after restart.",
+                tool_call_id=call_id,
+            )}
+
+        # Publish the exemption + approval channel so the re-run sub-agent
+        # executes the approved call (and can pause anew for a different one).
+        ctx_token = publish_delegation_ctx({
+            "request_tool_approval": request_tool_approval,
+            "needs_tool_approval": needs_tool_approval,
+            "tool_name": deleg_name,
+            "tool_call_id": call_id,
+            "request": request,
+        })
+        try:
+            tool_message = await execute_tool(
+                deleg_tool,
+                {"name": deleg_name, "id": call_id, "args": {"request": request}},
+            )
+        except SubAgentApprovalPause as pause:
+            return {
+                "waiting_approval": True,
+                "approval_id": pause.approval_id,
+                "content": (
+                    "⚠️ Нужно ещё одно подтверждение перед выполнением tool-call.\n"
+                    f"Tool: `{pause.tool_name}`\n"
+                    f"Approval ID: `{pause.approval_id}`\n\n"
+                    "Нажми Approve/Reject в Telegram или обработай approval вручную."
+                ),
+            }
+        finally:
+            clear_delegation_ctx(ctx_token)
+
+        await self._session_store.save_tool_result(
+            turn_id=turn_id, tool_call_id=call_id, content=str(tool_message.content),
+        )
+        return {"tool_message": tool_message}
 
     async def ainvoke(
         self,
