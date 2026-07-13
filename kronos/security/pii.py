@@ -12,9 +12,11 @@ from copy import deepcopy
 from typing import Any
 
 try:  # Optional at import time for lightweight security utility tests.
-    from langchain_core.messages import BaseMessage
+    from langchain_core.messages import BaseMessage as _BaseMessage
 except Exception:  # pragma: no cover - langchain_core is a runtime dependency
-    BaseMessage = ()  # type: ignore[assignment]
+    BaseMessageType: type[Any] | None = None
+else:
+    BaseMessageType = _BaseMessage
 
 
 EMAIL_MASK = "***@***.com"
@@ -56,7 +58,7 @@ def mask_pii_object(value: Any) -> Any:
         return tuple(mask_pii_object(item) for item in value)
     if isinstance(value, set):
         return {mask_pii_object(item) for item in value}
-    if BaseMessage and isinstance(value, BaseMessage):
+    if BaseMessageType is not None and isinstance(value, BaseMessageType):
         content = mask_pii_object(value.content)
         if hasattr(value, "model_copy"):
             return value.model_copy(update={"content": content})
