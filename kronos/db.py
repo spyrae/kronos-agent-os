@@ -22,7 +22,9 @@ Usage:
 import logging
 import sqlite3
 import threading
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 from kronos.config import settings
 
@@ -30,6 +32,7 @@ log = logging.getLogger("kronos.db")
 
 _instances: dict[str, "SafeDB"] = {}
 _instances_lock = threading.Lock()
+_Result = TypeVar("_Result")
 
 
 class SafeDB:
@@ -57,16 +60,17 @@ class SafeDB:
                 pass
 
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(
+        conn = sqlite3.connect(
             str(self._db_path),
             check_same_thread=False,
             timeout=30,
             isolation_level=None,  # autocommit — we manage transactions explicitly
         )
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA busy_timeout=30000")
-        self._conn.execute("PRAGMA wal_autocheckpoint=100")
-        self._conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA wal_autocheckpoint=100")
+        conn.row_factory = sqlite3.Row
+        self._conn = conn
         log.info("SafeDB connected: %s", self._db_path.name)
 
     @property
@@ -74,38 +78,42 @@ class SafeDB:
         """Raw connection — only use inside init_schema(). Thread-unsafe."""
         if self._conn is None:
             self._connect()
+        assert self._conn is not None
         return self._conn
 
-    def init_schema(self, fn) -> None:
+    def init_schema(self, fn: Callable[[sqlite3.Connection], None]) -> None:
         """Run schema init function under lock (thread-safe, runs once).
 
         Note: fn should use executescript() for DDL (it manages its own transactions).
         """
         with self._lock:
-            fn(self._conn)
+            conn = self.conn
+            fn(conn)
             # Ensure no dangling transaction after schema init
             try:
-                self._conn.execute("COMMIT")
+                conn.execute("COMMIT")
             except Exception:
                 pass
 
     def read(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
         """Execute a read query."""
         with self._lock:
+            conn = self.conn
             try:
-                return self._conn.execute(sql, params).fetchall()
+                return conn.execute(sql, params).fetchall()
             except sqlite3.OperationalError:
                 self._rollback_safe()
-                return self._conn.execute(sql, params).fetchall()
+                return self.conn.execute(sql, params).fetchall()
 
     def read_one(self, sql: str, params: tuple = ()) -> sqlite3.Row | None:
         """Execute a read query and return first row."""
         with self._lock:
+            conn = self.conn
             try:
-                return self._conn.execute(sql, params).fetchone()
+                return conn.execute(sql, params).fetchone()
             except sqlite3.OperationalError:
                 self._rollback_safe()
-                return self._conn.execute(sql, params).fetchone()
+                return self.conn.execute(sql, params).fetchone()
 
     def write(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         """Execute a single write in an IMMEDIATE transaction."""
@@ -120,7 +128,7 @@ class SafeDB:
 
         self.write_tx(_do)
 
-    def write_tx(self, fn) -> any:
+    def write_tx(self, fn: Callable[[sqlite3.Connection], _Result]) -> _Result:
         """Execute a function within a locked IMMEDIATE transaction.
 
         Uses BEGIN IMMEDIATE to acquire the write lock upfront, preventing
@@ -147,17 +155,18 @@ class SafeDB:
                 log.warning("SafeDB write_tx retry on %s: %s", self._db_path.name, e)
                 return self._run_tx(fn)
 
-    def _run_tx(self, fn):
+    def _run_tx(self, fn: Callable[[sqlite3.Connection], _Result]) -> _Result:
         """Run fn in one IMMEDIATE transaction, rolling back on any error.
 
         Always leaves the connection with no open transaction — whether fn
         commits, raises IntegrityError, or the callback itself raises — so the
         write lock is never leaked. Must be called under ``self._lock``.
         """
-        self._conn.execute("BEGIN IMMEDIATE")
+        conn = self.conn
+        conn.execute("BEGIN IMMEDIATE")
         try:
-            result = fn(self._conn)
-            self._conn.execute("COMMIT")
+            result = fn(conn)
+            conn.execute("COMMIT")
             return result
         except Exception:
             self._rollback_safe()
@@ -165,12 +174,16 @@ class SafeDB:
 
     def _rollback_safe(self) -> None:
         """Rollback and verify connection is alive. Reconnect if dead."""
+        conn = self._conn
+        if conn is None:
+            self._connect()
+            return
         try:
-            self._conn.rollback()
+            conn.rollback()
         except Exception:
             pass
         try:
-            self._conn.execute("SELECT 1")
+            conn.execute("SELECT 1")
         except Exception:
             log.warning("SafeDB reconnecting: %s", self._db_path.name)
             self._connect()
