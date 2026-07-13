@@ -942,7 +942,6 @@ async def _post_bot_api_message(
         if resp.status == 200:
             data = await resp.json()
             return int(data.get("result", {}).get("message_id") or 0) or None
-        err = await resp.text()
 
     # Markdown parse error -> retry as plain text.
     plain_body = dict(body)

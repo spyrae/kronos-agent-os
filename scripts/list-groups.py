@@ -36,10 +36,8 @@ async def main():
         # Groups, supergroups, and broadcast channels
         if isinstance(entity, Channel):
             is_channel = not entity.megagroup  # broadcast channel
-            is_group = entity.megagroup  # supergroup
         elif isinstance(entity, Chat):
             is_channel = False
-            is_group = True
         else:
             continue  # skip users/DMs
 
