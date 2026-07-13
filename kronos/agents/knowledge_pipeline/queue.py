@@ -35,7 +35,7 @@ def _slug(value: str, *, max_len: int = 42) -> str:
 
 
 def _stable_task_id(source_kind: str, content: str) -> str:
-    digest = hashlib.sha1(content.encode("utf-8")).hexdigest()[:10]
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:10]
     stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
     return f"knowledge-{stamp}-{_slug(source_kind, max_len=18)}-{digest}"
 

@@ -71,7 +71,7 @@ async def get_events(
         if type != "all" and event_type != type.upper():
             continue
 
-        evt_id = hashlib.md5(json.dumps(entry, sort_keys=True, default=str).encode()).hexdigest()[:12]
+        evt_id = hashlib.sha256(json.dumps(entry, sort_keys=True, default=str).encode()).hexdigest()[:12]
         events.append({
             "id": f"evt_{evt_id}",
             "type": event_type,
@@ -151,7 +151,7 @@ async def get_tool_calls(
         if capability != "all" and entry_capability != capability:
             continue
 
-        event_id = hashlib.md5(json.dumps(entry, sort_keys=True, default=str).encode()).hexdigest()[:12]
+        event_id = hashlib.sha256(json.dumps(entry, sort_keys=True, default=str).encode()).hexdigest()[:12]
         filtered.append({
             "id": f"tool_{event_id}",
             "timestamp": entry.get("ts", ""),

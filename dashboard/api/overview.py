@@ -98,7 +98,7 @@ def _classify_activity(entry: dict) -> str:
 
 
 def _activity_id(entry: dict) -> str:
-    digest = hashlib.md5(json.dumps(entry, sort_keys=True, default=str).encode()).hexdigest()[:12]
+    digest = hashlib.sha256(json.dumps(entry, sort_keys=True, default=str).encode()).hexdigest()[:12]
     return f"act_{digest}"
 
 

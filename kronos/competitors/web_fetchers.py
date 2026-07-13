@@ -74,7 +74,7 @@ async def _check_single_page(
         return None
 
     content = f"{results[0].title}\n{results[0].description}"
-    content_hash = hashlib.md5(content.encode()).hexdigest()
+    content_hash = hashlib.sha256(content.encode()).hexdigest()
 
     channel = f"website_{url}"
     prev = store.get_latest_snapshot(comp.id, channel)

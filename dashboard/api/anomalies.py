@@ -52,7 +52,7 @@ async def list_anomalies():
             counter = Counter(inputs)
             for text, count in counter.items():
                 if count >= 3:
-                    aid = hashlib.md5(f"repeat_{agent}_{text}".encode()).hexdigest()[:12]
+                    aid = hashlib.sha256(f"repeat_{agent}_{text}".encode()).hexdigest()[:12]
                     anomalies.append({
                         "id": f"anom_{aid}",
                         "severity": "WARNING",
@@ -72,7 +72,7 @@ async def list_anomalies():
             duration = entry.get("duration_ms", 0)
             if duration > threshold and duration > 1000:
                 agent = entry.get("agent", entry.get("tier", "unknown"))
-                aid = hashlib.md5(f"latency_{agent}_{duration}".encode()).hexdigest()[:12]
+                aid = hashlib.sha256(f"latency_{agent}_{duration}".encode()).hexdigest()[:12]
                 anomalies.append({
                     "id": f"anom_{aid}",
                     "severity": "WARNING",
@@ -86,7 +86,7 @@ async def list_anomalies():
     for entry in entries[-100:]:
         if entry.get("error"):
             agent = entry.get("agent", entry.get("tier", "unknown"))
-            aid = hashlib.md5(f"error_{agent}_{entry.get('ts', '')}".encode()).hexdigest()[:12]
+            aid = hashlib.sha256(f"error_{agent}_{entry.get('ts', '')}".encode()).hexdigest()[:12]
             anomalies.append({
                 "id": f"anom_{aid}",
                 "severity": "CRITICAL",
@@ -104,7 +104,7 @@ async def list_anomalies():
         agents_with_ops = {e.get("agent", e.get("tier")) for e in entries[-200:]}
         idle = active_agents - agents_with_ops
         for agent in idle:
-            aid = hashlib.md5(f"idle_{agent}".encode()).hexdigest()[:12]
+            aid = hashlib.sha256(f"idle_{agent}".encode()).hexdigest()[:12]
             anomalies.append({
                 "id": f"anom_{aid}",
                 "severity": "INFO",
