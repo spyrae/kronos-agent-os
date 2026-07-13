@@ -11,14 +11,59 @@ import random
 import secrets
 import tempfile
 import time
-from dataclasses import dataclass
 
 import aiohttp
 from aiohttp import web
-from telethon import Button, TelegramClient, events
-from telethon.tl.types import DocumentAttributeAudio
+from telethon import TelegramClient, events
 
 from kronos.audit import log_request
+from kronos.bridge_approval import (
+    APPROVAL_CALLBACK_PREFIX,
+    _approval_bot_reply_markup,
+    _approval_buttons,
+    _approval_callback_data,
+    _parse_approval_callback_data,
+)
+from kronos.bridge_commands import (
+    _handle_aso_command,
+    _handle_persona_command,
+    _handle_runtime_info_query,
+    _handle_stats_command,
+    _is_osint_command,
+)
+from kronos.bridge_context import (
+    _clip_context_text,
+    _format_shared_group_context,
+    _message_timestamp,
+)
+from kronos.bridge_media import (
+    _analyze_image_message,
+    _compose_document_agent_message,
+    _compose_image_agent_message,
+    _document_info,
+    _download_document_bytes,
+    _download_image_bytes,
+    _extract_document_message,
+    _image_mime_type,
+    _is_document_message,
+    _is_image_message,
+    _is_voice_message,
+    _transcribe_voice,
+)
+from kronos.bridge_topics import (
+    TopicDecision,
+    TopicRoute,
+    _agent_owns_topic,
+    _chat_topic_from_thread_id,
+    _extract_topic_id,
+    _extract_topic_id_from_message,
+    _normalize_telegram_chat_id,
+    _positive_int,
+    _resolve_topic_route,
+    _same_telegram_chat,
+    _topic_id_from_env_or_setting,
+    _topic_owner_agents,
+)
 from kronos.config import settings
 from kronos.graph import KronosAgent
 from kronos.observer.capture import CaptureDecision, classify_capture, record_capture
@@ -26,9 +71,50 @@ from kronos.security.cost_guardian import get_guardian
 from kronos.security.output_validator import validate_output
 from kronos.swarm_store import get_swarm
 from kronos.tts import get_voice_mode, set_voice_mode, should_synthesize, synthesize
-from kronos.vision import analyze_image_bytes, is_supported_image_mime, is_vision_configured
 
 log = logging.getLogger("kronos.bridge")
+
+# Re-exported from the bridge_* helper modules so kronos.bridge.<name>
+# keeps resolving for callers and tests after the split.
+__all__ = [
+    "APPROVAL_CALLBACK_PREFIX",
+    "TopicDecision",
+    "TopicRoute",
+    "_agent_owns_topic",
+    "_analyze_image_message",
+    "_approval_bot_reply_markup",
+    "_approval_buttons",
+    "_approval_callback_data",
+    "_chat_topic_from_thread_id",
+    "_clip_context_text",
+    "_compose_document_agent_message",
+    "_compose_image_agent_message",
+    "_document_info",
+    "_download_document_bytes",
+    "_download_image_bytes",
+    "_extract_document_message",
+    "_extract_topic_id",
+    "_extract_topic_id_from_message",
+    "_format_shared_group_context",
+    "_handle_aso_command",
+    "_handle_persona_command",
+    "_handle_runtime_info_query",
+    "_handle_stats_command",
+    "_image_mime_type",
+    "_is_document_message",
+    "_is_image_message",
+    "_is_osint_command",
+    "_is_voice_message",
+    "_message_timestamp",
+    "_normalize_telegram_chat_id",
+    "_parse_approval_callback_data",
+    "_positive_int",
+    "_resolve_topic_route",
+    "_same_telegram_chat",
+    "_topic_id_from_env_or_setting",
+    "_topic_owner_agents",
+    "_transcribe_voice",
+]
 
 # Rate limiting state
 RATE_LIMIT_MIN_DELAY = 2.0
@@ -36,10 +122,6 @@ RATE_LIMIT_GLOBAL_DELAY = 1.0
 _last_send_per_chat: dict[int, float] = {}
 _last_send_global: float = 0.0
 _rate_lock = asyncio.Lock()
-
-# Groq Whisper STT
-GROQ_WHISPER_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
-GROQ_WHISPER_MODEL = "whisper-large-v3-turbo"
 
 # Default chat for cron notifications
 DEFAULT_NOTIFY_CHAT = int(os.environ.get("DEFAULT_NOTIFY_CHAT") or "0")
@@ -93,130 +175,6 @@ _my_username: str | None = None
 # Group routing (initialized in run_bridge after login)
 _group_router = None  # GroupRouter | None
 
-APPROVAL_CALLBACK_PREFIX = "kaos:approval:"
-
-
-@dataclass(frozen=True)
-class TopicRoute:
-    """Routing mode for a configured Telegram forum topic."""
-
-    mode: str  # default | swarm | owner | silent
-    label: str = ""
-    owner_agent: str = ""
-
-
-@dataclass(frozen=True)
-class TopicDecision:
-    """Small decision object compatible with group_router.RoutingDecision."""
-
-    should_respond: bool
-    delay: float
-    tier: int
-    reason: str
-    addressing: object | None = None
-
-
-def _normalize_telegram_chat_id(chat_id: int | None) -> int | None:
-    """Normalize Telegram supergroup ids for matching.
-
-    Telegram topic links use the internal id (3642435967), while Bot API and
-    Telethon commonly expose the same supergroup as -1003642435967.
-    """
-    if chat_id is None:
-        return None
-    normalized = abs(int(chat_id))
-    if normalized > 1_000_000_000_000 and str(normalized).startswith("100"):
-        normalized -= 1_000_000_000_000
-    return normalized
-
-
-def _same_telegram_chat(left: int | None, right: int | None) -> bool:
-    if not left or not right:
-        return False
-    return _normalize_telegram_chat_id(left) == _normalize_telegram_chat_id(right)
-
-
-def _positive_int(value: object) -> int:
-    try:
-        parsed = int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-    return parsed if parsed > 0 else 0
-
-
-def _topic_id_from_env_or_setting(env_name: str, setting_value: int) -> int:
-    """Resolve a topic id for inbound bridge routing.
-
-    Cron notifications historically use ``TOPIC_*`` env aliases, while the
-    bridge settings use ``TELEGRAM_*_TOPIC_ID``. For owner-topic safety the
-    bridge must honor both forms; otherwise a configured cron topic could still
-    fall through to generic group routing for inbound user messages.
-    """
-    return _positive_int(os.environ.get(env_name)) or _positive_int(setting_value)
-
-
-def _topic_owner_agents(owner_agent: str) -> set[str]:
-    """Return normalized allowed owners for a topic.
-
-    Supports comma-separated values such as ``kronos,nexus`` for topics where
-    both agents are allowed to answer.
-    """
-    return {agent.strip().lower() for agent in (owner_agent or "").replace(";", ",").split(",") if agent.strip()}
-
-
-def _approval_callback_data(action: str, approval_id: str) -> bytes:
-    """Build compact callback payload for Telegram inline buttons."""
-    return f"{APPROVAL_CALLBACK_PREFIX}{action}:{approval_id}".encode()
-
-
-def _parse_approval_callback_data(data: bytes | str) -> tuple[str, str] | None:
-    """Parse approval callback payload into (action, approval_id)."""
-    text = data.decode("utf-8") if isinstance(data, bytes) else str(data)
-    if not text.startswith(APPROVAL_CALLBACK_PREFIX):
-        return None
-    remainder = text[len(APPROVAL_CALLBACK_PREFIX) :]
-    try:
-        action, approval_id = remainder.split(":", 1)
-    except ValueError:
-        return None
-    if action not in {"approve", "reject"} or not approval_id:
-        return None
-    return action, approval_id
-
-
-def _approval_buttons(approval_id: str):
-    """Return Telethon inline buttons for a pending approval."""
-    return [
-        [
-            Button.inline("✅ Approve", _approval_callback_data("approve", approval_id)),
-            Button.inline("❌ Reject", _approval_callback_data("reject", approval_id)),
-        ]
-    ]
-
-
-def _approval_bot_reply_markup(approval_id: str) -> dict:
-    """Return Bot API inline_keyboard markup for topic sends."""
-    return {
-        "inline_keyboard": [
-            [
-                {
-                    "text": "✅ Approve",
-                    "callback_data": _approval_callback_data(
-                        "approve",
-                        approval_id,
-                    ).decode("utf-8"),
-                },
-                {
-                    "text": "❌ Reject",
-                    "callback_data": _approval_callback_data(
-                        "reject",
-                        approval_id,
-                    ).decode("utf-8"),
-                },
-            ]
-        ],
-    }
-
 
 def _last_pending_approval_id() -> str | None:
     """Return latest pending approval from the active agent, if any."""
@@ -225,175 +183,11 @@ def _last_pending_approval_id() -> str | None:
     return getattr(_agent, "last_pending_approval_id", None)
 
 
-def _chat_topic_from_thread_id(thread_id: str) -> tuple[int | None, int | None]:
-    """Parse a Telegram thread id into chat/topic ids when possible."""
-    try:
-        chat_text, topic_text = str(thread_id).rsplit(":", 1)
-        return int(chat_text), int(topic_text)
-    except (TypeError, ValueError):
-        try:
-            return int(str(thread_id)), None
-        except (TypeError, ValueError):
-            return None, None
-
-
-def _resolve_topic_route(chat_id: int, topic_id: int | None) -> TopicRoute:
-    """Return how this process should treat a group/topic message."""
-    if not settings.telegram_swarm_chat_id:
-        return TopicRoute("default")
-    if not _same_telegram_chat(chat_id, settings.telegram_swarm_chat_id):
-        return TopicRoute("default")
-
-    topic = topic_id or 0
-    general_topic = _topic_id_from_env_or_setting(
-        "TOPIC_GENERAL",
-        settings.telegram_general_topic_id,
-    )
-
-    if general_topic and topic == general_topic:
-        return TopicRoute("swarm", label="general")
-    if not general_topic and topic == 0:
-        return TopicRoute("swarm", label="general")
-
-    owner_topics = (
-        (
-            _topic_id_from_env_or_setting(
-                "TELEGRAM_KRONOS_TOPIC_ID",
-                settings.telegram_kronos_topic_id,
-            ),
-            settings.telegram_kronos_agent,
-            "kronos",
-        ),
-        (
-            _topic_id_from_env_or_setting(
-                "TOPIC_FINANCE",
-                settings.telegram_finance_topic_id,
-            ),
-            settings.telegram_finance_agent,
-            "finance",
-        ),
-        (
-            _topic_id_from_env_or_setting(
-                "TOPIC_DIGEST_NEWS",
-                settings.telegram_digest_news_topic_id,
-            ),
-            settings.telegram_digest_news_agent,
-            "digest_news",
-        ),
-        (
-            _topic_id_from_env_or_setting(
-                "TOPIC_JB_COMPETITORS",
-                settings.telegram_jb_competitors_topic_id,
-            ),
-            settings.telegram_jb_competitors_agent,
-            "jb_competitors",
-        ),
-        (
-            _topic_id_from_env_or_setting(
-                "TOPIC_JB_SYSTEM",
-                settings.telegram_jb_system_topic_id,
-            ),
-            settings.telegram_jb_system_agent,
-            "jb_system",
-        ),
-        (
-            _topic_id_from_env_or_setting(
-                "TOPIC_DIGEST_JOBS",
-                settings.telegram_digest_jobs_topic_id,
-            ),
-            settings.telegram_digest_jobs_agent,
-            "digest_jobs",
-        ),
-        (
-            _topic_id_from_env_or_setting(
-                "TOPIC_DIGEST_IDEAS",
-                settings.telegram_digest_ideas_topic_id,
-            ),
-            settings.telegram_digest_ideas_agent,
-            "digest_ideas",
-        ),
-        (
-            _topic_id_from_env_or_setting(
-                "TOPIC_JB_TRAVEL_INSIGHTS",
-                settings.telegram_jb_travel_insights_topic_id,
-            ),
-            settings.telegram_jb_travel_insights_agent,
-            "jb_travel_insights",
-        ),
-        (
-            _topic_id_from_env_or_setting(
-                "TOPIC_DIGEST",
-                settings.telegram_digest_topic_id,
-            ),
-            settings.telegram_digest_agent,
-            "digest",
-        ),
-    )
-    for configured_topic, owner_agent, label in owner_topics:
-        if configured_topic and topic == configured_topic:
-            return TopicRoute("owner", label=label, owner_agent=(owner_agent or "").lower())
-
-    return TopicRoute("silent", label=f"unconfigured:{topic}")
-
-
-def _agent_owns_topic(route: TopicRoute) -> bool:
-    return settings.agent_name.lower() in _topic_owner_agents(route.owner_agent)
-
-
 def _owner_topic_accepts_sender(user_id: int) -> bool:
     """Owner topics are direct user->owner channels, not peer debate rooms."""
     if _group_router is not None:
         return not _group_router._is_peer(user_id)
     return settings.is_telegram_user_allowed(user_id)
-
-
-def _clip_context_text(text: str, limit: int = 500) -> str:
-    compact = " ".join((text or "").split())
-    if len(compact) <= limit:
-        return compact
-    return compact[: max(0, limit - 3)].rstrip() + "..."
-
-
-def _format_shared_group_context(
-    swarm,
-    *,
-    chat_id: int,
-    topic_id: int | None,
-    current_msg_id: int | None,
-) -> str:
-    """Build transient context from the shared swarm ledger."""
-    limit = max(0, min(settings.telegram_shared_context_messages, 30))
-    if limit <= 0:
-        return ""
-
-    try:
-        rows = swarm.get_recent_messages(chat_id=chat_id, topic_id=topic_id, limit=limit + 1)
-    except Exception as e:
-        log.warning("[Swarm] Failed to load shared topic context: %s", e)
-        return ""
-
-    rows = [row for row in rows if row.get("msg_id") != current_msg_id]
-    if not rows:
-        return ""
-
-    lines: list[str] = []
-    for row in reversed(rows[:limit]):
-        sender_type = row.get("sender_type")
-        if sender_type == "agent":
-            who = f"Агент {row.get('agent_name') or 'unknown'}"
-        elif sender_type == "system":
-            who = "Система"
-        else:
-            who = "Пользователь"
-        lines.append(f"- {who}: {_clip_context_text(str(row.get('text') or ''))}")
-
-    if not lines:
-        return ""
-    return (
-        "[Общая история этого Telegram-топика]\n"
-        "Ниже недавние сообщения из общего журнала. Используй их как контекст, "
-        "но не считай новым запросом и не пересказывай без необходимости.\n" + "\n".join(lines)
-    )
 
 
 async def _rate_limit_wait(chat_id: int) -> None:
@@ -422,166 +216,6 @@ async def _human_typing_delay(chat_id: int, text: str) -> None:
     total = min(typing_secs + thinking_secs, 5.0)
     async with _client.action(chat_id, "typing"):
         await asyncio.sleep(total)
-
-
-def _is_voice_message(event) -> bool:
-    if not event.message.media:
-        return False
-    doc = getattr(event.message.media, "document", None)
-    if not doc:
-        return False
-    return any(isinstance(attr, DocumentAttributeAudio) and attr.voice for attr in doc.attributes)
-
-
-def _image_mime_type(event) -> str:
-    if getattr(event.message, "photo", None):
-        return "image/jpeg"
-    doc = getattr(getattr(event.message, "media", None), "document", None)
-    return str(getattr(doc, "mime_type", "") or "")
-
-
-def _is_image_message(event) -> bool:
-    if not getattr(event.message, "media", None):
-        return False
-    return is_supported_image_mime(_image_mime_type(event))
-
-
-async def _download_image_bytes(event) -> tuple[bytes, str]:
-    mime_type = _image_mime_type(event) or "image/jpeg"
-    suffix = {
-        "image/jpeg": ".jpg",
-        "image/png": ".png",
-        "image/webp": ".webp",
-        "image/gif": ".gif",
-    }.get(mime_type, ".img")
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp_path = tmp.name
-        await event.message.download_media(file=tmp_path)
-        with open(tmp_path, "rb") as f:
-            return f.read(), mime_type
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-
-
-async def _analyze_image_message(event, caption: str) -> str:
-    if not is_vision_configured():
-        return (
-            "Я получил изображение, но vision model не настроена. "
-            "Нужно установить и авторизовать Codex CLI (`codex login`) "
-            "или включить KAOS_VISION_PROVIDER=openai-api."
-        )
-    image_bytes, mime_type = await _download_image_bytes(event)
-    result = await analyze_image_bytes(
-        image_bytes,
-        mime_type=mime_type,
-        context=caption,
-    )
-    return result.text
-
-
-def _compose_image_agent_message(caption: str, image_analysis: str) -> str:
-    caption = caption.strip()
-    user_request = caption or "Пользователь отправил изображение без подписи."
-    return (
-        f"{user_request}\n\n"
-        "[Vision analysis]\n"
-        f"{image_analysis}\n\n"
-        "Ответь пользователю на основе анализа изображения. Если пользователь просит OCR, "
-        "верни извлечённый текст; если это документ/скриншот/чек, кратко классифицируй "
-        "и выдели важные детали/action items."
-    )
-
-
-# --- Document ingest (roadmap 6.1) ---
-
-_DOC_EXTENSIONS = (".pdf", ".docx", ".txt", ".md", ".markdown")
-
-
-def _document_info(event) -> tuple[str, str]:
-    """(filename, mime_type) for a document attachment, or ("", "")."""
-    doc = getattr(getattr(event.message, "media", None), "document", None)
-    if doc is None:
-        return "", ""
-    from telethon.tl.types import DocumentAttributeFilename
-
-    filename = ""
-    for attr in getattr(doc, "attributes", []):
-        if isinstance(attr, DocumentAttributeFilename):
-            filename = attr.file_name
-            break
-    return filename, str(getattr(doc, "mime_type", "") or "")
-
-
-def _is_document_message(event) -> bool:
-    """A non-image, non-voice document we can ingest (by extension or mime)."""
-    if not getattr(event.message, "media", None):
-        return False
-    if _is_image_message(event) or _is_voice_message(event):
-        return False
-    filename, mime = _document_info(event)
-    low = filename.lower()
-    return (
-        low.endswith(_DOC_EXTENSIONS)
-        or "pdf" in mime
-        or "wordprocessingml" in mime
-        or mime.startswith("text/")
-    )
-
-
-async def _download_document_bytes(event) -> bytes:
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp_path = tmp.name
-        await event.message.download_media(file=tmp_path)
-        with open(tmp_path, "rb") as f:
-            return f.read()
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-
-
-async def _extract_document_message(event) -> tuple[str, str]:
-    """Download + extract text; archive raw text to notes/inbox. (text, error)."""
-    from kronos.documents.extract import extract_text
-    from kronos.workspace import ws
-
-    filename, mime = _document_info(event)
-    data = await _download_document_bytes(event)
-    text, error = extract_text(data, filename, mime)
-    if error:
-        return "", error
-
-    # Archive raw text to the inbox for later processing / provenance.
-    try:
-        ws.inbox_dir.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        safe = "".join(c for c in (filename or "document") if c.isalnum() or c in "-_.") or "document"
-        (ws.inbox_dir / f"{stamp}-{safe}.txt").write_text(text, encoding="utf-8")
-    except Exception as e:
-        log.warning("Failed to archive document to inbox: %s", e)
-
-    return text, ""
-
-
-def _compose_document_agent_message(caption: str, filename: str, text: str) -> str:
-    caption = caption.strip()
-    user_request = caption or f"Пользователь прислал документ «{filename}»."
-    return (
-        f"{user_request}\n\n"
-        f"[Документ: {filename}]\n{text}\n\n"
-        "Дай краткое саммари документа и выдели ключевые факты и action items."
-    )
-
-
-def _message_timestamp(event) -> str:
-    value = getattr(getattr(event, "message", None), "date", None)
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    return str(value or "")
 
 
 def _observer_capture_confirmation(decision: CaptureDecision, task: dict) -> str:
@@ -657,34 +291,6 @@ async def _maybe_record_observer_capture(
     return True
 
 
-async def _transcribe_voice(file_path: str) -> str:
-    """Transcribe audio via Groq Whisper API."""
-    async with aiohttp.ClientSession() as session:
-        data = aiohttp.FormData()
-        fh = open(file_path, "rb")
-        try:
-            data.add_field(
-                "file",
-                fh,
-                filename=os.path.basename(file_path),
-                content_type="audio/ogg",
-            )
-            data.add_field("model", GROQ_WHISPER_MODEL)
-            async with session.post(
-                GROQ_WHISPER_URL,
-                headers={"Authorization": f"Bearer {settings.groq_api_key}"},
-                data=data,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    raise RuntimeError(f"Groq STT error {resp.status}: {body}")
-                result = await resp.json()
-                return result.get("text", "").strip()
-        finally:
-            fh.close()
-
-
 def _is_mentioned(event) -> bool:
     if event.is_reply:
         return True
@@ -707,56 +313,6 @@ def _is_service_message(event) -> bool:
     """Return True for Telegram service events such as topic creation."""
     message = getattr(event, "message", None)
     return bool(getattr(message, "action", None))
-
-
-def _extract_topic_id_from_message(message, *, is_private: bool) -> int | None:
-    """Extract forum topic ID from a Telethon message object."""
-    if is_private:
-        return None
-    if message is None:
-        return None
-
-    reply_to = getattr(message, "reply_to", None)
-    if not reply_to:
-        # General topic in forum groups may have no reply_to
-        # Check if chat itself is a forum
-        return None
-
-    # reply_to_top_id = topic root (when replying to a message within topic)
-    top_id = getattr(reply_to, "reply_to_top_id", None)
-    if top_id:
-        return top_id
-
-    # forum_topic flag = direct message in a topic (not a reply)
-    if getattr(reply_to, "forum_topic", False):
-        return reply_to.reply_to_msg_id
-
-    # Fallback: reply_to_msg_id might be the topic ID in forum groups
-    msg_id = getattr(reply_to, "reply_to_msg_id", None)
-    if msg_id:
-        return msg_id
-
-    return None
-
-
-def _extract_topic_id(event) -> int | None:
-    """Extract forum topic ID from a Telethon message event.
-
-    In forum supergroups, messages belong to topics. The topic ID
-    is used to isolate conversation contexts per topic.
-
-    Private chats can expose ``forum_topic`` reply headers when Telegram
-    creates per-chat UI topics. KAOS should treat those as ordinary DMs:
-    replying to the topic root produces noisy "topic was created" quotes and
-    fragments the private conversation context.
-
-    Telethon bot mode: reply_to.reply_to_msg_id = topic root message ID.
-    General topic: reply_to_msg_id = 1 (or absent).
-    """
-    return _extract_topic_id_from_message(
-        getattr(event, "message", None),
-        is_private=bool(getattr(event, "is_private", False)),
-    )
 
 
 async def _approval_callback_topic_id(event, pending: dict | None = None) -> int | None:
@@ -817,43 +373,6 @@ def _strip_mention(text: str) -> str:
 
     cleaned = re.sub(r"@" + re.escape(_my_username), "", text, flags=re.IGNORECASE).strip()
     return cleaned if cleaned else text
-
-
-def _handle_runtime_info_query(text: str) -> str | None:
-    """Answer simple runtime/model identity questions deterministically."""
-    normalized = " ".join(text.strip().lower().replace("ё", "е").split())
-    if not normalized:
-        return None
-
-    is_model_question = normalized.startswith("/model") or (
-        len(normalized) <= 180
-        and any(
-            phrase in normalized
-            for phrase in (
-                "что у тебя за модель",
-                "какая у тебя модель",
-                "что за модель",
-                "на какой модели",
-                "какой llm",
-                "какой backend",
-                "какой бэкенд",
-                "какой провайдер",
-            )
-        )
-    )
-    if not is_model_question:
-        return None
-
-    orchestrator_chain = settings.kaos_orchestrator_provider_chain.strip() or settings.kaos_standard_provider_chain
-    return (
-        "Сейчас верхний оркестратор KAOS подключён через "
-        f"`{orchestrator_chain}`. Для `codex-cli` используется Codex/ChatGPT OAuth "
-        f"и модель `{settings.kaos_codex_model}`.\n\n"
-        "Важно: это модель оркестратора. Специализированные подагенты пока могут "
-        "использовать свои standard/lite цепочки: "
-        f"`standard={settings.kaos_standard_provider_chain}`, "
-        f"`lite={settings.kaos_lite_provider_chain}`."
-    )
 
 
 async def _fetch_root_user_message(event) -> tuple[str, str]:
@@ -1337,130 +856,6 @@ async def _start_webhook_server() -> None:
     log.info("Webhook server listening on %s:%d", webhook_host, webhook_port)
 
 
-# --- /persona command handler (roadmap 6.3) ---
-
-
-async def _handle_persona_command(text: str) -> str | None:
-    """Handle /persona [list | approve <id> | reject <id>]. Returns reply or None."""
-    if not text.startswith("/persona"):
-        return None
-
-    from kronos import evolution
-
-    parts = text.split()
-    action = parts[1].lower() if len(parts) > 1 else "list"
-    agent = settings.agent_name
-
-    if action == "list":
-        pending = evolution.list_pending(agent)
-        if not pending:
-            return "🧬 Нет предложений эволюции персоны."
-        lines = ["🧬 Предложения эволюции персоны:"]
-        for proposal in pending:
-            lines.append(f"#{proposal['id']} → {proposal['target']}: {proposal['rationale'][:80]}")
-        lines.append("\n/persona approve <id> · /persona reject <id>")
-        return "\n".join(lines)
-
-    if action in ("approve", "reject") and len(parts) > 2 and parts[2].isdigit():
-        pid = int(parts[2])
-        decided = evolution.decide_proposal(pid, agent, approved=(action == "approve"))
-        if decided is None:
-            return f"Предложение #{pid} не найдено или уже обработано."
-        if action == "reject":
-            return f"❌ Отклонил предложение #{pid}."
-        path = evolution.apply_proposal(decided)
-        get_swarm().incr_metric("persona_proposals_approved")
-        return f"✅ Применил предложение #{pid} к {decided['target'].upper()}\n{path}"
-
-    return "Использование: /persona [list | approve <id> | reject <id>]"
-
-
-# --- /stats command handler (roadmap 6.2) ---
-
-
-async def _handle_stats_command(text: str) -> str | None:
-    """Handle /stats [today|week]. Returns reply text, or None if not /stats."""
-    if not text.startswith("/stats"):
-        return None
-
-    from kronos.security.cost_stats import cost_report, swarm_cost_by_agent
-
-    parts = text.split()
-    period = "week" if len(parts) > 1 and parts[1].lower().startswith("week") else "today"
-    period_ru = "неделя" if period == "week" else "сегодня"
-
-    report = cost_report(period)
-    total = report["total"]
-    status = get_guardian().get_status()
-
-    lines = [f"📊 Расходы ({period_ru}) — {settings.agent_name}"]
-    if total["requests"] == 0:
-        lines.append("Запросов пока нет.")
-    else:
-        for tier, stats in sorted(report["by_tier"].items()):
-            lines.append(f"• {tier}: {stats['requests']} зпр · ${stats['cost']:.4f}")
-        lines.append(f"• Итого: {total['requests']} зпр · ${total['cost']:.4f}")
-
-    daily = status["daily_cost"]
-    limit = status["daily_limit"] or 0
-    pct = (daily / limit * 100) if limit else 0
-    lines.append(f"\nДневной бюджет: ${daily:.2f} / ${limit:.2f} ({pct:.0f}%)")
-
-    swarm = swarm_cost_by_agent(period)
-    if len(swarm) > 1:
-        lines.append(f"\nПо агентам ({period_ru}):")
-        for agent, cost in sorted(swarm.items(), key=lambda kv: -kv[1]):
-            lines.append(f"• {agent}: ${cost:.4f}")
-
-    return "\n".join(lines)
-
-
-# --- ASO command handler ---
-
-
-async def _handle_aso_command(text: str) -> str | None:
-    """Handle /aso commands. Returns reply text or None if not an ASO command."""
-    if not text.startswith("/aso"):
-        return None
-
-    parts = text.strip().split(maxsplit=2)
-    cmd = parts[1] if len(parts) > 1 else "help"
-
-    from kronos.agents.aso import (
-        aso_approve,
-        aso_reject,
-        aso_resume,
-        aso_run,
-        aso_skip,
-        aso_status,
-    )
-
-    if cmd == "run":
-        dry_run = "--dry-run" in text
-        return await aso_run(dry_run=dry_run)
-    elif cmd == "approve":
-        return await aso_approve()
-    elif cmd == "reject":
-        comment = parts[2] if len(parts) > 2 else ""
-        return await aso_reject(comment)
-    elif cmd == "skip":
-        return await aso_skip()
-    elif cmd == "resume":
-        return await aso_resume()
-    elif cmd == "status":
-        return await aso_status()
-    else:
-        return (
-            "ASO команды:\n"
-            "/aso run [--dry-run] — запустить цикл\n"
-            "/aso status — текущий статус\n"
-            "/aso approve — одобрить план\n"
-            "/aso reject <комментарий> — отклонить\n"
-            "/aso skip — пропустить цикл\n"
-            "/aso resume — продолжить после ожидания"
-        )
-
-
 async def _handle_observer_command(
     text: str,
     *,
@@ -1482,10 +877,6 @@ async def _handle_observer_command(
         is_dm=is_dm,
         actor_id=actor_id,
     )
-
-
-def _is_osint_command(text: str) -> bool:
-    return text.strip().casefold().startswith("/osint")
 
 
 async def _handle_osint_command(
