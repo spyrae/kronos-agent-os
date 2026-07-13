@@ -12,6 +12,7 @@ Routes requests to:
 No LangGraph — uses LLM tool-calling for routing decisions.
 """
 
+import inspect
 import json
 import logging
 from collections.abc import Callable
@@ -31,7 +32,14 @@ from kronos.agents.task import create_task_agent
 from kronos.agents.telegram_channels import create_telegram_channels_agent
 from kronos.agents.topic_research.graph import create_topic_research_agent
 from kronos.config import settings
-from kronos.engine import AgentResult, react_loop
+from kronos.engine import (
+    AgentResult,
+    SubAgentApprovalPause,
+    delegation_ctx,
+    enter_delegation,
+    exit_delegation,
+    react_loop,
+)
 from kronos.llm import get_orchestrator_model
 
 log = logging.getLogger("kronos.agents.supervisor")
@@ -103,6 +111,21 @@ SUPERVISOR_PROMPT = """Ты — Supervisor в системе Kronos (персо�
 {persona_context}"""
 
 
+def _accepts_approval_hooks(fn: Callable) -> bool:
+    """Whether ``fn`` takes the approval-callback kwargs (create_agent's run does).
+
+    Custom sub-agent graphs (deep_research, topic_research, knowledge_pipeline)
+    have their own signatures; we don't force the kwargs on them.
+    """
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return True
+    return "request_tool_approval" in params
+
+
 def _make_delegation_tool(agent_name: str, description: str, agent_fn: Callable) -> StructuredTool:
     """Create a delegation tool that routes to a sub-agent."""
 
@@ -112,12 +135,40 @@ def _make_delegation_tool(agent_name: str, description: str, agent_fn: Callable)
         Args:
             request: The full user request to delegate.
         """
+        # If the parent turn has an approval channel, hand it to the sub-agent so
+        # its approval-worthy tools pause too (instead of silently executing),
+        # and record which delegate_to_X call we're inside so the resume can
+        # re-run it with the approved call exempted.
+        ctx = delegation_ctx()
+        hooks: dict[str, Any] = {}
+        active_token = None
+        if ctx and ctx.get("request_tool_approval") and _accepts_approval_hooks(agent_fn):
+            hooks = {
+                "needs_tool_approval": ctx.get("needs_tool_approval"),
+                "request_tool_approval": ctx.get("request_tool_approval"),
+            }
+            active_token = enter_delegation({
+                "tool_name": ctx.get("tool_name", f"delegate_to_{agent_name}"),
+                "tool_call_id": ctx.get("tool_call_id", ""),
+                "request": request,
+            })
         try:
-            result = await agent_fn([HumanMessage(content=request)])
+            result = await agent_fn([HumanMessage(content=request)], **hooks)
+            if getattr(result, "waiting_approval", False):
+                # The sub-agent paused for approval — bubble it up so the whole
+                # turn pauses rather than returning half-done text here.
+                raise SubAgentApprovalPause(
+                    result.approval_id, result.approval_tool_name or ""
+                )
             return result.content
+        except SubAgentApprovalPause:
+            raise
         except Exception as e:
             log.error("Agent '%s' failed: %s", agent_name, e)
             return f"Агент {agent_name} недоступен: {e}"
+        finally:
+            if active_token is not None:
+                exit_delegation(active_token)
 
     tool_name = f"delegate_to_{agent_name}"
     return StructuredTool.from_function(

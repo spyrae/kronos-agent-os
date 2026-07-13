@@ -13,6 +13,7 @@ import inspect
 import logging
 import time
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any
 
@@ -35,6 +36,67 @@ ToolCacheGetCallback = Callable[[str], Any]
 ToolCacheSaveCallback = Callable[[str, str], Any]
 ToolApprovalPredicate = Callable[[BaseTool, dict], Any]
 ToolApprovalRequestCallback = Callable[[BaseTool, dict], Any]
+
+
+class SubAgentApprovalPause(Exception):  # noqa: N818 - control-flow signal, not an error
+    """Raised by a delegation tool when its sub-agent paused for approval.
+
+    A sub-agent runs inside the parent's ``delegate_to_X`` tool call, so an
+    approval it needs would otherwise be swallowed at that boundary (the tool
+    would just return text and the parent loop would continue). This exception
+    carries the pending approval up so the whole turn pauses: the delegate_to_X
+    call is left unanswered and re-run on resume with the approved call exempted.
+    """
+
+    def __init__(self, approval_id: str, tool_name: str):
+        super().__init__(f"sub-agent approval pending: {tool_name}")
+        self.approval_id = approval_id
+        self.tool_name = tool_name
+
+
+# Published by react_loop immediately before it runs a tool, so a delegation
+# tool can read the parent's approval hooks and its own delegate_to_X call
+# context (name/id/request). A delegation tool reads it synchronously at entry,
+# before its sub-agent runs, so no reset is needed — the next tool overwrites it.
+_delegation_ctx: ContextVar[dict | None] = ContextVar("delegation_ctx", default=None)
+# Set by a delegation tool around its sub-agent run: the frozen delegate_to_X
+# context, read by the approval-request callback to tag a nested approval so the
+# resume can re-run that delegation with the approved sub-call exempted.
+_active_delegation: ContextVar[dict | None] = ContextVar("active_delegation", default=None)
+
+
+def delegation_ctx() -> dict | None:
+    """Parent approval hooks + current tool call, for delegation tools."""
+    return _delegation_ctx.get()
+
+
+def current_delegation() -> dict | None:
+    """The delegate_to_X context we're executing inside, or None."""
+    return _active_delegation.get()
+
+
+def enter_delegation(ctx: dict) -> Any:
+    """Mark that we're running inside a delegate_to_X call; returns a reset token."""
+    return _active_delegation.set(ctx)
+
+
+def exit_delegation(token: Any) -> None:
+    """Clear the active-delegation marker set by :func:`enter_delegation`."""
+    _active_delegation.reset(token)
+
+
+def publish_delegation_ctx(ctx: dict) -> Any:
+    """Publish the delegation context (parent hooks + call info); returns a token.
+
+    react_loop publishes this before each tool; the resume path uses it to
+    re-run a delegation with the approved sub-call exempted."""
+    return _delegation_ctx.set(ctx)
+
+
+def clear_delegation_ctx(token: Any) -> None:
+    """Undo a :func:`publish_delegation_ctx`."""
+    _delegation_ctx.reset(token)
+
 
 RAW_TOOL_CONTENT_KEY = "raw_content"
 MODEL_OUTPUT_MAX_CHARS = 2400
@@ -290,6 +352,10 @@ async def execute_tool(
             # audit journal) stays the unwrapped original.
             content = wrap_untrusted(content, label=f"tool:{tool.name}")
 
+    except SubAgentApprovalPause:
+        # A delegated sub-agent needs approval — propagate so react_loop pauses
+        # the whole turn rather than recording this as a tool error/result.
+        raise
     except TimeoutError:
         content = f"[ERROR] Tool '{tool.name}' timed out after {TOOL_TIMEOUT_SECONDS}s"
         raw_content = content
@@ -569,7 +635,51 @@ async def react_loop(
                         await write_tool_result(tool_call_id, str(tm.content))
                     else:
                         log.info("Executing tool: %s (args: %s)", tool_name, str(tc.get("args", {}))[:200])
-                        tm = await execute_tool(tool, tc, error_handler)
+                        # Publish approval hooks + this call's context so a
+                        # delegation tool can hand the same approval channel to
+                        # its sub-agent (it reads this synchronously at entry).
+                        _delegation_ctx.set({
+                            "request_tool_approval": request_tool_approval,
+                            "needs_tool_approval": needs_tool_approval,
+                            "tool_name": tool_name,
+                            "tool_call_id": tool_call_id,
+                            "request": (tc.get("args") or {}).get("request", ""),
+                        })
+                        try:
+                            tm = await execute_tool(tool, tc, error_handler)
+                        except SubAgentApprovalPause as pause:
+                            # A delegated sub-agent paused for approval: bubble it
+                            # up as a top-level pause. The delegate_to_X call (tc)
+                            # is left unanswered and re-run on resume; the other
+                            # calls in this batch get deferred placeholders.
+                            if tool_messages:
+                                messages.extend(tool_messages)
+                                call_messages.extend(tool_messages)
+                                await emit_message_delta(tool_messages)
+                            deferred = _deferred_tool_messages(response.tool_calls, tc)
+                            if deferred:
+                                messages.extend(deferred)
+                                call_messages.extend(deferred)
+                                await emit_message_delta(deferred)
+                            emit_tool_event("tool_approval_required", {
+                                "name": pause.tool_name,
+                                "call_id": tool_call_id,
+                                "approval_id": pause.approval_id,
+                                "turn": turn + 1,
+                            })
+                            return AgentResult(
+                                messages=messages,
+                                content=(
+                                    "⚠️ Нужно подтверждение перед выполнением tool-call.\n"
+                                    f"Tool: `{pause.tool_name}`\n"
+                                    f"Approval ID: `{pause.approval_id}`\n\n"
+                                    "Нажми Approve/Reject в Telegram или обработай approval вручную."
+                                ),
+                                tool_calls_count=total_tool_calls,
+                                waiting_approval=True,
+                                approval_id=pause.approval_id,
+                                approval_tool_name=pause.tool_name,
+                            )
                         await write_tool_result(tool_call_id, str(tm.content))
                         log.info("Tool result: %s → %s", tool_name, str(tm.content)[:200])
                 raw_content = tool_message_raw_content(tm)
@@ -652,6 +762,9 @@ def create_agent(
     async def run(
         messages: list[BaseMessage],
         extra_tools: list[BaseTool] | None = None,
+        *,
+        needs_tool_approval: ToolApprovalPredicate | None = None,
+        request_tool_approval: ToolApprovalRequestCallback | None = None,
     ) -> AgentResult:
         all_tools = list(tools)
         if extra_tools:
@@ -665,6 +778,8 @@ def create_agent(
             max_turns=max_turns,
             error_handler=error_handler,
             on_tool_event=on_tool_event,
+            needs_tool_approval=needs_tool_approval,
+            request_tool_approval=request_tool_approval,
         )
 
     run.__name__ = name

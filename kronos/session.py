@@ -177,9 +177,17 @@ class SessionStore:
                     requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     decided_at TIMESTAMP,
                     decided_by TEXT,
-                    decision TEXT
+                    decision TEXT,
+                    delegation_json TEXT
                 )
             """)
+            # delegation_json arrived with nested sub-agent approvals (it records
+            # which delegate_to_X call to re-run on resume). Backfill it on
+            # databases created before the column existed.
+            cursor = await db.execute("PRAGMA table_info(pending_approvals)")
+            columns = {row[1] for row in await cursor.fetchall()}
+            if "delegation_json" not in columns:
+                await db.execute("ALTER TABLE pending_approvals ADD COLUMN delegation_json TEXT")
             await db.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_approvals_turn_call
                     ON pending_approvals(turn_id, tool_call_id)
@@ -289,6 +297,13 @@ class SessionStore:
             args = json.loads(row[5] or "{}")
         except (json.JSONDecodeError, TypeError):
             args = {}
+        delegation = None
+        # row[12] is delegation_json; older callers may SELECT fewer columns.
+        if len(row) > 12 and row[12]:
+            try:
+                delegation = json.loads(row[12])
+            except (json.JSONDecodeError, TypeError):
+                delegation = None
         return {
             "approval_id": row[0],
             "turn_id": row[1],
@@ -302,6 +317,7 @@ class SessionStore:
             "decided_by": row[9],
             "decision": row[10],
             "input_message": row[11],
+            "delegation": delegation,
         }
 
     async def create_pending_approval(
@@ -312,10 +328,19 @@ class SessionStore:
         tool_call_id: str,
         tool_name: str,
         args: dict,
+        delegation: dict | None = None,
     ) -> str:
-        """Create or reuse a pending approval for a durable tool call."""
+        """Create or reuse a pending approval for a durable tool call.
+
+        ``delegation`` is set when the approval originates inside a sub-agent:
+        it records the parent ``delegate_to_X`` call (name, id, request) so the
+        resume can re-run that delegation with the approved call exempted,
+        rather than trying to execute the sub-agent's tool at the top level
+        (where it isn't registered).
+        """
         approval_id = str(uuid.uuid4())
         args_json = json.dumps(args or {}, ensure_ascii=False, default=str)
+        delegation_json = json.dumps(delegation, ensure_ascii=False, default=str) if delegation else None
 
         async with self._open_db() as db:
             await self._ensure_table(db)
@@ -338,10 +363,10 @@ class SessionStore:
             await db.execute(
                 """
                 INSERT OR IGNORE INTO pending_approvals
-                    (approval_id, turn_id, thread_id, tool_call_id, tool_name, args_json)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (approval_id, turn_id, thread_id, tool_call_id, tool_name, args_json, delegation_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (approval_id, turn_id, thread_id, tool_call_id, tool_name, args_json),
+                (approval_id, turn_id, thread_id, tool_call_id, tool_name, args_json, delegation_json),
             )
             cursor = await db.execute(
                 """
@@ -379,7 +404,8 @@ class SessionStore:
                     p.decided_at,
                     p.decided_by,
                     p.decision,
-                    t.input_message
+                    t.input_message,
+                    p.delegation_json
                 FROM pending_approvals p
                 JOIN active_turns t ON t.turn_id = p.turn_id
                 WHERE p.approval_id = ?
@@ -416,7 +442,8 @@ class SessionStore:
                     p.decided_at,
                     p.decided_by,
                     p.decision,
-                    t.input_message
+                    t.input_message,
+                    p.delegation_json
                 FROM pending_approvals p
                 JOIN active_turns t ON t.turn_id = p.turn_id
                 WHERE p.approval_id = ? AND p.status = 'pending'
