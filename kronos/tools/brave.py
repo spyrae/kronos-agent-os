@@ -70,10 +70,7 @@ def search(query: str, count: int = 10, freshness: str = "pd") -> list[SearchRes
     global _brave_unavailable_until
     now_mono = time.monotonic()
     if _brave_unavailable_until > now_mono:
-        if settings.brave_api_key:
-            return _fallback_to_exa(query, count, freshness, "quota cooldown")
-        # No Brave key configured at all — go straight to Exa silently.
-        return _exa.search(query, count=count, freshness=freshness)
+        return _fallback_to_exa(query, count, freshness, "quota cooldown")
 
     if not settings.brave_api_key:
         # No Brave key: try Exa instead of returning empty (preserves callers).
