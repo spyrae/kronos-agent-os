@@ -17,6 +17,18 @@ jobs:
       - run: pip install ruff
       - run: ruff check kronos/ dashboard/ aso/ tests/
 
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install uv
+      # Fails if uv.lock is stale vs pyproject.toml — keeps the pinned
+      # dependency tree in sync so `uv sync` installs are reproducible.
+      - run: uv lock --check
+
   test:
     runs-on: ubuntu-latest
     needs: lint
