@@ -15,7 +15,11 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.integration
+# No module-level integration mark: TestAinvokeContract is a pure signature
+# guard that MUST run in the default CI suite (`-m "not integration"`) — that
+# is the whole point of a contract regression guard. Only agent construction
+# needs the heavier workspace/settings setup, so the integration mark is
+# applied to that class alone (below), not blanket across the module.
 
 
 @pytest.fixture
@@ -51,6 +55,7 @@ def patched_settings(workspace_dir, monkeypatch, tmp_path):
     return settings
 
 
+@pytest.mark.integration
 class TestKronosAgentConstruction:
     def test_constructs_with_no_tools_and_no_memory(self, patched_settings):
         from kronos.graph import KronosAgent
@@ -97,7 +102,11 @@ class TestAinvokeContract:
             "source_kind",
             "persist_user_turn",
             "extra_system_context",
+            "on_tool_event",
+            "force_tier",
         }
         assert sig.parameters["source_kind"].default == "user"
         assert sig.parameters["persist_user_turn"].default is True
         assert sig.parameters["extra_system_context"].default == ""
+        assert sig.parameters["on_tool_event"].default is None
+        assert sig.parameters["force_tier"].default is None
