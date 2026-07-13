@@ -55,7 +55,8 @@ def _count(table: str, filters: dict | None = None) -> int | None:
         params = {"select": "count"}
         if filters:
             params.update(filters)
-        return _rest_get(table, params, head=True)
+        result = _rest_get(table, params, head=True)
+        return result if isinstance(result, int) else None
     except Exception as e:
         log.debug("Count for %s failed: %s", table, e)
         return None

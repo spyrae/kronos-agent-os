@@ -55,6 +55,8 @@ def collect() -> dict:
                 "fromTimestamp": yesterday.isoformat(),
             },
         )
+        if not isinstance(traces, dict):
+            return {"error": "Unexpected Langfuse traces response"}
 
         total_traces = traces.get("meta", {}).get("totalItems", 0)
 
@@ -68,6 +70,8 @@ def collect() -> dict:
                 "fromStartTime": yesterday.isoformat(),
             },
         )
+        if not isinstance(observations, dict):
+            return {"error": "Unexpected Langfuse observations response"}
 
         obs_list = observations.get("data", [])
         total_observations = observations.get("meta", {}).get("totalItems", 0)

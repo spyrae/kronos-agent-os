@@ -53,6 +53,8 @@ def _prom_query(query: str) -> float | None:
             f"/api/datasources/proxy/uid/{uid}/api/v1/query",
             {"query": query},
         )
+        if not isinstance(data, dict):
+            return None
         results = data.get("data", {}).get("result", [])
         if results and results[0].get("value"):
             return float(results[0]["value"][1])
