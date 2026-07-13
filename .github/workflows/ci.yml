@@ -33,7 +33,9 @@ jobs:
       - run: kaos demo
       - run: kaos init smoke-agent --role "CI smoke test agent" --dry-run
       - run: kaos connect telegram
-      - run: pytest -m "not integration" -v
+      - run: >-
+          pytest -m "not integration" --cov=kronos --cov=dashboard.api --cov=aso
+          --cov-report=term --cov-fail-under=53 -v
 
   quality-report:
     runs-on: ubuntu-latest
