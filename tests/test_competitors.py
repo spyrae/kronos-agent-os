@@ -1,0 +1,31 @@
+import pytest
+
+from kronos.competitors.tracker import CompetitiveTracker
+from kronos.config import settings
+
+
+@pytest.fixture
+def tracker(tmp_path, monkeypatch) -> CompetitiveTracker:
+    monkeypatch.setattr(settings, "db_dir", str(tmp_path))
+
+    from kronos import db as database
+
+    database._instances.clear()
+    return CompetitiveTracker()
+
+
+def test_update_preserves_fields_that_are_not_supplied(tracker: CompetitiveTracker) -> None:
+    tracker.update(
+        "ai_chat",
+        our_status="leader",
+        competitor_leader="Rival",
+        notes="Original note",
+        trend="improving",
+    )
+    tracker.update("ai_chat", notes="Updated note")
+
+    row = next(item for item in tracker.get_all() if item["feature_area"] == "ai_chat")
+    assert row["our_status"] == "leader"
+    assert row["competitor_leader"] == "Rival"
+    assert row["notes"] == "Updated note"
+    assert row["trend"] == "improving"

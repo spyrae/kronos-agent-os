@@ -73,26 +73,15 @@ class CompetitiveTracker:
         trend: str | None = None,
     ) -> None:
         """Update a specific feature area."""
-        sets = ["last_updated = CURRENT_TIMESTAMP"]
-        params = []
-
-        if our_status is not None:
-            sets.append("our_status = ?")
-            params.append(our_status)
-        if competitor_leader is not None:
-            sets.append("competitor_leader = ?")
-            params.append(competitor_leader)
-        if notes is not None:
-            sets.append("notes = ?")
-            params.append(notes)
-        if trend is not None:
-            sets.append("trend = ?")
-            params.append(trend)
-
-        params.append(feature_area)
         self._db.write(
-            f"UPDATE competitive_advantages SET {', '.join(sets)} WHERE feature_area = ?",
-            tuple(params),
+            "UPDATE competitive_advantages SET "
+            "our_status = COALESCE(?, our_status), "
+            "competitor_leader = COALESCE(?, competitor_leader), "
+            "notes = COALESCE(?, notes), "
+            "trend = COALESCE(?, trend), "
+            "last_updated = CURRENT_TIMESTAMP "
+            "WHERE feature_area = ?",
+            (our_status, competitor_leader, notes, trend, feature_area),
         )
 
     def bulk_update_from_llm(self, updates: list[dict]) -> None:
