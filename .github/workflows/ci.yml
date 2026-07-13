@@ -16,6 +16,7 @@ jobs:
           python-version: "3.11"
       - run: pip install ruff
       - run: ruff check kronos/ dashboard/ aso/ tests/
+      - run: ruff format --check .
 
   test:
     runs-on: ubuntu-latest
