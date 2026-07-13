@@ -1,23 +1,28 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
 import { login as apiLogin, logout as apiLogout, checkAuth, api } from './api/client';
-import FleetPage from './pages/FleetPage';
-import OverviewPage from './pages/OverviewPage';
-import PersonaPage from './pages/PersonaPage';
-import LogsPage from './pages/LogsPage';
-import McpPage from './pages/McpPage';
-import SkillsPage from './pages/SkillsPage';
-import AgentsPage from './pages/AgentsPage';
-import GraphPage from './pages/GraphPage';
-import SwarmPage from './pages/SwarmPage';
-import ConfigPage from './pages/ConfigPage';
-import MemoryPage from './pages/MemoryPage';
-import MonitoringPage from './pages/MonitoringPage';
-import PerformancePage from './pages/PerformancePage';
-import AnalyticsPage from './pages/AnalyticsPage';
-import AuditTrailPage from './pages/AuditTrailPage';
-import AnomaliesPage from './pages/AnomaliesPage';
-import SandboxPage from './pages/SandboxPage';
+
+// Route-based code splitting: every page ships as its own chunk, fetched on
+// demand instead of in the initial bundle. The shell keeps only React + the
+// router; heavy dependencies that live in a single page — notably the
+// CodeMirror editors on Persona/Skills — never touch first paint.
+const FleetPage = lazy(() => import('./pages/FleetPage'));
+const OverviewPage = lazy(() => import('./pages/OverviewPage'));
+const PersonaPage = lazy(() => import('./pages/PersonaPage'));
+const LogsPage = lazy(() => import('./pages/LogsPage'));
+const McpPage = lazy(() => import('./pages/McpPage'));
+const SkillsPage = lazy(() => import('./pages/SkillsPage'));
+const AgentsPage = lazy(() => import('./pages/AgentsPage'));
+const GraphPage = lazy(() => import('./pages/GraphPage'));
+const SwarmPage = lazy(() => import('./pages/SwarmPage'));
+const ConfigPage = lazy(() => import('./pages/ConfigPage'));
+const MemoryPage = lazy(() => import('./pages/MemoryPage'));
+const MonitoringPage = lazy(() => import('./pages/MonitoringPage'));
+const PerformancePage = lazy(() => import('./pages/PerformancePage'));
+const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage'));
+const AuditTrailPage = lazy(() => import('./pages/AuditTrailPage'));
+const AnomaliesPage = lazy(() => import('./pages/AnomaliesPage'));
+const SandboxPage = lazy(() => import('./pages/SandboxPage'));
 
 /* ── Login ── */
 
@@ -296,6 +301,16 @@ function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
+/* ── Lazy-route fallback ── */
+
+function PageFallback() {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh', color: '#555' }}>
+      Loading…
+    </div>
+  );
+}
+
 /* ── App ── */
 
 export default function App() {
@@ -315,6 +330,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <Layout>
+        <Suspense fallback={<PageFallback />}>
         <Routes>
           <Route path="/" element={<OverviewPage />} />
           <Route path="/fleet" element={<FleetPage />} />
@@ -334,6 +350,7 @@ export default function App() {
           <Route path="/persona" element={<PersonaPage />} />
           <Route path="/config" element={<ConfigPage />} />
         </Routes>
+        </Suspense>
       </Layout>
     </BrowserRouter>
   );
