@@ -7,6 +7,7 @@ Stores messages as JSON in SQLite, keyed by thread_id.
 import hashlib
 import json
 import logging
+import sqlite3
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -187,7 +188,15 @@ class SessionStore:
             cursor = await db.execute("PRAGMA table_info(pending_approvals)")
             columns = {row[1] for row in await cursor.fetchall()}
             if "delegation_json" not in columns:
-                await db.execute("ALTER TABLE pending_approvals ADD COLUMN delegation_json TEXT")
+                try:
+                    await db.execute("ALTER TABLE pending_approvals ADD COLUMN delegation_json TEXT")
+                except sqlite3.OperationalError as e:
+                    # The PRAGMA check and ALTER aren't atomic across connections,
+                    # so a concurrent SessionStore instance may add the column
+                    # first at startup. A duplicate-column error means it now
+                    # exists — which is exactly the desired end state.
+                    if "duplicate column name" not in str(e).lower():
+                        raise
             await db.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_approvals_turn_call
                     ON pending_approvals(turn_id, tool_call_id)
