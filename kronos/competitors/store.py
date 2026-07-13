@@ -70,6 +70,8 @@ class CompetitorStore:
             "INSERT INTO competitor_snapshots (competitor_id, channel, data) VALUES (?, ?, ?)",
             (competitor_id, channel, json.dumps(data)),
         )
+        if cursor.lastrowid is None:
+            raise RuntimeError("Competitor snapshot insert did not return an id")
         return cursor.lastrowid
 
     def get_latest_snapshot(self, competitor_id: str, channel: str) -> dict | None:
@@ -98,6 +100,8 @@ class CompetitorStore:
             "VALUES (?, ?, ?, ?, ?, ?)",
             (competitor_id, channel, change_type, severity, summary, json.dumps(details) if details else None),
         )
+        if cursor.lastrowid is None:
+            raise RuntimeError("Competitor change insert did not return an id")
         return cursor.lastrowid
 
     def mark_digested(self, change_ids: list[int]) -> None:

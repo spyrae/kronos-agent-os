@@ -34,10 +34,13 @@ def test_update_preserves_fields_that_are_not_supplied(tracker: CompetitiveTrack
 
 def test_mark_digested_marks_only_selected_changes(tracker: CompetitiveTracker) -> None:
     store = CompetitorStore()
+    snapshot_id = store.save_snapshot("rival", "app_store", {"rating": 4.5})
     first_change = store.save_change("rival", "app_store", "pricing", "info", "New price")
     second_change = store.save_change("rival", "app_store", "feature", "info", "New feature")
     untouched_change = store.save_change("rival", "app_store", "review", "info", "New review")
 
     store.mark_digested([first_change, second_change])
 
+    assert snapshot_id > 0
+    assert store.get_latest_snapshot("rival", "app_store") == {"rating": 4.5}
     assert [item["id"] for item in store.get_undigested_changes()] == [untouched_change]
