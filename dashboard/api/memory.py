@@ -41,7 +41,17 @@ def _sqlite_exec(db_path: Path, query: str, params: tuple = ()) -> int:
 
 
 def _sqlite_count(db_path: Path, table: str) -> int:
-    rows = _sqlite_rows(db_path, f"SELECT COUNT(*) AS total FROM {table}")
+    queries = {
+        "memory_facts": "SELECT COUNT(*) AS total FROM memory_facts",
+        "entities": "SELECT COUNT(*) AS total FROM entities",
+        "relations": "SELECT COUNT(*) AS total FROM relations",
+        "shared_user_facts": "SELECT COUNT(*) AS total FROM shared_user_facts",
+        "sessions": "SELECT COUNT(*) AS total FROM sessions",
+    }
+    query = queries.get(table)
+    if query is None:
+        return 0
+    rows = _sqlite_rows(db_path, query)
     return int(rows[0]["total"]) if rows else 0
 
 
