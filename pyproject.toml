@@ -107,8 +107,13 @@ documents = [
     "python-docx>=1.1",
 ]
 dev = [
+    "bandit>=1.8",
+    "mypy>=1.15",
+    "pip-audit>=2.9",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "radon>=6.0",
     "ruff>=0.8",
 ]
 
