@@ -202,6 +202,112 @@ def test_add_expense_usd_writes_amount_usd_without_fifo(monkeypatch):
     assert "Rate_USD" not in captured_properties
 
 
+def test_add_expense_split_full_halves_everything_for_idr(monkeypatch, tmp_path):
+    """Maybank-style shared card: the WHOLE IDR charge is halved before recording."""
+    budget_file = tmp_path / "BUDGET.md"
+    budget_file.write_text(_budget_text())
+    captured_properties = {}
+
+    monkeypatch.setattr(expense, "_budget_path", lambda: str(budget_file))
+    monkeypatch.setattr(expense, "_schedule_duplicate_cleanup", lambda **kwargs: None)
+
+    def fake_notion_create_page(properties):
+        captured_properties.update(properties)
+        return {"id": "page-id"}
+
+    monkeypatch.setattr(expense, "_notion_create_page", fake_notion_create_page)
+
+    result = expense.add_expense.invoke(
+        {
+            "description": "Ужин",
+            "amount": 411500,
+            "currency": "IDR",
+            "category": "Food",
+            "split_full": True,
+        }
+    )
+
+    # amount, Amount_IDR, converted RUB/USD AND the budget deduction are all halved.
+    assert "✅ 'Ужин' — 205,750 IDR" in result
+    assert "(split, твоя доля)" in result
+    assert captured_properties["Amount_IDR"] == {"number": 205750}
+    assert captured_properties["Amount_RUB"] == {"number": 881}    # 205750 / 233.5
+    assert captured_properties["Amount_USD"] == {"number": 12.62}  # 205750 / 16300
+    assert captured_properties["Split"] == {"checkbox": True}
+    # Budget deducts the halved amount, not the full charge.
+    assert (
+        "| 1 | 01.06.2026 | 5,000,000 | 4,794,250 | 233.5 | 16300 | Test |"
+        in budget_file.read_text()
+    )
+
+
+def test_add_expense_split_keeps_idr_whole_and_halves_only_share(monkeypatch, tmp_path):
+    """Regression: legacy `split` keeps Amount_IDR whole, halving only RUB/USD."""
+    budget_file = tmp_path / "BUDGET.md"
+    budget_file.write_text(_budget_text())
+    captured_properties = {}
+
+    monkeypatch.setattr(expense, "_budget_path", lambda: str(budget_file))
+    monkeypatch.setattr(expense, "_schedule_duplicate_cleanup", lambda **kwargs: None)
+
+    def fake_notion_create_page(properties):
+        captured_properties.update(properties)
+        return {"id": "page-id"}
+
+    monkeypatch.setattr(expense, "_notion_create_page", fake_notion_create_page)
+
+    result = expense.add_expense.invoke(
+        {
+            "description": "Кафе",
+            "amount": 411500,
+            "currency": "IDR",
+            "category": "Food",
+            "split": True,
+        }
+    )
+
+    assert "✅ 'Кафе' — 411,500 IDR" in result   # full charge shown
+    assert captured_properties["Amount_IDR"] == {"number": 411500}  # NOT halved
+    assert captured_properties["Amount_RUB"] == {"number": 881}     # 1762 / 2
+    assert captured_properties["Amount_USD"] == {"number": 12.62}   # 25.25 / 2
+    assert captured_properties["Split"] == {"checkbox": True}
+    # The full charge still leaves the shared IDR budget.
+    assert (
+        "| 1 | 01.06.2026 | 5,000,000 | 4,588,500 | 233.5 | 16300 | Test |"
+        in budget_file.read_text()
+    )
+
+
+def test_add_expense_split_full_halves_rub_without_fifo(monkeypatch):
+    captured_properties = {}
+
+    monkeypatch.setattr(
+        expense,
+        "_budget_path",
+        lambda: (_ for _ in ()).throw(AssertionError("RUB must not read budget")),
+    )
+
+    def fake_notion_create_page(properties):
+        captured_properties.update(properties)
+        return {"id": "page-id"}
+
+    monkeypatch.setattr(expense, "_notion_create_page", fake_notion_create_page)
+
+    result = expense.add_expense.invoke(
+        {
+            "description": "Подписка",
+            "amount": 496,
+            "currency": "RUB",
+            "category": "Subscriptions",
+            "split_full": True,
+        }
+    )
+
+    assert "✅ 'Подписка' — 248 ₽" in result
+    assert captured_properties["Amount_RUB"] == {"number": 248}   # 496 / 2
+    assert captured_properties["Split"] == {"checkbox": True}
+
+
 def test_add_expense_rejects_unknown_currency(monkeypatch):
     monkeypatch.setattr(
         expense,

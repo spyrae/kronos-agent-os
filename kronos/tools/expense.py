@@ -442,6 +442,7 @@ def add_expense(
     category: str,
     date: str | None = None,
     split: bool = False,
+    split_full: bool = False,
     ref: str | None = None,
 ) -> str:
     """Add an expense to Notion with optional automatic FIFO budget calculation.
@@ -460,7 +461,13 @@ def add_expense(
         currency: "IDR", "RUB", or "USD"
         category: One of: Food, Transport, Subscriptions, Shopping, Travel, Health, Entertainment, Other
         date: DO NOT SET unless user specified a date. Auto-defaults to today. Dates >30 days ago are rejected.
-        split: True if expense is split 50/50 (with Sasha). Default False.
+        split: True if only your RUB/USD share is halved while the original IDR
+            amount stays whole (a 50/50 split with Sasha where the full charge left
+            the shared IDR budget). Ticks the Notion Split checkbox.
+        split_full: True if the WHOLE charge is halved before recording — the
+            amount itself, the FIFO budget deduction and every converted amount.
+            For shared cards (e.g. Maybank) where only half of each charge is ours.
+            Also ticks the Notion Split checkbox. Do not combine with `split`.
         ref: Reference number for deduplication (optional).
     """
     # Validate category
@@ -474,6 +481,15 @@ def add_expense(
 
     # Validate and sanitize date (catches LLM hallucinating wrong year/month)
     date, date_warning = _validate_date(date)
+
+    # split_full halves the WHOLE charge up front — the amount, and therefore the
+    # FIFO budget deduction, Amount_IDR and every converted amount downstream. It
+    # differs from `split`, which keeps Amount_IDR whole and only halves the
+    # converted RUB/USD share. Both tick the Notion Split checkbox (mark_split).
+    mark_split = split or split_full
+    if split_full:
+        amount = round(amount / 2, 2) if currency == "USD" else round(amount / 2)
+        split = False  # amount is already halved — do not halve the share again
 
     # --- FIFO budget calculation for IDR ---
     amount_rub = None
@@ -527,7 +543,7 @@ def add_expense(
         "Description": {"title": [{"text": {"content": description}}]},
         "Date": {"date": {"start": date}},
         "Category": {"select": {"name": category}},
-        "Split": {"checkbox": split},
+        "Split": {"checkbox": mark_split},
         "Status": {"select": {"name": "Processed"}},
     }
 
@@ -597,7 +613,7 @@ def add_expense(
             conv.append(f"{amount_usd:,.2f} $")
         if conv:
             parts.append("= " + " / ".join(conv))
-    if split:
+    if mark_split:
         parts.append("(split, твоя доля)")
     parts.append(f"| Дата: {date}")
     if budget_updated:
