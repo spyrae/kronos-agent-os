@@ -21,6 +21,7 @@ from langchain_core.tools import tool
 
 from kronos.cron.expenses.gmail import archiving_enabled, get_gmail_client
 from kronos.cron.expenses.ledger import get_ledger
+from kronos.cron.expenses.processor import _is_split_source
 from kronos.tools.expense import VALID_CATEGORIES, add_expense
 
 log = logging.getLogger("kronos.tools.expense_pending")
@@ -81,6 +82,7 @@ async def resolve_pending_expense(pending_id: int, category: str) -> str:
         "currency": row["currency"],
         "category": category,
         "date": row["expense_date"],
+        "split_full": _is_split_source(row["source"]),
         "ref": row["message_id"],
     }))
     if result.startswith("[ERROR]"):

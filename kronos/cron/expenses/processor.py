@@ -20,9 +20,13 @@ Per email::
          if only duplicates       → archive email + mark duplicate
          if only pending          → leave email in inbox, keep it queued
 
-Ordering: Grab is searched before the banks so that when both email about one
-card charge, Grab's richer record lands first and the bank copy dedups against
-it (the user's "dedup by amount+date, keep the more detailed one" choice).
+Ordering: Maybank is searched FIRST because it is the only split source and a
+Grab ride paid by the Maybank card arrives from BOTH Grab and Maybank — the
+Maybank copy must land first so the charge is halved (split), and the Grab copy
+dedups against it. A Grab ride NOT paid by Maybank has no Maybank copy, so it is
+recorded whole (not split) — exactly "split only when it overlaps Maybank".
+Grab still precedes wondr/permata so its richer record wins over those banks
+(the user's "dedup by amount+date, keep the more detailed one" choice).
 
 Every run posts a report to the finance topic — always, even on empty runs —
 listing how many emails were scanned, what was recorded (with amounts), what was
@@ -54,6 +58,15 @@ DEFAULT_CONFIDENCE_THRESHOLD = 0.6
 DEFAULT_LOOKBACK_DAYS = 2
 DEFAULT_SEARCH_LIMIT = 25
 
+# Sources whose charges are shared 50/50 and must be halved in full before they
+# reach Notion (amount, FIFO budget and every converted amount), then flagged
+# with the Split checkbox. See add_expense(split_full=...).
+SPLIT_SOURCES = frozenset({"maybank"})
+
+
+def _is_split_source(source: str | None) -> bool:
+    return (source or "").lower() in SPLIT_SOURCES
+
 
 def _today() -> str:
     return datetime.now(USER_TZ).strftime("%Y-%m-%d")
@@ -67,7 +80,7 @@ def _threshold() -> float:
 
 
 def _source_queries() -> list[tuple[str, str]]:
-    """(source, Gmail query) pairs. Grab first for dedup detail-priority.
+    """(source, Gmail query) pairs. Maybank first (split priority), then Grab.
 
     Queries are overridable per source via env once exact sender addresses are
     known; the defaults are broad name/keyword matches (incl. Indonesian terms)
@@ -84,7 +97,14 @@ def _source_queries() -> list[tuple[str, str]]:
     grab = os.environ.get("EMAIL_EXPENSES_QUERY_GRAB", f"{win} from:grab")
     wondr = os.environ.get("EMAIL_EXPENSES_QUERY_WONDR", f"{win} from:wondr")
     permata = os.environ.get("EMAIL_EXPENSES_QUERY_PERMATA", f"{win} from:permata")
-    return [("grab", grab), ("wondr", wondr), ("permata", permata)]
+    # ``-from:e-statement`` drops the monthly Consolidated Statement (a PDF summary
+    # of the whole month, not a single charge) that also comes from @maybank.co.id.
+    maybank = os.environ.get(
+        "EMAIL_EXPENSES_QUERY_MAYBANK", f"{win} from:maybank -from:e-statement"
+    )
+    # Maybank FIRST so a card-paid Grab charge is halved before its Grab copy is
+    # seen (see module docstring). Grab still precedes wondr/permata for detail.
+    return [("maybank", maybank), ("grab", grab), ("wondr", wondr), ("permata", permata)]
 
 
 def _new_counts() -> dict[str, int]:
@@ -275,8 +295,9 @@ def _handle_expense(
     if dry_run:
         if amount_idr is not None:
             seen_dry.add(dup_key)
+        split_note = " ÷2 split" if _is_split_source(msg.source) else ""
         report.add_recorded(
-            f"🔎 [{msg.source}] {exp.amount:,.0f} {exp.currency} — {exp.description} "
+            f"🔎 [{msg.source}] {exp.amount:,.0f} {exp.currency}{split_note} — {exp.description} "
             f"→ {category} (conf {exp.confidence:.0%}, audit ✓)"
         )
         counts["recorded"] += 1
@@ -288,6 +309,7 @@ def _handle_expense(
         "currency": exp.currency,
         "category": category,
         "date": exp.expense_date,  # None → add_expense uses today
+        "split_full": _is_split_source(msg.source),
         "ref": msg.message_id,
     })
     if result.startswith("[ERROR]"):

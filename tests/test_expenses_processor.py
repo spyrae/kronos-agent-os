@@ -105,9 +105,88 @@ async def test_happy_path_records_and_archives(ledger, notes, monkeypatch):
     assert counts["archived"] == 1
     assert writer.calls[0]["description"] == "GrabFood"
     assert writer.calls[0]["ref"] == "g1"
+    assert writer.calls[0]["split_full"] is False   # grab is not a split source
     assert gmail.archived == ["g1"]
     assert ledger.is_processed("g1") is True
     assert notes.captured and "Записано: 1" in notes.captured[0][0]
+
+
+@pytest.mark.asyncio
+async def test_maybank_source_is_recorded_as_split_full(ledger, notes, monkeypatch):
+    monkeypatch.setenv("EMAIL_EXPENSES_ARCHIVE", "true")
+    gmail = FakeGmail(
+        {"maybank": [{"message_id": "m1"}]},
+        {"m1": EmailMessage("m1", "Maybank debit IDR 300,000 at Resto", "maybank")},
+    )
+    mapping = {"m1": [ExtractedExpense("Resto", 300000, "IDR", "Food", 0.9, "2026-07-05")]}
+
+    counts, writer = await _run(gmail, ledger, notes, mapping=mapping)
+
+    assert counts["recorded"] == 1
+    # The raw amount is passed; add_expense halves it because split_full is set.
+    assert writer.calls[0]["amount"] == 300000
+    assert writer.calls[0]["split_full"] is True
+    assert ledger.is_processed("m1") is True
+
+
+@pytest.mark.asyncio
+async def test_maybank_split_shown_in_dry_run_preview(ledger, notes):
+    gmail = FakeGmail(
+        {"maybank": [{"message_id": "m1"}]},
+        {"m1": EmailMessage("m1", "Maybank debit IDR 300,000 at Resto", "maybank")},
+    )
+    mapping = {"m1": [ExtractedExpense("Resto", 300000, "IDR", "Food", 0.9, "2026-07-05")]}
+    writer = Writer()
+
+    await proc.run_email_expenses(
+        gmail_client=gmail, ledger=ledger,
+        extractor=_extractor(mapping), auditor=_auditor(ok=True),
+        expense_writer=writer, notifier=notes, dry_run=True,
+    )
+
+    assert writer.calls == []                # dry run writes nothing
+    report = notes.captured[0][0]
+    assert "÷2 split" in report              # preview flags the halving honestly
+
+
+@pytest.mark.asyncio
+async def test_grab_paid_by_maybank_is_split_and_grab_copy_dedups(ledger, notes, monkeypatch):
+    """A Grab ride paid by the Maybank card arrives twice: the Maybank (split)
+    copy is recorded first and the Grab copy dedups against it — so the charge is
+    halved, not recorded whole. A Grab ride NOT on the Maybank card has no Maybank
+    copy and stays whole (covered by the plain grab happy-path test)."""
+    monkeypatch.setenv("EMAIL_EXPENSES_ARCHIVE", "true")
+    gmail = FakeGmail(
+        {
+            "maybank": [{"message_id": "mb1"}],
+            "grab": [{"message_id": "gr1"}],
+        },
+        {
+            "mb1": EmailMessage("mb1", "Maybank Debit Purchase Grab* A-XYZ IDR 210,000", "maybank"),
+            "gr1": EmailMessage("gr1", "Your Grab e-receipt 210,000 IDR", "grab"),
+        },
+    )
+    mapping = {
+        "mb1": [ExtractedExpense("Grab* A-XYZ", 210000, "IDR", "Transport", 0.9, "2026-07-12")],
+        "gr1": [ExtractedExpense("GrabRide", 210000, "IDR", "Transport", 0.9, "2026-07-12")],
+    }
+
+    counts, writer = await _run(gmail, ledger, notes, mapping=mapping)
+
+    assert counts["recorded"] == 1
+    assert counts["duplicates"] == 1
+    assert len(writer.calls) == 1
+    assert writer.calls[0]["split_full"] is True     # the Maybank copy won
+    assert writer.calls[0]["amount"] == 210000       # raw amount; add_expense halves it
+
+
+def test_source_queries_put_maybank_first_and_exclude_statement(monkeypatch):
+    monkeypatch.delenv("EMAIL_EXPENSES_QUERY_MAYBANK", raising=False)
+    pairs = proc._source_queries()
+    sources = [s for s, _ in pairs]
+    assert sources[0] == "maybank"                       # split source wins dedup
+    assert sources.index("grab") < sources.index("wondr")  # grab still beats other banks
+    assert "-from:e-statement" in dict(pairs)["maybank"]   # monthly statement excluded
 
 
 @pytest.mark.asyncio

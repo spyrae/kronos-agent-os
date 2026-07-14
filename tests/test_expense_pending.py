@@ -54,6 +54,14 @@ def _seed(ledger) -> int:
     )
 
 
+def _seed_maybank(ledger) -> int:
+    return ledger.add_pending(
+        message_id="m1", source="maybank", description="Resto",
+        amount=300000, currency="IDR", amount_idr=300000,
+        expense_date="2026-07-05", guessed_category="Food", reason="low confidence",
+    )
+
+
 def test_list_empty(ledger):
     assert "Нет расходов" in ep.list_pending_expenses.invoke({})
 
@@ -75,9 +83,22 @@ async def test_resolve_writes_archives_and_marks_processed(ledger, add_expense, 
     assert res.startswith("✅")
     assert add_expense.calls[0]["category"] == "Health"
     assert add_expense.calls[0]["ref"] == "p1"
+    assert add_expense.calls[0]["split_full"] is False   # permata is not a split source
     assert ledger.get_pending(pid)["status"] == "resolved"
     assert gmail.archived == ["p1"]
     assert ledger.is_processed("p1") is True   # so the next cron run skips it
+
+
+@pytest.mark.asyncio
+async def test_resolve_maybank_keeps_split_full(ledger, add_expense, gmail):
+    """A Maybank pending resolved from chat must still be halved (split_full)."""
+    pid = _seed_maybank(ledger)
+
+    res = await ep.resolve_pending_expense.ainvoke({"pending_id": pid, "category": "Food"})
+
+    assert res.startswith("✅")
+    assert add_expense.calls[0]["split_full"] is True
+    assert ledger.get_pending(pid)["status"] == "resolved"
 
 
 @pytest.mark.asyncio
