@@ -46,7 +46,7 @@ and virtual environments are never part of the source-code denominator.
 | Type errors | Findings from the configured `mypy` invocation. A missing or failed type run is reported as unavailable, never as zero. |
 | Vulnerabilities | High and critical findings from `pip-audit` for the locked Python environment. The tool, scope, date, and result are included in every snapshot. |
 | Security findings | Bandit findings for production code only; `tests/` is excluded because test assertions are not production vulnerabilities. |
-| Complexity | Not automated in the CI collector; maintainability is reviewed offline and is not shown as a headline metric (displayed as unavailable). |
+| Complexity | Grade from average cyclomatic complexity (radon over the core paths), scale: A ≤5, B ≤10, C ≤20, D ≤30, E ≤40, F >40. |
 | Duplication | JSCPD result over the core paths; generated and dependency files remain excluded. |
 
 ## Reproducibility and publication

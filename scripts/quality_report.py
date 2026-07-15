@@ -111,6 +111,20 @@ def duplication_percent(raw_dir: Path) -> float | None:
         return None
 
 
+def complexity_grade(raw_dir: Path) -> str | None:
+    """Run radon's cyclomatic-complexity audit and return the average letter grade."""
+    try:
+        result = run_command(
+            ["uvx", "--from", "radon", "radon", "cc", *CORE_PATHS, "-a", "-s"],
+            raw_dir,
+            "radon",
+        )
+    except OSError:
+        return None
+    match = re.search(r"Average complexity: ([A-F]) \(", result.stdout)
+    return match.group(1) if match else None
+
+
 def audit_metrics(raw_dir: Path) -> tuple[int | None, int | None]:
     """Run dependency and source audits, returning known and high findings."""
     audit = run_command(["pip-audit", "--format", "json"], raw_dir, "pip_audit")
@@ -174,6 +188,7 @@ def main() -> int:
     types = run_command(["mypy", "kronos", "dashboard/api", "aso"], raw_dir, "mypy")
     known_vulnerabilities, bandit_high = audit_metrics(raw_dir)
     duplication = duplication_percent(raw_dir)
+    complexity = complexity_grade(raw_dir)
     commit = run_command(["git", "rev-parse", "HEAD"], raw_dir, "git_commit")
 
     report: dict[str, Any] = {
@@ -192,7 +207,7 @@ def main() -> int:
             "vulnerabilities_known_total": known_vulnerabilities,
             "bandit_high": bandit_high,
             "type_errors": count_mypy_findings(types.stdout),
-            "complexity_grade": None,
+            "complexity_grade": complexity,
             "duplication_pct": duplication,
         },
         "tools": {
