@@ -79,6 +79,38 @@ def coverage_percent(raw_dir: Path) -> float | None:
         return None
 
 
+def duplication_percent(raw_dir: Path) -> float | None:
+    """Run jscpd over the core paths and return the duplicated-lines percentage."""
+    report_file = raw_dir / "jscpd" / "jscpd-report.json"
+    try:
+        run_command(
+            [
+                "npx",
+                "--yes",
+                "jscpd@5",
+                "--silent",
+                "--reporters",
+                "json",
+                "--output",
+                str(raw_dir / "jscpd"),
+                "--ignore",
+                "**/tests/**,**/.venv/**,**/migrations/**,**/__pycache__/**",
+                *CORE_PATHS,
+            ],
+            raw_dir,
+            "jscpd",
+        )
+    except OSError:
+        return None
+    if not report_file.exists():
+        return None
+    try:
+        payload = json.loads(report_file.read_text(encoding="utf-8"))
+        return round(float(payload["statistics"]["total"]["percentage"]), 2)
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def audit_metrics(raw_dir: Path) -> tuple[int | None, int | None]:
     """Run dependency and source audits, returning known and high findings."""
     audit = run_command(["pip-audit", "--format", "json"], raw_dir, "pip_audit")
@@ -141,6 +173,7 @@ def main() -> int:
     )
     types = run_command(["mypy", "kronos", "dashboard/api", "aso"], raw_dir, "mypy")
     known_vulnerabilities, bandit_high = audit_metrics(raw_dir)
+    duplication = duplication_percent(raw_dir)
     commit = run_command(["git", "rev-parse", "HEAD"], raw_dir, "git_commit")
 
     report: dict[str, Any] = {
@@ -160,7 +193,7 @@ def main() -> int:
             "bandit_high": bandit_high,
             "type_errors": count_mypy_findings(types.stdout),
             "complexity_grade": None,
-            "duplication_pct": None,
+            "duplication_pct": duplication,
         },
         "tools": {
             "ruff": command_version(["ruff", "--version"], raw_dir, "ruff"),
@@ -168,6 +201,8 @@ def main() -> int:
             "pip_audit": command_version(["pip-audit", "--version"], raw_dir, "pip_audit"),
             "bandit": command_version(["bandit", "--version"], raw_dir, "bandit"),
             "mypy": command_version(["mypy", "--version"], raw_dir, "mypy"),
+            "jscpd": command_version(["npx", "--yes", "jscpd@5", "--version"], raw_dir, "jscpd"),
+            "node": command_version(["node", "--version"], raw_dir, "node"),
         },
         "ci": {"required_gates": False, "badge_url": None},
     }

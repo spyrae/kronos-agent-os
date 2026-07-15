@@ -46,12 +46,12 @@ and virtual environments are never part of the source-code denominator.
 | Type errors | Findings from the configured `mypy` invocation. A missing or failed type run is reported as unavailable, never as zero. |
 | Vulnerabilities | High and critical findings from `pip-audit` for the locked Python environment. The tool, scope, date, and result are included in every snapshot. |
 | Security findings | Bandit findings for production code only; `tests/` is excluded because test assertions are not production vulnerabilities. |
-| Complexity | Radon complexity and maintainability results over the core paths. |
+| Complexity | Not automated in the CI collector; maintainability is reviewed offline and is not shown as a headline metric (displayed as unavailable). |
 | Duplication | JSCPD result over the core paths; generated and dependency files remain excluded. |
 
 ## Reproducibility and publication
 
-`scripts/quality-report.py` is the canonical collector. It records the tool
+`scripts/quality_report.py` is the canonical collector. It records the tool
 versions, UTC timestamp, commit SHA, commands, scope, and normalized metrics
 in `quality.json`. Raw command output remains in CI artifacts and is not
 published to avoid exposing paths, source fragments, or operational data.
