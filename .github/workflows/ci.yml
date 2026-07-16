@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -45,6 +48,68 @@ jobs:
       - run: kaos init smoke-agent --role "CI smoke test agent" --dry-run
       - run: kaos connect telegram
       - run: pytest -m "not integration" -v
+
+  quality-report:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: astral-sh/setup-uv@v5
+      - run: pip install -e ".[dev]"
+      # The collector shells out to these: pytest-cov (coverage), ruff/mypy
+      # (static/types), bandit + pip-audit (security), jscpd via npx
+      # (duplication, needs Node), radon via uvx (complexity, needs uv).
+      - run: pip install bandit pip-audit pytest-cov mypy ruff radon
+      - run: python scripts/quality_report.py --output quality/quality.json
+      - name: Upload quality report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kronos-quality-report
+          path: quality/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Publish quality snapshot
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          FUTURECRAFT_QUALITY_BOT_TOKEN: ${{ secrets.FUTURECRAFT_QUALITY_BOT_TOKEN }}
+          GITHUB_REPOSITORY_NAME: ${{ github.repository }}
+        run: |
+          if [ -z "$FUTURECRAFT_QUALITY_BOT_TOKEN" ]; then
+            echo "FUTURECRAFT_QUALITY_BOT_TOKEN is not configured; skipping publication."
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path("quality/quality.json").read_text(encoding="utf-8"))
+          payload = {
+              "event_type": "quality-report",
+              "client_payload": {
+                  "source_repository": os.environ["GITHUB_REPOSITORY_NAME"],
+                  "report": report,
+              },
+          }
+          Path("quality/dispatch.json").write_text(json.dumps(payload), encoding="utf-8")
+          PY
+
+          curl --fail-with-body --retry 3 --silent --show-error \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $FUTURECRAFT_QUALITY_BOT_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/spyrae/futurecraft-blog-v2/dispatches \
+            --data @quality/dispatch.json
 
   dashboard-ui:
     runs-on: ubuntu-latest
