@@ -187,19 +187,16 @@ def get_nudge_message(level: str, description: str) -> str:
             "Если задача невыполнима — скажи об этом прямо."
         )
     elif level == LoopLevel.CIRCUIT_BREAKER:
-        return (
-            f"[CIRCUIT BREAKER] {description}. "
-            "Выполнение прервано из-за зацикливания."
-        )
+        return f"[CIRCUIT BREAKER] {description}. Выполнение прервано из-за зацикливания."
     return ""
 
 
 def _hash_dict(d: dict) -> str:
     """Deterministic hash of a dict."""
     serialized = json.dumps(d, sort_keys=True, default=str)
-    return hashlib.md5(serialized.encode()).hexdigest()[:12]
+    return hashlib.sha256(serialized.encode()).hexdigest()[:12]
 
 
 def _hash_str(s: str) -> str:
     """Hash of a string (for result comparison)."""
-    return hashlib.md5(s.encode()).hexdigest()[:12]
+    return hashlib.sha256(s.encode()).hexdigest()[:12]

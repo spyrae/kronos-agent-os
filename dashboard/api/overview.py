@@ -54,6 +54,7 @@ def _load_registry() -> dict:
         return json.loads(reg_file.read_text())
     try:
         from dashboard.api.agents import DEFAULT_REGISTRY
+
         return dict(DEFAULT_REGISTRY)
     except Exception:
         return {}
@@ -62,6 +63,7 @@ def _load_registry() -> dict:
 def _get_scheduler():
     try:
         from dashboard.api import monitoring
+
         return monitoring._scheduler
     except Exception:
         return None
@@ -98,7 +100,7 @@ def _classify_activity(entry: dict) -> str:
 
 
 def _activity_id(entry: dict) -> str:
-    digest = hashlib.md5(json.dumps(entry, sort_keys=True, default=str).encode()).hexdigest()[:12]
+    digest = hashlib.sha256(json.dumps(entry, sort_keys=True, default=str).encode()).hexdigest()[:12]
     return f"act_{digest}"
 
 
@@ -161,8 +163,7 @@ def _capability_status() -> dict:
     enabled = sum(1 for item in capabilities if item["status"] == "enabled")
     blocked = sum(1 for item in capabilities if item["status"] == "blocked")
     risky_enabled = sum(
-        1 for item in capabilities
-        if item["status"] == "enabled" and item["risk"] in {"high", "critical"}
+        1 for item in capabilities if item["status"] == "enabled" and item["risk"] in {"high", "critical"}
     )
     sandbox_blocked = not settings.require_dynamic_tool_sandbox
 
@@ -202,15 +203,17 @@ def _recent_activity(entries: list[dict], limit: int = 8) -> list[dict]:
     activity = []
     for entry in reversed(entries[-100:]):
         description = entry.get("input_preview") or entry.get("output_preview") or ""
-        activity.append({
-            "id": _activity_id(entry),
-            "type": _classify_activity(entry),
-            "agent": entry.get("agent", entry.get("tier", "unknown")),
-            "description": description,
-            "timestamp": entry.get("ts", ""),
-            "duration_ms": entry.get("duration_ms"),
-            "cost_usd": entry.get("approx_cost_usd"),
-        })
+        activity.append(
+            {
+                "id": _activity_id(entry),
+                "type": _classify_activity(entry),
+                "agent": entry.get("agent", entry.get("tier", "unknown")),
+                "description": description,
+                "timestamp": entry.get("ts", ""),
+                "duration_ms": entry.get("duration_ms"),
+                "cost_usd": entry.get("approx_cost_usd"),
+            }
+        )
         if len(activity) >= limit:
             break
     return activity
@@ -229,15 +232,17 @@ def _recent_tool_activity(tool_events: list[dict], fallback_entries: list[dict],
             description = f"{tool} — {summary}"
         else:
             description = tool or summary
-        activity.append({
-            "id": _activity_id(entry),
-            "type": str(entry.get("event", "tool")).upper(),
-            "agent": entry.get("agent", "unknown"),
-            "description": description,
-            "timestamp": entry.get("ts", ""),
-            "duration_ms": entry.get("duration_ms"),
-            "cost_usd": entry.get("cost_usd"),
-        })
+        activity.append(
+            {
+                "id": _activity_id(entry),
+                "type": str(entry.get("event", "tool")).upper(),
+                "agent": entry.get("agent", "unknown"),
+                "description": description,
+                "timestamp": entry.get("ts", ""),
+                "duration_ms": entry.get("duration_ms"),
+                "cost_usd": entry.get("cost_usd"),
+            }
+        )
         if len(activity) >= limit:
             break
     return activity
@@ -252,14 +257,16 @@ def _cron_jobs() -> dict:
     for name, job in scheduler.jobs.items():
         running = bool(getattr(job, "_running", False))
         enabled = bool(getattr(job, "enabled", False))
-        items.append({
-            "name": name,
-            "enabled": enabled,
-            "running": running,
-            "status": "running" if running else "enabled" if enabled else "disabled",
-            "schedule": _format_schedule(job),
-            "last_run": _format_ts(getattr(job, "last_run", 0.0)),
-        })
+        items.append(
+            {
+                "name": name,
+                "enabled": enabled,
+                "running": running,
+                "status": "running" if running else "enabled" if enabled else "disabled",
+                "schedule": _format_schedule(job),
+                "last_run": _format_ts(getattr(job, "last_run", 0.0)),
+            }
+        )
 
     return {
         "enabled": sum(1 for item in items if item["enabled"]),
@@ -335,6 +342,7 @@ def _coordination_status() -> dict:
 def _approval_status() -> dict:
     try:
         from dashboard.api.config import _load_approvals
+
         approvals = _load_approvals()
     except Exception:
         approvals = []
@@ -369,6 +377,7 @@ async def get_kpi():
     # Memory count
     try:
         from kronos.memory.store import get_memory
+
         mem = get_memory()
         all_mems = mem.get_all(user_id="")
         memories_count = len(all_mems.get("results", []))
@@ -398,6 +407,7 @@ async def get_operations():
     """Per-agent operations breakdown for bar chart."""
     entries = _load_audit_entries()
     from datetime import datetime
+
     today = datetime.now().strftime("%Y-%m-%d")
 
     agents: dict[str, dict[str, int]] = defaultdict(lambda: {"writes": 0, "reads": 0, "searches": 0})

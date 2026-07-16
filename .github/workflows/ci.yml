@@ -66,7 +66,9 @@ jobs:
       # The collector shells out to these: pytest-cov (coverage), ruff/mypy
       # (static/types), bandit + pip-audit (security), jscpd via npx
       # (duplication, needs Node), radon via uvx (complexity, needs uv).
-      - run: pip install bandit pip-audit pytest-cov mypy ruff radon
+      # -U setuptools>=83 clears PYSEC-2026-3447 (setuptools 79 CVE) that
+      # pip-audit finds in the runner's default build environment.
+      - run: pip install -U "setuptools>=83.0.0" bandit pip-audit pytest-cov mypy ruff radon
       - run: python scripts/quality_report.py --output quality/quality.json
       - name: Upload quality report
         if: always()

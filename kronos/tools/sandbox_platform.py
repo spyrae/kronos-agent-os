@@ -311,7 +311,7 @@ def _safe_path_part(value: str) -> str:
 
 def _run_id(request: SandboxRunRequest) -> str:
     raw = json.dumps(_dataclass_payload(request), sort_keys=True, default=str)
-    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
     return f"sbox_{digest}"
 
 
