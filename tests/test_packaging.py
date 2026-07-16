@@ -30,8 +30,7 @@ def test_every_declared_package_data_glob_matches_a_file():
         assert pkg_dir.is_dir(), f"package-data names a missing package dir: {package}"
         for pattern in patterns:
             assert list(pkg_dir.glob(pattern)), (
-                f"package-data {package!r} pattern {pattern!r} matches no file — "
-                "the wheel would ship without it"
+                f"package-data {package!r} pattern {pattern!r} matches no file — the wheel would ship without it"
             )
 
 

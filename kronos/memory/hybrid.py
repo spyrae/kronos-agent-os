@@ -49,12 +49,14 @@ def merge_hybrid_results(
         text = item.get("memory", "")
         if not text:
             continue
-        vector_entries.append({
-            "text": text,
-            "vector_score": item.get("score", 0.0),
-            "fts_score": 0.0,
-            "created_at": item.get("created_at"),
-        })
+        vector_entries.append(
+            {
+                "text": text,
+                "vector_score": item.get("score", 0.0),
+                "fts_score": 0.0,
+                "created_at": item.get("created_at"),
+            }
+        )
 
     # Normalize FTS5 ranks (negative, lower = better) → 0-1 scale
     fts_entries = []
@@ -70,12 +72,14 @@ def merge_hybrid_results(
             if not text:
                 continue
             normalized = abs(item.get("rank", 0)) / max_rank
-            fts_entries.append({
-                "text": text,
-                "vector_score": 0.0,
-                "fts_score": normalized,
-                "created_at": item.get("created_at"),
-            })
+            fts_entries.append(
+                {
+                    "text": text,
+                    "vector_score": 0.0,
+                    "fts_score": normalized,
+                    "created_at": item.get("created_at"),
+                }
+            )
 
     # Merge by text content (union with score combination)
     merged: dict[str, dict] = {}
@@ -97,10 +101,7 @@ def merge_hybrid_results(
     # Compute hybrid score with temporal decay
     now = datetime.now(UTC)
     for entry in merged.values():
-        base_score = (
-            entry["vector_score"] * vector_weight
-            + entry["fts_score"] * text_weight
-        )
+        base_score = entry["vector_score"] * vector_weight + entry["fts_score"] * text_weight
 
         # Boost items found by both methods
         if entry["vector_score"] > 0 and entry["fts_score"] > 0:
@@ -162,10 +163,7 @@ def _mmr_select(candidates: list[dict], limit: int) -> list[dict]:
             relevance = cand["hybrid_score"]
 
             # Max similarity to any already-selected item
-            max_sim = max(
-                _word_overlap(cand["text"], s["text"])
-                for s in selected
-            )
+            max_sim = max(_word_overlap(cand["text"], s["text"]) for s in selected)
 
             mmr_score = MMR_LAMBDA * relevance - (1 - MMR_LAMBDA) * max_sim
             if mmr_score > best_mmr:

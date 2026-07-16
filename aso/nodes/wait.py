@@ -40,19 +40,21 @@ def wait(state: ASOState) -> dict:
     applied_count = changes.get("success_count", 0)
     log.info(
         "Changes applied: %d. Waiting %d days to measure impact.",
-        applied_count, days,
+        applied_count,
+        days,
     )
 
     # interrupt() pauses the graph — state is persisted in SQLite
-    interrupt({
-        "type": "scheduled_wait",
-        "cycle_id": state.get("cycle_id"),
-        "resume_after_days": days,
-        "resume_at": resume_at.isoformat(),
-        "changes_applied_count": applied_count,
-        "message": f"Ожидание {days} дней для сбора статистики. "
-                  f"Возобновление: {resume_at.strftime('%Y-%m-%d')}.",
-    })
+    interrupt(
+        {
+            "type": "scheduled_wait",
+            "cycle_id": state.get("cycle_id"),
+            "resume_after_days": days,
+            "resume_at": resume_at.isoformat(),
+            "changes_applied_count": applied_count,
+            "message": f"Ожидание {days} дней для сбора статистики. Возобновление: {resume_at.strftime('%Y-%m-%d')}.",
+        }
+    )
 
     # Execution continues here after resume
     log.info("=== WAIT: resumed, proceeding to measurement ===")

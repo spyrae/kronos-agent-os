@@ -154,6 +154,7 @@ def _thread_lock(thread_id: str) -> asyncio.Lock:
         _thread_locks[thread_id] = lock
     return lock
 
+
 # Agent reference (set in run_bridge)
 _agent: KronosAgent | None = None
 _client: TelegramClient | None = None
@@ -170,6 +171,8 @@ def get_agent() -> "KronosAgent | None":
     building a second one.
     """
     return _agent
+
+
 _my_username: str | None = None
 
 # Group routing (initialized in run_bridge after login)
@@ -497,6 +500,7 @@ async def _clear_context(chat_id: int, topic_id: int | None = None) -> str:
     result = await _agent.clear_context(thread_id)
     try:
         from kronos.swarm_store import get_swarm
+
         get_swarm().clear_thread_messages(chat_id=chat_id, topic_id=topic_id)
     except Exception as e:
         log.debug("Swarm message clear failed (non-fatal): %s", e)
@@ -1214,9 +1218,7 @@ async def run_bridge(agent: KronosAgent) -> None:
             clean_text = _strip_mention(text) if not is_dm else text
             document_text, doc_error = await _extract_document_message(event)
             if doc_error:
-                await _send_to_chat(
-                    event.chat_id, f"📄 {doc_error}", topic_id=_extract_topic_id(event)
-                )
+                await _send_to_chat(event.chat_id, f"📄 {doc_error}", topic_id=_extract_topic_id(event))
                 return
         else:
             clean_text = _strip_mention(text) if not is_dm else text
@@ -1230,9 +1232,7 @@ async def run_bridge(agent: KronosAgent) -> None:
             invoke_message = _compose_image_agent_message(clean_text, image_analysis)
         elif document:
             doc_filename, _ = _document_info(event)
-            invoke_message = _compose_document_agent_message(
-                clean_text, doc_filename, document_text
-            )
+            invoke_message = _compose_document_agent_message(clean_text, doc_filename, document_text)
         else:
             invoke_message = clean_text
         invoke_source_kind = "user"

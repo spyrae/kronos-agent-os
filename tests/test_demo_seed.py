@@ -31,8 +31,7 @@ def test_seed_demo_state_creates_full_public_fixture(tmp_path):
     assert _count(data_dir / "swarm.db", "shared_user_facts") == 1
 
     tool_events = [
-        json.loads(line)
-        for line in (data_dir / "logs" / "tool_calls.jsonl").read_text(encoding="utf-8").splitlines()
+        json.loads(line) for line in (data_dir / "logs" / "tool_calls.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     approvals = [
         json.loads(line)
@@ -58,16 +57,18 @@ def test_cli_demo_seed_command(tmp_path, capsys):
     data_dir = tmp_path / "dashboard-demo"
     workspace_dir = tmp_path / "agent-demo"
 
-    result = main([
-        "demo-seed",
-        "--data-dir",
-        str(data_dir),
-        "--workspace",
-        str(workspace_dir),
-        "--swarm-db",
-        str(data_dir / "swarm.db"),
-        "--reset",
-    ])
+    result = main(
+        [
+            "demo-seed",
+            "--data-dir",
+            str(data_dir),
+            "--workspace",
+            str(workspace_dir),
+            "--swarm-db",
+            str(data_dir / "swarm.db"),
+            "--reset",
+        ]
+    )
 
     out = capsys.readouterr().out
     assert result == 0

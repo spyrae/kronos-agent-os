@@ -35,9 +35,7 @@ async def test_proposals_listed_and_rejected(evo_env):
     from dashboard.api import persona
     from kronos import evolution
 
-    pid = evolution.create_proposal(
-        agent_name="kronos", target="soul", rationale="be warmer", proposal="Add warmth."
-    )
+    pid = evolution.create_proposal(agent_name="kronos", target="soul", rationale="be warmer", proposal="Add warmth.")
 
     listed = await persona.list_proposals()
     assert listed["pending"] == 1
@@ -53,9 +51,7 @@ async def test_proposal_approve_applies_to_workspace(evo_env):
     from dashboard.api import persona
     from kronos import evolution
 
-    pid = evolution.create_proposal(
-        agent_name="kronos", target="soul", rationale="be warmer", proposal="Add warmth."
-    )
+    pid = evolution.create_proposal(agent_name="kronos", target="soul", rationale="be warmer", proposal="Add warmth.")
 
     result = await persona.decide_proposal(pid, persona.ProposalDecision(approved=True))
     assert result["status"] == "approved"

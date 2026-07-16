@@ -127,13 +127,15 @@ def _fetch_ios_reviews() -> dict:
     samples = []
     for r in reviews[:5]:
         a = r.get("attributes", {}) or {}
-        samples.append({
-            "rating": a.get("rating"),
-            "title": (a.get("title") or "")[:80],
-            "body": (a.get("body") or "")[:300],
-            "territory": a.get("territory"),
-            "date": (a.get("createdDate") or "")[:10],
-        })
+        samples.append(
+            {
+                "rating": a.get("rating"),
+                "title": (a.get("title") or "")[:80],
+                "body": (a.get("body") or "")[:300],
+                "territory": a.get("territory"),
+                "date": (a.get("createdDate") or "")[:10],
+            }
+        )
 
     return {
         "ios_recent_reviews_count": len(reviews),

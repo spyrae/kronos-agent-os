@@ -48,17 +48,29 @@ def gmail(monkeypatch):
 
 def _seed(ledger) -> int:
     return ledger.add_pending(
-        message_id="p1", source="permata", description="ATM Bali",
-        amount=500000, currency="IDR", amount_idr=500000,
-        expense_date="2026-07-05", guessed_category="Other", reason="low confidence",
+        message_id="p1",
+        source="permata",
+        description="ATM Bali",
+        amount=500000,
+        currency="IDR",
+        amount_idr=500000,
+        expense_date="2026-07-05",
+        guessed_category="Other",
+        reason="low confidence",
     )
 
 
 def _seed_maybank(ledger) -> int:
     return ledger.add_pending(
-        message_id="m1", source="maybank", description="Resto",
-        amount=300000, currency="IDR", amount_idr=300000,
-        expense_date="2026-07-05", guessed_category="Food", reason="low confidence",
+        message_id="m1",
+        source="maybank",
+        description="Resto",
+        amount=300000,
+        currency="IDR",
+        amount_idr=300000,
+        expense_date="2026-07-05",
+        guessed_category="Food",
+        reason="low confidence",
     )
 
 
@@ -83,10 +95,10 @@ async def test_resolve_writes_archives_and_marks_processed(ledger, add_expense, 
     assert res.startswith("✅")
     assert add_expense.calls[0]["category"] == "Health"
     assert add_expense.calls[0]["ref"] == "p1"
-    assert add_expense.calls[0]["split_full"] is False   # permata is not a split source
+    assert add_expense.calls[0]["split_full"] is False  # permata is not a split source
     assert ledger.get_pending(pid)["status"] == "resolved"
     assert gmail.archived == ["p1"]
-    assert ledger.is_processed("p1") is True   # so the next cron run skips it
+    assert ledger.is_processed("p1") is True  # so the next cron run skips it
 
 
 @pytest.mark.asyncio
@@ -110,9 +122,9 @@ async def test_resolve_without_archiving_records_but_keeps_email(ledger, add_exp
 
     assert res.startswith("✅")
     assert "инбоксе" in res
-    assert gmail.archived == []                 # email left in inbox
+    assert gmail.archived == []  # email left in inbox
     assert ledger.get_pending(pid)["status"] == "resolved"
-    assert ledger.is_processed("p1") is True    # recorded → next run skips it
+    assert ledger.is_processed("p1") is True  # recorded → next run skips it
 
 
 @pytest.mark.asyncio
@@ -139,8 +151,8 @@ async def test_resolve_write_failure_keeps_pending(ledger, gmail, monkeypatch):
     res = await ep.resolve_pending_expense.ainvoke({"pending_id": pid, "category": "Health"})
 
     assert res.startswith("[ERROR]")
-    assert ledger.get_pending(pid)["status"] == "pending"   # not lost
-    assert gmail.archived == []                              # not archived
+    assert ledger.get_pending(pid)["status"] == "pending"  # not lost
+    assert gmail.archived == []  # not archived
 
 
 @pytest.mark.asyncio
@@ -153,7 +165,7 @@ async def test_resolve_without_gmail_still_records(ledger, add_expense, monkeypa
     assert res.startswith("✅")
     assert "инбоксе" in res
     assert ledger.get_pending(pid)["status"] == "resolved"
-    assert ledger.is_processed("p1") is True   # recorded even without archive
+    assert ledger.is_processed("p1") is True  # recorded even without archive
 
 
 def test_skip_discards_and_marks_skipped(ledger):
@@ -161,4 +173,4 @@ def test_skip_discards_and_marks_skipped(ledger):
     res = ep.skip_pending_expense.invoke({"pending_id": pid})
     assert res.startswith("⏭")
     assert ledger.get_pending(pid)["status"] == "discarded"
-    assert ledger.is_processed("p1") is True   # skipped → not reprocessed
+    assert ledger.is_processed("p1") is True  # skipped → not reprocessed

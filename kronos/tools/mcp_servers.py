@@ -86,8 +86,7 @@ def build_mcp_config() -> dict:
             "args": ["-y", "@notionhq/notion-mcp-server"],
             "env": {
                 "OPENAPI_MCP_HEADERS": (
-                    '{"Authorization":"Bearer ' + settings.notion_api_key + '",'
-                    '"Notion-Version":"2022-06-28"}'
+                    '{"Authorization":"Bearer ' + settings.notion_api_key + '","Notion-Version":"2022-06-28"}'
                 ),
             },
         }

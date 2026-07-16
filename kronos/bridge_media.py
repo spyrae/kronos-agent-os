@@ -121,12 +121,7 @@ def _is_document_message(event) -> bool:
         return False
     filename, mime = _document_info(event)
     low = filename.lower()
-    return (
-        low.endswith(_DOC_EXTENSIONS)
-        or "pdf" in mime
-        or "wordprocessingml" in mime
-        or mime.startswith("text/")
-    )
+    return low.endswith(_DOC_EXTENSIONS) or "pdf" in mime or "wordprocessingml" in mime or mime.startswith("text/")
 
 
 async def _download_document_bytes(event) -> bytes:

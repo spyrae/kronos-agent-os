@@ -47,6 +47,7 @@ class TestAgentCreation:
     @patch("kronos.agents.research.get_model")
     def test_research_agent_filters_tools(self, mock_get_model):
         from unittest.mock import MagicMock
+
         mock_get_model.return_value = MagicMock()
 
         agent = create_research_agent([brave_search, fetch_url, notion_query, unrelated_tool])
@@ -56,6 +57,7 @@ class TestAgentCreation:
     @patch("kronos.agents.task.get_model")
     def test_task_agent_filters_tools(self, mock_get_model):
         from unittest.mock import MagicMock
+
         mock_get_model.return_value = MagicMock()
 
         agent = create_task_agent([notion_query, brave_search, unrelated_tool])
@@ -64,6 +66,7 @@ class TestAgentCreation:
     @patch("kronos.agents.finance.get_model")
     def test_finance_agent_filters_tools(self, mock_get_model):
         from unittest.mock import MagicMock
+
         mock_get_model.return_value = MagicMock()
 
         agent = create_finance_agent([yahoo_finance_price, brave_search, unrelated_tool])

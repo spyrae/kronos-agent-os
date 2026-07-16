@@ -55,23 +55,48 @@ def create_competitor_monitor_agent():
                 content = digest
 
         # Intent: competitive advantages / our position
-        elif any(kw in user_lower for kw in [
-            "преимущ", "advantage", "позици", "position", "tracker", "трекер",
-        ]):
+        elif any(
+            kw in user_lower
+            for kw in [
+                "преимущ",
+                "advantage",
+                "позици",
+                "position",
+                "tracker",
+                "трекер",
+            ]
+        ):
             content = tracker.format_summary()
 
         # Intent: dashboard
-        elif any(kw in user_lower for kw in [
-            "dashboard", "дашборд", "таблиц", "рейтинг", "ratings",
-        ]):
+        elif any(
+            kw in user_lower
+            for kw in [
+                "dashboard",
+                "дашборд",
+                "таблиц",
+                "рейтинг",
+                "ratings",
+            ]
+        ):
             from kronos.competitors.dashboard import generate_dashboard_markdown
+
             content = generate_dashboard_markdown()
 
         # Intent: weekly report on demand
-        elif any(kw in user_lower for kw in [
-            "анализ", "analysis", "report", "отчёт", "отчет", "weekly",
-        ]):
+        elif any(
+            kw in user_lower
+            for kw in [
+                "анализ",
+                "analysis",
+                "report",
+                "отчёт",
+                "отчет",
+                "weekly",
+            ]
+        ):
             from kronos.competitors.weekly_report import generate_weekly_report
+
             report, _ = await generate_weekly_report()
             content = report
 
@@ -107,8 +132,7 @@ async def _competitor_deep_query(
     """Answer a question about a specific competitor using DB + Mem0."""
     # Get recent changes from DB
     changes = store._db.read(
-        "SELECT * FROM competitor_changes WHERE competitor_id = ? "
-        "ORDER BY detected_at DESC LIMIT 20",
+        "SELECT * FROM competitor_changes WHERE competitor_id = ? ORDER BY detected_at DESC LIMIT 20",
         (comp_name.lower().replace(" ", "_"),),
     )
 
@@ -122,6 +146,7 @@ async def _competitor_deep_query(
     # Add Mem0 context
     try:
         from kronos.memory.store import search_memories
+
         memories = search_memories(
             f"{comp_name} competitor activity",
             user_id="competitor_monitor",

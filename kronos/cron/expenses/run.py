@@ -40,10 +40,12 @@ async def _main(dry_run: bool, stdout: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the email-expenses pipeline once.")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="extract and report only; do not write to Notion or archive email")
-    parser.add_argument("--stdout", action="store_true",
-                        help="print the report to stdout instead of posting to Telegram")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="extract and report only; do not write to Notion or archive email"
+    )
+    parser.add_argument(
+        "--stdout", action="store_true", help="print the report to stdout instead of posting to Telegram"
+    )
     parser.add_argument("--verbose", action="store_true", help="INFO-level logging")
     args = parser.parse_args()
 

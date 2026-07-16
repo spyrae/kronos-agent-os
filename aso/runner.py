@@ -76,6 +76,7 @@ async def run_cycle(*, dry_run: bool = False) -> None:
     if dry_run:
         import aso.nodes.notify as notify_mod
         import aso.nodes.review as review_mod
+
         original_notify = notify_mod._send_telegram
         original_review = review_mod._send_telegram
         notify_mod._send_telegram = lambda text: log.info("DRY RUN notify:\n%s", text)
@@ -89,7 +90,7 @@ async def run_cycle(*, dry_run: bool = False) -> None:
         opportunities = result.get("opportunities", [])
         selected = result.get("selected_opportunity")
 
-        print(f"\n{'='*50}")
+        print(f"\n{'=' * 50}")
         print(f"ASO Cycle #{cycle_id}")
         print(f"Phase: {phase}")
         print(f"Opportunities: {len(opportunities)}")
@@ -104,7 +105,7 @@ async def run_cycle(*, dry_run: bool = False) -> None:
         else:
             print("No action needed.")
 
-        print(f"{'='*50}\n")
+        print(f"{'=' * 50}\n")
 
     except Exception:
         log.exception("ASO cycle failed")
@@ -166,9 +167,9 @@ async def show_status() -> None:
     values = state.values
     next_nodes = state.next  # what nodes are pending
 
-    print(f"\n{'='*40}")
+    print(f"\n{'=' * 40}")
     print("ASO Pipeline Status")
-    print(f"{'='*40}")
+    print(f"{'=' * 40}")
     print(f"Cycle:       #{values.get('cycle_id', '—')}")
     print(f"Phase:       {values.get('phase', '—')}")
     print(f"Next nodes:  {list(next_nodes) if next_nodes else 'complete'}")
@@ -210,7 +211,7 @@ async def show_status() -> None:
         elif "wait" in next_list:
             print("\n⏸️  Ожидает окончания периода измерения: /aso resume")
 
-    print(f"{'='*40}\n")
+    print(f"{'=' * 40}\n")
 
 
 async def check_wait_resume() -> None:

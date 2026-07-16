@@ -51,17 +51,17 @@ class CompetitiveTracker:
 
         ops = []
         for area_id, _ in self.DEFAULT_FEATURES:
-            ops.append((
-                "INSERT OR IGNORE INTO competitive_advantages (feature_area) VALUES (?)",
-                (area_id,),
-            ))
+            ops.append(
+                (
+                    "INSERT OR IGNORE INTO competitive_advantages (feature_area) VALUES (?)",
+                    (area_id,),
+                )
+            )
         if ops:
             self._db.write_many(ops)
 
     def get_all(self) -> list[dict]:
-        rows = self._db.read(
-            "SELECT * FROM competitive_advantages ORDER BY feature_area"
-        )
+        rows = self._db.read("SELECT * FROM competitive_advantages ORDER BY feature_area")
         return [dict(r) for r in rows]
 
     def update(

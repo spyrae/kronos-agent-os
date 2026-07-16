@@ -84,6 +84,7 @@ async def run_self_improve() -> None:
 
     # Load previous improvements for context
     from kronos.workspace import ws
+
     memory_dir = ws.self_improve_dir
     memory_dir.mkdir(parents=True, exist_ok=True)
     prev_improvements = []
@@ -121,6 +122,7 @@ async def run_self_improve() -> None:
 
     model = get_model(ModelTier.LITE)
     from langchain_core.messages import HumanMessage
+
     response = model.invoke([HumanMessage(content=prompt)])
     reply = response.content if isinstance(response.content, str) else str(response.content)
 

@@ -66,9 +66,7 @@ def _gather_site_data(site_id: str, store: SeoGeoStore) -> dict:
         losers.sort(key=lambda x: -x[2])
 
         # High-value gaps: Tier A keywords NOT in top 20 (most impactful misses)
-        high_value_gaps = [
-            r["keyword"] for r in not_ranked if r["tier"] == "A"
-        ][:10]
+        high_value_gaps = [r["keyword"] for r in not_ranked if r["tier"] == "A"][:10]
 
         data["positions"][engine_label] = {
             "total_tracked": len(rows),
@@ -76,7 +74,10 @@ def _gather_site_data(site_id: str, store: SeoGeoStore) -> dict:
             "top10_count": len(top10),
             "top20_count": len(top20),
             "top10_keywords": [(r["keyword"], r["position"]) for r in sorted(top10, key=lambda x: x["position"])[:8]],
-            "top20_other": [(r["keyword"], r["position"]) for r in sorted(top20, key=lambda x: x["position"])[len(top10):len(top10)+5]],
+            "top20_other": [
+                (r["keyword"], r["position"])
+                for r in sorted(top20, key=lambda x: x["position"])[len(top10) : len(top10) + 5]
+            ],
             "gainers": gainers[:5],
             "losers": losers[:5],
             "high_value_gaps": high_value_gaps,
@@ -171,16 +172,15 @@ def _format_data_for_llm(per_site: list[dict]) -> str:
         gsc = d["gsc"]
         t = gsc["totals_28d"]
         b.append(
-            f"  GSC 28d: clicks={t.get('clicks',0)},"
-            f" impressions={t.get('impressions',0)},"
-            f" avg_position={t.get('avg_position',0)}"
+            f"  GSC 28d: clicks={t.get('clicks', 0)},"
+            f" impressions={t.get('impressions', 0)},"
+            f" avg_position={t.get('avg_position', 0)}"
         )
         if gsc["top_queries"]:
             b.append("  GSC top queries (real impressions, NOT our keyword list):")
             for q in gsc["top_queries"][:10]:
                 b.append(
-                    f"    - {q['q'][:80]!r}: {q['impr']} impr,"
-                    f" {q['clicks']} clicks, pos {q['pos']}, CTR {q['ctr']}"
+                    f"    - {q['q'][:80]!r}: {q['impr']} impr, {q['clicks']} clicks, pos {q['pos']}, CTR {q['ctr']}"
                 )
         blocks.append("\n".join(b))
     return "\n\n".join(blocks)
@@ -249,10 +249,7 @@ def format_weekly_report() -> str:
     data_block = _format_data_for_llm(per_site)
 
     # Quick sanity: if every site has zero data, return a stub message
-    any_data = any(
-        d["positions"] or d["geo"]["rate_per_engine"] or d["gsc"]["top_queries"]
-        for d in per_site
-    )
+    any_data = any(d["positions"] or d["geo"]["rate_per_engine"] or d["gsc"]["top_queries"] for d in per_site)
     if not any_data:
         return (
             "<b>📊 SEO / GEO weekly</b>\n\n"
@@ -290,9 +287,7 @@ def _mechanical_report(per_site: list[dict]) -> str:
             lines.append(f"  GEO citation: {d['geo']['rate_per_engine']}")
         if d["gsc"]["totals_28d"].get("impressions"):
             t = d["gsc"]["totals_28d"]
-            lines.append(
-                f"  GSC 28d: <b>{t['clicks']}</b> clicks / <b>{t['impressions']}</b> impressions"
-            )
+            lines.append(f"  GSC 28d: <b>{t['clicks']}</b> clicks / <b>{t['impressions']}</b> impressions")
         lines.append("")
     return "\n".join(lines).strip()
 
@@ -329,7 +324,6 @@ def format_pulse_summary() -> str:
         avg_rate = round(sum(rates.values()) / len(rates), 1) if rates else 0.0
         gsc_totals = store.gsc_totals(site_id, days=28)
         parts.append(
-            f"{site.id}: top10={top10}, GEO citation rate={avg_rate}%,"
-            f" GSC 28d clicks={gsc_totals.get('clicks', 0)}"
+            f"{site.id}: top10={top10}, GEO citation rate={avg_rate}%, GSC 28d clicks={gsc_totals.get('clicks', 0)}"
         )
     return " | ".join(parts)

@@ -43,9 +43,14 @@ def _run_positions(tiers: tuple[str, ...]) -> dict:
         try:
             pos, url = google.find_position(site.url, kw, locale=locale)
             store.record_position(
-                site_id=site_id, engine=google.engine_id(locale),
-                keyword=kw, locale=locale, tier=tier, category=category,
-                position=pos, url=url,
+                site_id=site_id,
+                engine=google.engine_id(locale),
+                keyword=kw,
+                locale=locale,
+                tier=tier,
+                category=category,
+                position=pos,
+                url=url,
             )
             counts["checked"] += 1
             if pos is not None:
@@ -53,9 +58,14 @@ def _run_positions(tiers: tuple[str, ...]) -> dict:
         except Exception as e:
             log.warning("google check failed: %s | %s", kw, e)
             store.record_position(
-                site_id=site_id, engine=google.engine_id(locale),
-                keyword=kw, locale=locale, tier=tier, category=category,
-                position=None, error=str(e)[:200],
+                site_id=site_id,
+                engine=google.engine_id(locale),
+                keyword=kw,
+                locale=locale,
+                tier=tier,
+                category=category,
+                position=None,
+                error=str(e)[:200],
             )
             counts["errors"] += 1
 
@@ -65,9 +75,14 @@ def _run_positions(tiers: tuple[str, ...]) -> dict:
             try:
                 pos, url = yandex.find_position(site.url, kw, locale="ru")
                 store.record_position(
-                    site_id=site_id, engine=yandex.engine_id(),
-                    keyword=kw, locale=locale, tier=tier, category=category,
-                    position=pos, url=url,
+                    site_id=site_id,
+                    engine=yandex.engine_id(),
+                    keyword=kw,
+                    locale=locale,
+                    tier=tier,
+                    category=category,
+                    position=pos,
+                    url=url,
                 )
                 counts["checked"] += 1
                 if pos is not None:
@@ -75,9 +90,14 @@ def _run_positions(tiers: tuple[str, ...]) -> dict:
             except Exception as e:
                 log.warning("yandex check failed: %s | %s", kw, e)
                 store.record_position(
-                    site_id=site_id, engine=yandex.engine_id(),
-                    keyword=kw, locale=locale, tier=tier, category=category,
-                    position=None, error=str(e)[:200],
+                    site_id=site_id,
+                    engine=yandex.engine_id(),
+                    keyword=kw,
+                    locale=locale,
+                    tier=tier,
+                    category=category,
+                    position=None,
+                    error=str(e)[:200],
                 )
                 counts["errors"] += 1
 
@@ -96,8 +116,12 @@ def _run_geo_citations() -> dict:
             except Exception as e:
                 log.warning("llm.ask_engine crashed: %s", e)
                 rec = {
-                    "engine": engine.id, "question": question, "answer": "",
-                    "cited": False, "cited_url": None, "competitors_cited": "[]",
+                    "engine": engine.id,
+                    "question": question,
+                    "answer": "",
+                    "cited": False,
+                    "cited_url": None,
+                    "competitors_cited": "[]",
                     "error": str(e)[:200],
                 }
             store.record_citation(

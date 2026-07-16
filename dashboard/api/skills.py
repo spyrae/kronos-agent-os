@@ -45,20 +45,24 @@ async def list_skills():
 
         if skill_file.exists():
             content = skill_file.read_text(encoding="utf-8")
-            skills.append({
-                "name": skill_dir.name,
-                "enabled": True,
-                "size": len(content),
-                "preview": content[:150],
-            })
+            skills.append(
+                {
+                    "name": skill_dir.name,
+                    "enabled": True,
+                    "size": len(content),
+                    "preview": content[:150],
+                }
+            )
         elif disabled_file.exists():
             content = disabled_file.read_text(encoding="utf-8")
-            skills.append({
-                "name": skill_dir.name,
-                "enabled": False,
-                "size": len(content),
-                "preview": content[:150],
-            })
+            skills.append(
+                {
+                    "name": skill_dir.name,
+                    "enabled": False,
+                    "size": len(content),
+                    "preview": content[:150],
+                }
+            )
 
     return {"skills": skills}
 
@@ -136,6 +140,7 @@ async def delete_skill(name: str):
     if not skills_dir.exists():
         raise HTTPException(404, f"Skill not found: {name}")
     import shutil
+
     shutil.rmtree(skills_dir)
     log.info("Skill deleted: %s", name)
     return {"ok": True, "name": name}

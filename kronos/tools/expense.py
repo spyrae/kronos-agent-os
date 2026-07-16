@@ -738,7 +738,11 @@ def replace_tranche(
     effective_rate_usd = target.get("rate_usd")
     log.info(
         "Tranche #%d updated: rate %s → %s IDR/RUB, USD %s → %s",
-        tranche_num, old_rate, new_rate, old_rate_usd or "—", effective_rate_usd or "—",
+        tranche_num,
+        old_rate,
+        new_rate,
+        old_rate_usd or "—",
+        effective_rate_usd or "—",
     )
     usd_part = ""
     if effective_rate_usd:

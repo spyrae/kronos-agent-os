@@ -170,11 +170,13 @@ async def get_suggested_keywords(
 
         suggestions = []
         for item in data.get("data", [])[:limit]:
-            suggestions.append({
-                "keyword": item.get("searchTermText", ""),
-                "popularity": item.get("searchPopularity", 0),
-                "rank": _popularity_rank(item.get("searchPopularity", 0)),
-            })
+            suggestions.append(
+                {
+                    "keyword": item.get("searchTermText", ""),
+                    "popularity": item.get("searchPopularity", 0),
+                    "rank": _popularity_rank(item.get("searchPopularity", 0)),
+                }
+            )
 
         log.info("Got %d keyword suggestions for app %s", len(suggestions), app_id)
         return suggestions

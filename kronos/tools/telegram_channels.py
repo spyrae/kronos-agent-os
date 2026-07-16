@@ -127,15 +127,13 @@ async def _fetch_page(
 # Each post is a <div class="tgme_widget_message_wrap ..."> with data-post="channel/ID"
 _RE_POST_BLOCK = re.compile(
     r'<div[^>]*class="tgme_widget_message_wrap[^"]*"[^>]*>'
-    r'.*?'
+    r".*?"
     r'(?=<div[^>]*class="tgme_widget_message_wrap|$)',
     re.DOTALL,
 )
 _RE_DATA_POST = re.compile(r'data-post="[^"]*?/(\d+)"')
 _RE_DATETIME = re.compile(r'datetime="([^"]+)"')
-_RE_VIEWS = re.compile(
-    r'class="tgme_widget_message_views"[^>]*>([\d.]+[KkMm]?)\s*<'
-)
+_RE_VIEWS = re.compile(r'class="tgme_widget_message_views"[^>]*>([\d.]+[KkMm]?)\s*<')
 _RE_TEXT = re.compile(
     r'class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>',
     re.DOTALL,
@@ -143,10 +141,10 @@ _RE_TEXT = re.compile(
 _RE_FWD_NAME = re.compile(
     r'class="tgme_widget_message_forwarded_from_name"[^>]*>'
     r'(?:<a[^>]*href="([^"]*)"[^>]*>)?'
-    r'(?:<span[^>]*>)?([^<]+)',
+    r"(?:<span[^>]*>)?([^<]+)",
     re.DOTALL,
 )
-_RE_REACTIONS = re.compile(r'</i>\s*(\d+)')
+_RE_REACTIONS = re.compile(r"</i>\s*(\d+)")
 _RE_MEDIA_BG = re.compile(r"background-image:url\('([^']+)'\)")
 _RE_MEDIA_PHOTO = re.compile(
     r'class="tgme_widget_message_photo_wrap[^"]*"[^>]*style="[^"]*'
@@ -224,16 +222,18 @@ def _parse_posts(html: str) -> list[TgPost]:
             if m_video:
                 media_url = m_video.group(1)
 
-        posts.append(TgPost(
-            id=post_id,
-            date=date,
-            views=views,
-            reactions=reactions,
-            fwd_from=fwd_from,
-            fwd_link=fwd_link,
-            text=text,
-            media_url=media_url,
-        ))
+        posts.append(
+            TgPost(
+                id=post_id,
+                date=date,
+                views=views,
+                reactions=reactions,
+                fwd_from=fwd_from,
+                fwd_link=fwd_link,
+                text=text,
+                media_url=media_url,
+            )
+        )
 
     return posts
 
@@ -415,15 +415,17 @@ async def compare_channels(
                     if span > 0:
                         posts_per_week = len(posts) / span * 7
 
-            results.append({
-                "username": ch,
-                "title": info.title,
-                "subscribers": info.subscribers,
-                "avg_views": avg_views,
-                "avg_reactions": avg_reactions,
-                "post_count": len(posts),
-                "posts_per_week": round(posts_per_week, 1),
-            })
+            results.append(
+                {
+                    "username": ch,
+                    "title": info.title,
+                    "subscribers": info.subscribers,
+                    "avg_views": avg_views,
+                    "avg_reactions": avg_reactions,
+                    "post_count": len(posts),
+                    "posts_per_week": round(posts_per_week, 1),
+                }
+            )
         except Exception as e:
             log.warning("Failed to compare @%s: %s", ch, e)
 

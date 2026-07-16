@@ -140,11 +140,7 @@ async def test_dynamic_tool_execution_records_sandbox_audit(monkeypatch, tmp_pat
     async def fake_execute_sandboxed(code, timeout=30, memory_limit="256m", network=False):
         return "hello Ada", ""
 
-    code = (
-        "async def hello_tool(name: str) -> str:\n"
-        "    \"\"\"Say hello.\"\"\"\n"
-        "    return f'hello {name}'\n"
-    )
+    code = 'async def hello_tool(name: str) -> str:\n    """Say hello."""\n    return f\'hello {name}\'\n'
     spec = dynamic._extract_function_spec(code, "Say hello")
 
     monkeypatch.setattr(sandbox_platform.settings, "db_path", str(tmp_path / "session.db"))

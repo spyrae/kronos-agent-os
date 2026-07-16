@@ -90,21 +90,23 @@ def _load_fts_records() -> list[dict]:
     )
     records = []
     for row in rows:
-        records.append(_record(
-            record_id=f"fts:{row['id']}",
-            record_type="fact",
-            source=row["source"],
-            user_id=row["user_id"],
-            memory=row["content"],
-            created_at=row["created_at"],
-            updated_at=row["last_accessed"],
-            metadata={
-                "tier": row["tier"],
-                "relevance": row["relevance"],
-                "mem0_id": row.get("mem0_id") or "",
-            },
-            recall_reason=f"FTS exact recall, tier={row['tier']}, relevance={round(float(row['relevance'] or 0), 3)}",
-        ))
+        records.append(
+            _record(
+                record_id=f"fts:{row['id']}",
+                record_type="fact",
+                source=row["source"],
+                user_id=row["user_id"],
+                memory=row["content"],
+                created_at=row["created_at"],
+                updated_at=row["last_accessed"],
+                metadata={
+                    "tier": row["tier"],
+                    "relevance": row["relevance"],
+                    "mem0_id": row.get("mem0_id") or "",
+                },
+                recall_reason=f"FTS exact recall, tier={row['tier']}, relevance={round(float(row['relevance'] or 0), 3)}",
+            )
+        )
     return records
 
 
@@ -154,31 +156,35 @@ def _load_kg_records() -> list[dict]:
     )
     records = []
     for row in entity_rows:
-        records.append(_record(
-            record_id=f"entity:{row['id']}",
-            record_type="entity",
-            source="knowledge_graph",
-            memory=f"{row['name']} ({row['type']})",
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-            metadata={"entity_type": row["type"], "properties": row.get("properties") or "{}"},
-            recall_reason="Knowledge graph entity can be recalled by name/type.",
-        ))
+        records.append(
+            _record(
+                record_id=f"entity:{row['id']}",
+                record_type="entity",
+                source="knowledge_graph",
+                memory=f"{row['name']} ({row['type']})",
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                metadata={"entity_type": row["type"], "properties": row.get("properties") or "{}"},
+                recall_reason="Knowledge graph entity can be recalled by name/type.",
+            )
+        )
     for row in relation_rows:
-        records.append(_record(
-            record_id=f"relation:{row['id']}",
-            record_type="relation",
-            source="knowledge_graph",
-            memory=f"{row.get('source_name') or '?'} - {row['relation_type']} -> {row.get('target_name') or '?'}",
-            created_at=row["created_at"],
-            updated_at=row["created_at"],
-            metadata={
-                "source_type": row.get("source_type") or "",
-                "target_type": row.get("target_type") or "",
-                "properties": row.get("properties") or "{}",
-            },
-            recall_reason="Knowledge graph relation can be recalled for relationship context.",
-        ))
+        records.append(
+            _record(
+                record_id=f"relation:{row['id']}",
+                record_type="relation",
+                source="knowledge_graph",
+                memory=f"{row.get('source_name') or '?'} - {row['relation_type']} -> {row.get('target_name') or '?'}",
+                created_at=row["created_at"],
+                updated_at=row["created_at"],
+                metadata={
+                    "source_type": row.get("source_type") or "",
+                    "target_type": row.get("target_type") or "",
+                    "properties": row.get("properties") or "{}",
+                },
+                recall_reason="Knowledge graph relation can be recalled for relationship context.",
+            )
+        )
     return records
 
 
@@ -199,17 +205,19 @@ def _load_session_records() -> list[dict]:
             preview = str(msg.get("content", ""))
             if preview:
                 break
-        records.append(_record(
-            record_id=f"session:{row['thread_id']}",
-            record_type="session",
-            source="session_store",
-            session_id=row["thread_id"],
-            memory=preview or f"{len(messages)} messages",
-            created_at=row["updated_at"],
-            updated_at=row["updated_at"],
-            metadata={"message_count": len(messages)},
-            recall_reason="Session history is used for recent conversation continuity.",
-        ))
+        records.append(
+            _record(
+                record_id=f"session:{row['thread_id']}",
+                record_type="session",
+                source="session_store",
+                session_id=row["thread_id"],
+                memory=preview or f"{len(messages)} messages",
+                created_at=row["updated_at"],
+                updated_at=row["updated_at"],
+                metadata={"message_count": len(messages)},
+                recall_reason="Session history is used for recent conversation continuity.",
+            )
+        )
     return records
 
 
@@ -241,7 +249,12 @@ async def memory_status():
         count = len(all_mems.get("results", []))
         return {
             "status": "ok",
-            "total_memories": count + counts["facts"] + counts["shared_facts"] + counts["entities"] + counts["relations"] + counts["sessions"],
+            "total_memories": count
+            + counts["facts"]
+            + counts["shared_facts"]
+            + counts["entities"]
+            + counts["relations"]
+            + counts["sessions"],
             "qdrant": "connected",
             "counts": counts,
             "stores": {
@@ -270,12 +283,14 @@ async def list_memories(user_id: str = ""):
         result = mem.get_all(user_id=user_id)
         memories = []
         for item in result.get("results", []):
-            memories.append({
-                "id": item.get("id", ""),
-                "memory": item.get("memory", ""),
-                "created_at": item.get("created_at", ""),
-                "updated_at": item.get("updated_at", ""),
-            })
+            memories.append(
+                {
+                    "id": item.get("id", ""),
+                    "memory": item.get("memory", ""),
+                    "created_at": item.get("created_at", ""),
+                    "updated_at": item.get("updated_at", ""),
+                }
+            )
         return {"memories": memories, "total": len(memories)}
     except Exception as e:
         return {"memories": [], "total": 0, "error": str(e)}
@@ -295,7 +310,8 @@ async def list_memory_records(
     if query:
         q = query.lower()
         records = [
-            item for item in records
+            item
+            for item in records
             if q in item.get("memory", "").lower()
             or q in json.dumps(item.get("metadata", {}), ensure_ascii=False).lower()
         ]
@@ -333,7 +349,9 @@ async def delete_memory_record(record_id: str):
         _sqlite_exec(db_path, "DELETE FROM relations WHERE source_id = ? OR target_id = ?", (raw_id, raw_id))
         deleted += _sqlite_exec(db_path, "DELETE FROM entities WHERE id = ?", (raw_id,))
     elif prefix == "relation":
-        deleted += _sqlite_exec(Path(settings.db_dir) / "knowledge_graph.db", "DELETE FROM relations WHERE id = ?", (raw_id,))
+        deleted += _sqlite_exec(
+            Path(settings.db_dir) / "knowledge_graph.db", "DELETE FROM relations WHERE id = ?", (raw_id,)
+        )
     elif prefix == "session":
         deleted += _sqlite_exec(Path(settings.db_path), "DELETE FROM sessions WHERE thread_id = ?", (raw_id,))
     else:

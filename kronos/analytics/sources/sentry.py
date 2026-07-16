@@ -62,13 +62,15 @@ def collect() -> dict:
         # with a large all-time count must not surface as a fresh spike).
         top_issues = []
         for issue in (active or [])[:5]:
-            top_issues.append({
-                "title": issue.get("title", "Unknown")[:100],
-                "total_events_all_time": issue.get("count", "0"),
-                "level": issue.get("level", "error"),
-                "first_seen": issue.get("firstSeen", ""),
-                "last_seen": issue.get("lastSeen", ""),
-            })
+            top_issues.append(
+                {
+                    "title": issue.get("title", "Unknown")[:100],
+                    "total_events_all_time": issue.get("count", "0"),
+                    "level": issue.get("level", "error"),
+                    "first_seen": issue.get("firstSeen", ""),
+                    "last_seen": issue.get("lastSeen", ""),
+                }
+            )
 
         return {
             "unresolved_total": len(backlog) if backlog else 0,

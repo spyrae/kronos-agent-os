@@ -49,7 +49,7 @@ class TestSanitizeHtml:
 
     def test_decodes_entities(self):
         result = sanitize_html("&amp; &lt; &gt; &quot;")
-        assert "& < > \"" in result
+        assert '& < > "' in result
 
     def test_removes_comments(self):
         result = sanitize_html("before<!-- hidden -->after")

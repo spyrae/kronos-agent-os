@@ -99,9 +99,7 @@ def _source_queries() -> list[tuple[str, str]]:
     permata = os.environ.get("EMAIL_EXPENSES_QUERY_PERMATA", f"{win} from:permata")
     # ``-from:e-statement`` drops the monthly Consolidated Statement (a PDF summary
     # of the whole month, not a single charge) that also comes from @maybank.co.id.
-    maybank = os.environ.get(
-        "EMAIL_EXPENSES_QUERY_MAYBANK", f"{win} from:maybank -from:e-statement"
-    )
+    maybank = os.environ.get("EMAIL_EXPENSES_QUERY_MAYBANK", f"{win} from:maybank -from:e-statement")
     # Maybank FIRST so a card-paid Grab charge is halved before its Grab copy is
     # seen (see module docstring). Grab still precedes wondr/permata for detail.
     return [("maybank", maybank), ("grab", grab), ("wondr", wondr), ("permata", permata)]
@@ -109,8 +107,13 @@ def _source_queries() -> list[tuple[str, str]]:
 
 def _new_counts() -> dict[str, int]:
     return {
-        "emails": 0, "recorded": 0, "duplicates": 0,
-        "skipped": 0, "pending": 0, "archived": 0, "errors": 0,
+        "emails": 0,
+        "recorded": 0,
+        "duplicates": 0,
+        "skipped": 0,
+        "pending": 0,
+        "archived": 0,
+        "errors": 0,
     }
 
 
@@ -125,9 +128,9 @@ class _Report:
 
     def __init__(self, dry_run: bool):
         self.dry_run = dry_run
-        self.recorded: list[str] = []   # write result lines (real) / previews (dry)
-        self.pending: list[str] = []    # queued-for-category lines
-        self.sources: list[str] = []    # sources that returned mail
+        self.recorded: list[str] = []  # write result lines (real) / previews (dry)
+        self.pending: list[str] = []  # queued-for-category lines
+        self.sources: list[str] = []  # sources that returned mail
 
     def add_recorded(self, line: str) -> None:
         self.recorded.append(line)
@@ -176,10 +179,7 @@ async def run_email_expenses(
                 source_by_id[mid] = source
 
     # 2) Drop anything already handled or already queued as pending.
-    todo = [
-        mid for mid in source_by_id
-        if not ledger.is_processed(mid) and not ledger.has_pending(mid)
-    ]
+    todo = [mid for mid in source_by_id if not ledger.is_processed(mid) and not ledger.has_pending(mid)]
 
     # 3) Fetch full content and process each email deterministically.
     if todo:
@@ -188,10 +188,18 @@ async def run_email_expenses(
             counts["emails"] += 1
             msg.source = source_by_id.get(msg.message_id, "other")
             await _process_email(
-                msg, ledger=ledger, extractor=extractor, auditor=auditor,
-                expense_writer=expense_writer, gmail=gmail, model=model,
-                threshold=threshold, counts=counts, report=report,
-                dry_run=dry_run, seen_dry=seen_dry,
+                msg,
+                ledger=ledger,
+                extractor=extractor,
+                auditor=auditor,
+                expense_writer=expense_writer,
+                gmail=gmail,
+                model=model,
+                threshold=threshold,
+                counts=counts,
+                report=report,
+                dry_run=dry_run,
+                seen_dry=seen_dry,
             )
 
     # 4) Always post a report to the finance topic so the run is visible.
@@ -208,8 +216,19 @@ async def run_email_expenses(
 
 
 async def _process_email(
-    msg, *, ledger, extractor, auditor, expense_writer, gmail, model,
-    threshold, counts, report, dry_run, seen_dry,
+    msg,
+    *,
+    ledger,
+    extractor,
+    auditor,
+    expense_writer,
+    gmail,
+    model,
+    threshold,
+    counts,
+    report,
+    dry_run,
+    seen_dry,
 ) -> None:
     expenses = extractor(msg, model=model)
     if not expenses:
@@ -225,9 +244,17 @@ async def _process_email(
 
     for exp in expenses:
         outcome, amount_idr, date = _handle_expense(
-            msg, exp, ledger=ledger, auditor=auditor, expense_writer=expense_writer,
-            model=model, threshold=threshold, counts=counts, report=report,
-            dry_run=dry_run, seen_dry=seen_dry,
+            msg,
+            exp,
+            ledger=ledger,
+            auditor=auditor,
+            expense_writer=expense_writer,
+            model=model,
+            threshold=threshold,
+            counts=counts,
+            report=report,
+            dry_run=dry_run,
+            seen_dry=seen_dry,
         )
         outcomes.append(outcome)
         if outcome == "recorded" and repr_amount_idr is None and amount_idr is not None:
@@ -238,14 +265,16 @@ async def _process_email(
 
     if "recorded" in outcomes:
         ledger.record(
-            message_id=msg.message_id, source=msg.source, status="recorded",
-            amount_idr=repr_amount_idr, expense_date=repr_date,
+            message_id=msg.message_id,
+            source=msg.source,
+            status="recorded",
+            amount_idr=repr_amount_idr,
+            expense_date=repr_date,
         )
         await _archive(msg, gmail=gmail, ledger=ledger, counts=counts)
     elif "error" in outcomes:
         # Leave non-terminal so the next run retries. Notion dedup guards writes.
-        ledger.record(message_id=msg.message_id, source=msg.source, status="error",
-                      error="expense write failed")
+        ledger.record(message_id=msg.message_id, source=msg.source, status="error", error="expense write failed")
     elif "pending" in outcomes:
         # Only unclear expenses — keep the email in the inbox until resolved.
         # has_pending() guards against re-queueing on the next run.
@@ -256,17 +285,35 @@ async def _process_email(
 
 
 def _handle_expense(
-    msg, exp, *, ledger, auditor, expense_writer, model,
-    threshold, counts, report, dry_run, seen_dry,
+    msg,
+    exp,
+    *,
+    ledger,
+    auditor,
+    expense_writer,
+    model,
+    threshold,
+    counts,
+    report,
+    dry_run,
+    seen_dry,
 ) -> tuple[str, float | None, str | None]:
     """Decide + act on one extracted expense. Returns (outcome, amount_idr, date)."""
     date = exp.expense_date or _today()
     amount_idr = exp.amount if exp.currency == "IDR" else None
 
     if exp.currency not in SUPPORTED_CURRENCIES:
-        _queue_pending(ledger, msg, exp, amount_idr, date,
-                       reason=f"unsupported currency {exp.currency}",
-                       counts=counts, report=report, dry_run=dry_run)
+        _queue_pending(
+            ledger,
+            msg,
+            exp,
+            amount_idr,
+            date,
+            reason=f"unsupported currency {exp.currency}",
+            counts=counts,
+            report=report,
+            dry_run=dry_run,
+        )
         return "pending", None, None
 
     dup_key = (amount_idr, date)
@@ -278,16 +325,32 @@ def _handle_expense(
         return "duplicate", None, None
 
     if exp.category is None or exp.confidence < threshold:
-        _queue_pending(ledger, msg, exp, amount_idr, date,
-                       reason="low category confidence",
-                       counts=counts, report=report, dry_run=dry_run)
+        _queue_pending(
+            ledger,
+            msg,
+            exp,
+            amount_idr,
+            date,
+            reason="low category confidence",
+            counts=counts,
+            report=report,
+            dry_run=dry_run,
+        )
         return "pending", None, None
 
     verdict = auditor(msg.text, exp, model=model)
     if not (verdict.ok and verdict.amount_matches and verdict.is_expense):
-        _queue_pending(ledger, msg, exp, amount_idr, date,
-                       reason=f"audit rejected: {verdict.issues or 'unverified'}",
-                       counts=counts, report=report, dry_run=dry_run)
+        _queue_pending(
+            ledger,
+            msg,
+            exp,
+            amount_idr,
+            date,
+            reason=f"audit rejected: {verdict.issues or 'unverified'}",
+            counts=counts,
+            report=report,
+            dry_run=dry_run,
+        )
         return "pending", None, None
 
     category = verdict.category or exp.category
@@ -303,15 +366,17 @@ def _handle_expense(
         counts["recorded"] += 1
         return "recorded", amount_idr, date
 
-    result = expense_writer({
-        "description": exp.description,
-        "amount": exp.amount,
-        "currency": exp.currency,
-        "category": category,
-        "date": exp.expense_date,  # None → add_expense uses today
-        "split_full": _is_split_source(msg.source),
-        "ref": msg.message_id,
-    })
+    result = expense_writer(
+        {
+            "description": exp.description,
+            "amount": exp.amount,
+            "currency": exp.currency,
+            "category": category,
+            "date": exp.expense_date,  # None → add_expense uses today
+            "split_full": _is_split_source(msg.source),
+            "ref": msg.message_id,
+        }
+    )
     if result.startswith("[ERROR]"):
         log.error("add_expense failed for %s: %s", msg.message_id, result)
         counts["errors"] += 1
@@ -325,14 +390,19 @@ def _handle_expense(
 def _queue_pending(ledger, msg, exp, amount_idr, date, *, reason, counts, report, dry_run) -> None:
     if not dry_run:
         ledger.add_pending(
-            message_id=msg.message_id, source=msg.source, description=exp.description,
-            amount=exp.amount, currency=exp.currency, amount_idr=amount_idr,
-            expense_date=date, guessed_category=exp.category, reason=reason,
+            message_id=msg.message_id,
+            source=msg.source,
+            description=exp.description,
+            amount=exp.amount,
+            currency=exp.currency,
+            amount_idr=amount_idr,
+            expense_date=date,
+            guessed_category=exp.category,
+            reason=reason,
         )
     guess = exp.category or "?"
     report.add_pending(
-        f"[{msg.source}] {exp.amount:,.0f} {exp.currency} — {exp.description} "
-        f"(предположительно: {guess}; {reason})"
+        f"[{msg.source}] {exp.amount:,.0f} {exp.currency} — {exp.description} (предположительно: {guess}; {reason})"
     )
     counts["pending"] += 1
 
@@ -347,9 +417,7 @@ async def _archive(msg, *, gmail, ledger, counts) -> None:
         counts["archived"] += 1
 
 
-def _format_report(
-    counts: dict[str, int], report: _Report, open_pending_rows, archiving_on: bool = False
-) -> str:
+def _format_report(counts: dict[str, int], report: _Report, open_pending_rows, archiving_on: bool = False) -> str:
     tag = " [DRY-RUN — ничего не записано]" if report.dry_run else ""
     sources = ", ".join(report.sources) if report.sources else "—"
     archive_cell = f"🗄 В архив: {counts['archived']}" if archiving_on else "🗄 Архив: выкл"
@@ -382,12 +450,10 @@ def _format_report(
             amount = row["amount"]
             amount_str = f"{amount:,.0f}" if amount is not None else "?"
             lines.append(
-                f"  #{row['id']} [{row['source']}] {amount_str} {row['currency'] or ''} "
-                f"— {row['description']}"
+                f"  #{row['id']} [{row['source']}] {amount_str} {row['currency'] or ''} — {row['description']}"
             )
         lines.append(
-            "\nОтветь прямо здесь: «#id категория» через запятую "
-            "(напр. «#12 Travel, #13 Food»), или «пропусти #id»."
+            "\nОтветь прямо здесь: «#id категория» через запятую (напр. «#12 Travel, #13 Food»), или «пропусти #id»."
         )
 
     return "\n".join(lines)

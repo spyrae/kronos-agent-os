@@ -24,29 +24,75 @@ def _rows(query: str, params: tuple = ()) -> list[dict]:
 
 
 def _demo_runs() -> list[dict]:
-    return [{
-        "id": "demo-launch-plan",
-        "title": "Demo: launch plan arbitration",
-        "status": "demo",
-        "created_at": "2026-04-27T09:00:00+00:00",
-        "updated_at": "2026-04-27T09:05:00+00:00",
-        "summary": "Four roles split research, critique, operations, and synthesis for an open-source launch.",
-        "roles": [
-            {"agent": "researcher", "role": "Researcher", "tier": 2, "status": "sent", "task": "Find comparable OSS launch patterns."},
-            {"agent": "critic", "role": "Critic", "tier": 2, "status": "sent", "task": "Find setup and trust risks."},
-            {"agent": "operator", "role": "Operator", "tier": 2, "status": "sent", "task": "Convert decision into tasks."},
-            {"agent": "synthesizer", "role": "Synthesizer", "tier": 1, "status": "winner", "task": "Return one final answer."},
-        ],
-        "steps": [
-            {"agent": "researcher", "kind": "intermediate", "text": "Open-source launches spread when quickstart, demos, and trust docs are obvious.", "status": "sent"},
-            {"agent": "critic", "kind": "vote", "text": "Risk: tool permissions must be legible before viral demos.", "status": "sent"},
-            {"agent": "operator", "kind": "intermediate", "text": "Plan becomes docs, templates, dashboard, Docker smoke, and demo fixtures.", "status": "sent"},
-            {"agent": "synthesizer", "kind": "decision", "text": "Ship Agent OS framing with optional swarm visualizer, not swarm-only positioning.", "status": "winner"},
-        ],
-        "final": "One synthesized launch plan with risks called out and tasks mapped to Linear.",
-        "metrics": {"claims": 4, "sent": 4, "active": 0, "duplicate_replies_avoided": 2},
-        "demo": True,
-    }]
+    return [
+        {
+            "id": "demo-launch-plan",
+            "title": "Demo: launch plan arbitration",
+            "status": "demo",
+            "created_at": "2026-04-27T09:00:00+00:00",
+            "updated_at": "2026-04-27T09:05:00+00:00",
+            "summary": "Four roles split research, critique, operations, and synthesis for an open-source launch.",
+            "roles": [
+                {
+                    "agent": "researcher",
+                    "role": "Researcher",
+                    "tier": 2,
+                    "status": "sent",
+                    "task": "Find comparable OSS launch patterns.",
+                },
+                {
+                    "agent": "critic",
+                    "role": "Critic",
+                    "tier": 2,
+                    "status": "sent",
+                    "task": "Find setup and trust risks.",
+                },
+                {
+                    "agent": "operator",
+                    "role": "Operator",
+                    "tier": 2,
+                    "status": "sent",
+                    "task": "Convert decision into tasks.",
+                },
+                {
+                    "agent": "synthesizer",
+                    "role": "Synthesizer",
+                    "tier": 1,
+                    "status": "winner",
+                    "task": "Return one final answer.",
+                },
+            ],
+            "steps": [
+                {
+                    "agent": "researcher",
+                    "kind": "intermediate",
+                    "text": "Open-source launches spread when quickstart, demos, and trust docs are obvious.",
+                    "status": "sent",
+                },
+                {
+                    "agent": "critic",
+                    "kind": "vote",
+                    "text": "Risk: tool permissions must be legible before viral demos.",
+                    "status": "sent",
+                },
+                {
+                    "agent": "operator",
+                    "kind": "intermediate",
+                    "text": "Plan becomes docs, templates, dashboard, Docker smoke, and demo fixtures.",
+                    "status": "sent",
+                },
+                {
+                    "agent": "synthesizer",
+                    "kind": "decision",
+                    "text": "Ship Agent OS framing with optional swarm visualizer, not swarm-only positioning.",
+                    "status": "winner",
+                },
+            ],
+            "final": "One synthesized launch plan with risks called out and tasks mapped to Linear.",
+            "metrics": {"claims": 4, "sent": 4, "active": 0, "duplicate_replies_avoided": 2},
+            "demo": True,
+        }
+    ]
 
 
 def _metric(name: str) -> int:
@@ -86,7 +132,11 @@ def _build_runs() -> list[dict]:
             (chat_id, topic_id, root_msg_id, root_msg_id, *[item["trigger_msg_id"] for item in group]),
         )
         final_message = next(
-            (msg for msg in reversed(messages) if msg.get("sender_type") == "agent" and msg.get("agent_name") == winner["agent_name"]),
+            (
+                msg
+                for msg in reversed(messages)
+                if msg.get("sender_type") == "agent" and msg.get("agent_name") == winner["agent_name"]
+            ),
             None,
         )
         roles = [
@@ -108,33 +158,37 @@ def _build_runs() -> list[dict]:
             }
             for item in group
         ]
-        steps.extend([
+        steps.extend(
+            [
+                {
+                    "agent": msg.get("agent_name") or msg.get("sender_type"),
+                    "kind": "message",
+                    "text": msg.get("text", "")[:500],
+                    "status": "sent" if msg.get("sender_type") == "agent" else "observed",
+                }
+                for msg in messages
+            ]
+        )
+        runs.append(
             {
-                "agent": msg.get("agent_name") or msg.get("sender_type"),
-                "kind": "message",
-                "text": msg.get("text", "")[:500],
-                "status": "sent" if msg.get("sender_type") == "agent" else "observed",
+                "id": f"{chat_id}:{topic_id}:{root_msg_id}",
+                "title": f"Chat {chat_id} / root {root_msg_id}",
+                "status": "active" if any(item["state"] == "claimed" for item in group) else "completed",
+                "created_at": str(min(item["created_at"] for item in group)),
+                "updated_at": str(max(item["created_at"] for item in group)),
+                "summary": f"{len(group)} claims, winner: {winner['agent_name']}",
+                "roles": roles,
+                "steps": steps[:40],
+                "final": (final_message or {}).get("text", ""),
+                "metrics": {
+                    "claims": len(group),
+                    "sent": sum(1 for item in group if item["state"] == "sent"),
+                    "active": sum(1 for item in group if item["state"] == "claimed"),
+                    "duplicate_replies_avoided": _metric("duplicate_replies_avoided"),
+                },
+                "demo": False,
             }
-            for msg in messages
-        ])
-        runs.append({
-            "id": f"{chat_id}:{topic_id}:{root_msg_id}",
-            "title": f"Chat {chat_id} / root {root_msg_id}",
-            "status": "active" if any(item["state"] == "claimed" for item in group) else "completed",
-            "created_at": str(min(item["created_at"] for item in group)),
-            "updated_at": str(max(item["created_at"] for item in group)),
-            "summary": f"{len(group)} claims, winner: {winner['agent_name']}",
-            "roles": roles,
-            "steps": steps[:40],
-            "final": (final_message or {}).get("text", ""),
-            "metrics": {
-                "claims": len(group),
-                "sent": sum(1 for item in group if item["state"] == "sent"),
-                "active": sum(1 for item in group if item["state"] == "claimed"),
-                "duplicate_replies_avoided": _metric("duplicate_replies_avoided"),
-            },
-            "demo": False,
-        })
+        )
     return runs
 
 

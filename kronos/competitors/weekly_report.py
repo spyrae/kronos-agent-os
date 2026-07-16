@@ -137,7 +137,9 @@ async def _collect_fresh_signals() -> dict:
 
     log.info(
         "Weekly fetch done: %d competitors, %d fresh changes, %d failed",
-        len(competitors), fresh_changes_total, failed,
+        len(competitors),
+        fresh_changes_total,
+        failed,
     )
     return {
         "competitors_checked": len(competitors),
@@ -156,6 +158,7 @@ def _per_competitor_lines(week_changes: list[dict], competitors_by_id: dict) -> 
         by_comp.setdefault(ch.get("competitor_id", "unknown"), []).append(ch)
 
     lines = []
+
     # Sort: tier-1 first by activity, then tier-2
     def _sort_key(cid):
         comp = competitors_by_id.get(cid)
@@ -178,7 +181,7 @@ def _per_competitor_lines(week_changes: list[dict], competitors_by_id: dict) -> 
             key=lambda c: {"critical": 0, "important": 1, "info": 2}.get(c.get("severity", "info"), 3),
         )
         for it in sorted_items[:3]:
-            lines.append(f"      [{it.get('severity','info')}] {it.get('summary','')[:120]}")
+            lines.append(f"      [{it.get('severity', 'info')}] {it.get('summary', '')[:120]}")
 
     return "\n".join(lines) if lines else "(no per-competitor activity)"
 
@@ -207,8 +210,7 @@ async def generate_weekly_report() -> tuple[str, str]:
 
     # All changes from the last 7 days (regardless of digested flag)
     rows = store._db.read(
-        "SELECT * FROM competitor_changes WHERE detected_at >= ? "
-        "ORDER BY detected_at DESC",
+        "SELECT * FROM competitor_changes WHERE detected_at >= ? ORDER BY detected_at DESC",
         (week_ago.isoformat(),),
     )
     week_changes = [dict(r) for r in rows]
@@ -221,12 +223,8 @@ async def generate_weekly_report() -> tuple[str, str]:
     severity_counter = Counter(c.get("severity", "info") for c in week_changes)
     active_competitor_ids = {c.get("competitor_id") for c in week_changes}
 
-    channel_breakdown = ", ".join(
-        f"{ch}={cnt}" for ch, cnt in channel_counter.most_common(8)
-    )
-    severity_breakdown = ", ".join(
-        f"{sev}={cnt}" for sev, cnt in severity_counter.most_common()
-    )
+    channel_breakdown = ", ".join(f"{ch}={cnt}" for ch, cnt in channel_counter.most_common(8))
+    severity_breakdown = ", ".join(f"{sev}={cnt}" for sev, cnt in severity_counter.most_common())
 
     per_competitor = _per_competitor_lines(week_changes, competitors_by_id)
     changes_summary = _format_changes(week_changes)

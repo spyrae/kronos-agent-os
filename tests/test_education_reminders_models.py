@@ -58,23 +58,29 @@ def test_send_gates_block_dry_run_disabled_unapproved_and_not_allowlisted():
         enabled=False,
     )
 
-    assert evaluate_send_gates(
-        announcement,
-        allowed_group_ids={-100123},
-        sent_idempotency_keys=set(),
-        preview_approved=True,
-        dry_run=True,
-        now=NOW,
-    ).reason == "dry_run"
+    assert (
+        evaluate_send_gates(
+            announcement,
+            allowed_group_ids={-100123},
+            sent_idempotency_keys=set(),
+            preview_approved=True,
+            dry_run=True,
+            now=NOW,
+        ).reason
+        == "dry_run"
+    )
 
-    assert evaluate_send_gates(
-        announcement,
-        allowed_group_ids={-100123},
-        sent_idempotency_keys=set(),
-        preview_approved=True,
-        dry_run=False,
-        now=NOW,
-    ).reason == "announcement_disabled"
+    assert (
+        evaluate_send_gates(
+            announcement,
+            allowed_group_ids={-100123},
+            sent_idempotency_keys=set(),
+            preview_approved=True,
+            dry_run=False,
+            now=NOW,
+        ).reason
+        == "announcement_disabled"
+    )
 
     enabled = ScheduledAnnouncement.create(
         target_group_id=-100123,
@@ -82,23 +88,29 @@ def test_send_gates_block_dry_run_disabled_unapproved_and_not_allowlisted():
         schedule="daily:19:00",
         enabled=True,
     )
-    assert evaluate_send_gates(
-        enabled,
-        allowed_group_ids={-999},
-        sent_idempotency_keys=set(),
-        preview_approved=True,
-        dry_run=False,
-        now=NOW,
-    ).reason == "target_group_not_allowlisted"
+    assert (
+        evaluate_send_gates(
+            enabled,
+            allowed_group_ids={-999},
+            sent_idempotency_keys=set(),
+            preview_approved=True,
+            dry_run=False,
+            now=NOW,
+        ).reason
+        == "target_group_not_allowlisted"
+    )
 
-    assert evaluate_send_gates(
-        enabled,
-        allowed_group_ids={-100123},
-        sent_idempotency_keys=set(),
-        preview_approved=False,
-        dry_run=False,
-        now=NOW,
-    ).reason == "preview_required"
+    assert (
+        evaluate_send_gates(
+            enabled,
+            allowed_group_ids={-100123},
+            sent_idempotency_keys=set(),
+            preview_approved=False,
+            dry_run=False,
+            now=NOW,
+        ).reason
+        == "preview_required"
+    )
 
 
 def test_send_gates_block_duplicate_and_quiet_hours_then_allow_send():
@@ -110,24 +122,30 @@ def test_send_gates_block_duplicate_and_quiet_hours_then_allow_send():
         quiet_hours=QuietHours(start_hour=22, end_hour=8),
     )
 
-    assert evaluate_send_gates(
-        announcement,
-        allowed_group_ids={-100123},
-        sent_idempotency_keys={announcement.idempotency_key},
-        preview_approved=True,
-        dry_run=False,
-        now=NOW,
-    ).reason == "idempotency_key_already_sent"
+    assert (
+        evaluate_send_gates(
+            announcement,
+            allowed_group_ids={-100123},
+            sent_idempotency_keys={announcement.idempotency_key},
+            preview_approved=True,
+            dry_run=False,
+            now=NOW,
+        ).reason
+        == "idempotency_key_already_sent"
+    )
 
     quiet = datetime(2026, 6, 19, 23, 0, tzinfo=UTC)
-    assert evaluate_send_gates(
-        announcement,
-        allowed_group_ids={-100123},
-        sent_idempotency_keys=set(),
-        preview_approved=True,
-        dry_run=False,
-        now=quiet,
-    ).reason == "quiet_hours"
+    assert (
+        evaluate_send_gates(
+            announcement,
+            allowed_group_ids={-100123},
+            sent_idempotency_keys=set(),
+            preview_approved=True,
+            dry_run=False,
+            now=quiet,
+        ).reason
+        == "quiet_hours"
+    )
 
     decision = evaluate_send_gates(
         announcement,

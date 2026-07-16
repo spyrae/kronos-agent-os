@@ -17,9 +17,9 @@ from kronos.competitors.tracker import CompetitiveTracker
 log = logging.getLogger("kronos.competitors.dashboard")
 
 STATUS_EMOJI = {
-    "strong": "\U0001f7e2",   # green
-    "par": "\U0001f7e1",      # yellow
-    "weak": "\U0001f7e0",     # orange
+    "strong": "\U0001f7e2",  # green
+    "par": "\U0001f7e1",  # yellow
+    "weak": "\U0001f7e0",  # orange
     "missing": "\U0001f534",  # red
 }
 
@@ -90,10 +90,7 @@ def _ratings_table(store: CompetitorStore, competitors: list, channel: str) -> s
         # Calculate trend from last 2 snapshots
         trend = _calc_rating_trend(store, comp.id, channel)
 
-        lines.append(
-            f"| {comp.name} | {rating:.1f} | "
-            f"{_format_count(count)} | {version} | {trend} |"
-        )
+        lines.append(f"| {comp.name} | {rating:.1f} | {_format_count(count)} | {version} | {trend} |")
 
     return "\n".join(lines)
 
@@ -124,8 +121,7 @@ def _recent_changes(store: CompetitorStore) -> str:
     """Format recent changes list."""
     week_ago = (datetime.now(UTC) - timedelta(days=7)).isoformat()
     changes = store._db.read(
-        "SELECT * FROM competitor_changes WHERE detected_at >= ? "
-        "ORDER BY detected_at DESC LIMIT 20",
+        "SELECT * FROM competitor_changes WHERE detected_at >= ? ORDER BY detected_at DESC LIMIT 20",
         (week_ago,),
     )
 

@@ -65,9 +65,7 @@ async def run_persona_evolution() -> None:
     positive = satisfaction.get("positive", 0)
     rate = positive / total if total else 0
     negative = swarm.get_feedback(agent_name=agent, reaction="negative", days=7, limit=15)
-    neg_text = "\n".join(
-        f"- {f.get('emoji', '')} on msg {f.get('msg_id')}" for f in negative
-    ) or "нет явного негатива"
+    neg_text = "\n".join(f"- {f.get('emoji', '')} on msg {f.get('msg_id')}" for f in negative) or "нет явного негатива"
 
     prompt = f"""Ты — агент {agent}. На основе фидбека за неделю предложи ОДНО конкретное
 изменение к своей персоне (SOUL или IDENTITY), которое улучшит реакцию пользователя.
@@ -93,9 +91,7 @@ PROPOSAL: <конкретный текст, готовый к вставке в 
         return
 
     target, rationale, proposal = parsed
-    pid = evolution.create_proposal(
-        agent_name=agent, target=target, rationale=rationale, proposal=proposal
-    )
+    pid = evolution.create_proposal(agent_name=agent, target=target, rationale=rationale, proposal=proposal)
     swarm.incr_metric("persona_proposals_created")
 
     send_bot_api(

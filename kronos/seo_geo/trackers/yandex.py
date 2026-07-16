@@ -46,17 +46,19 @@ def _submit_search(query: str, locale: str = "ru") -> str | None:
     # Region-aware: RU for ru-locale (yandex.ru), TR/COM for global.
     search_type = "SEARCH_TYPE_RU" if locale == "ru" else "SEARCH_TYPE_COM"
 
-    body = json.dumps({
-        "query": {
-            "search_type": search_type,
-            "query_text": query,
-            "page": 0,
-        },
-        "folder_id": folder_id,
-        # FORMAT_XML returns structured data (<yandexsearch>/<doc>/<url>);
-        # FORMAT_HTML returns a full HTML SERP page that is brittle to scrape.
-        "response_format": "FORMAT_XML",
-    }).encode()
+    body = json.dumps(
+        {
+            "query": {
+                "search_type": search_type,
+                "query_text": query,
+                "page": 0,
+            },
+            "folder_id": folder_id,
+            # FORMAT_XML returns structured data (<yandexsearch>/<doc>/<url>);
+            # FORMAT_HTML returns a full HTML SERP page that is brittle to scrape.
+            "response_format": "FORMAT_XML",
+        }
+    ).encode()
 
     req = urllib.request.Request(
         "https://searchapi.api.cloud.yandex.net/v2/web/searchAsync",
@@ -85,7 +87,8 @@ def _poll_operation(op_id: str) -> dict | None:
     api_key = _api_key()
     url = f"https://operation.api.cloud.yandex.net/operations/{op_id}"
     req_factory = lambda: urllib.request.Request(  # noqa: E731
-        url, headers={"Authorization": f"Api-Key {api_key}"},
+        url,
+        headers={"Authorization": f"Api-Key {api_key}"},
     )
 
     for _ in range(_POLL_MAX):

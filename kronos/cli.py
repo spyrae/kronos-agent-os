@@ -311,11 +311,7 @@ def run_doctor() -> int:
     provider_lines: list[str] = []
     for tier in (ModelTier.STANDARD, ModelTier.LITE):
         rows = describe_provider_chain(tier)
-        configured = [
-            f"{row['provider']}:{row['model']}"
-            for row in rows
-            if row["configured"]
-        ]
+        configured = [f"{row['provider']}:{row['model']}" for row in rows if row["configured"]]
         missing = [str(row["provider"]) for row in rows if not row["configured"]]
         if configured:
             ok(f"LLM {tier.value}", " -> ".join(configured))
@@ -324,16 +320,14 @@ def run_doctor() -> int:
         provider_lines.extend(configured)
 
     if settings.kaos_orchestrator_provider_chain.strip():
-        rows = describe_custom_provider_chain([
-            provider.strip().lower().replace("-", "_")
-            for provider in settings.kaos_orchestrator_provider_chain.split(",")
-            if provider.strip()
-        ])
-        configured = [
-            f"{row['provider']}:{row['model']}"
-            for row in rows
-            if row["configured"]
-        ]
+        rows = describe_custom_provider_chain(
+            [
+                provider.strip().lower().replace("-", "_")
+                for provider in settings.kaos_orchestrator_provider_chain.split(",")
+                if provider.strip()
+            ]
+        )
+        configured = [f"{row['provider']}:{row['model']}" for row in rows if row["configured"]]
         missing = [str(row["provider"]) for row in rows if not row["configured"]]
         if configured:
             ok("LLM orchestrator", " -> ".join(configured))
@@ -503,7 +497,9 @@ def _available_agent_templates() -> list[Path]:
     return sorted(path for path in root.iterdir() if (path / "template.yaml").is_file())
 
 
-def run_templates(command: str, name: str = "", workspace: str = "", role: str = "", force: bool = False, dry_run: bool = False) -> int:
+def run_templates(
+    command: str, name: str = "", workspace: str = "", role: str = "", force: bool = False, dry_run: bool = False
+) -> int:
     if command == "list":
         templates = _available_agent_templates()
         if not templates:
@@ -822,7 +818,9 @@ def run_demo_seed(data_dir: str, workspace: str, swarm_db: str, reset: bool) -> 
     print("KAOS demo state seeded:")
     print(_format_tool_payload(result))
     print("\nRun dashboard with:")
-    print(f"  AGENT_NAME=demo DB_DIR={result['data_dir']} DB_PATH={result['data_dir']}/session.db SWARM_DB_PATH={result['swarm_db']} WORKSPACE_PATH={result['workspace_dir']} kaos dashboard")
+    print(
+        f"  AGENT_NAME=demo DB_DIR={result['data_dir']} DB_PATH={result['data_dir']}/session.db SWARM_DB_PATH={result['swarm_db']} WORKSPACE_PATH={result['workspace_dir']} kaos dashboard"
+    )
     return 0
 
 
@@ -928,7 +926,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sessions = sub.add_parser("sessions", help="maintain local session history")
     sessions_sub = sessions.add_subparsers(dest="sessions_command")
-    sessions_backfill = sessions_sub.add_parser("backfill-search", help="backfill existing sessions into session_search")
+    sessions_backfill = sessions_sub.add_parser(
+        "backfill-search", help="backfill existing sessions into session_search"
+    )
     sessions_backfill.add_argument("--agent", default="", help="agent name to index under; defaults to AGENT_NAME")
 
     signals = sub.add_parser("signals", help="Signal Intelligence verification tools")

@@ -30,6 +30,7 @@ def _cookie_secure(request: Request) -> bool:
     a TLS-terminating proxy that forwards X-Forwarded-Proto)."""
     return request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "") == "https"
 
+
 _start_time = time.time()
 
 

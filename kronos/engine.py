@@ -375,9 +375,7 @@ async def execute_tool(
     )
 
 
-def _deferred_tool_messages(
-    tool_calls: list[dict], awaiting: dict
-) -> list["ToolMessage"]:
+def _deferred_tool_messages(tool_calls: list[dict], awaiting: dict) -> list["ToolMessage"]:
     """Placeholder results for tool_calls that follow the one now awaiting approval.
 
     When the loop returns mid-batch for approval, every OTHER tool_call in the
@@ -552,12 +550,15 @@ async def react_loop(
             tool_name = tc.get("name", "")
             tool_call_id = tc.get("id", "")
             tool = tool_map.get(tool_name)
-            emit_tool_event("tool_call", {
-                "name": tool_name,
-                "call_id": tool_call_id,
-                "args": tc.get("args", {}),
-                "turn": turn + 1,
-            })
+            emit_tool_event(
+                "tool_call",
+                {
+                    "name": tool_name,
+                    "call_id": tool_call_id,
+                    "args": tc.get("args", {}),
+                    "turn": turn + 1,
+                },
+            )
             tool_started = time.perf_counter()
 
             if tool is None:
@@ -569,18 +570,21 @@ async def react_loop(
                 await write_tool_result(tool_call_id, str(tm.content))
                 raw_content = tool_message_raw_content(tm)
                 model_content = str(tm.content)
-                emit_tool_event("tool_result", {
-                    "name": tool_name,
-                    "call_id": tool_call_id,
-                    "ok": False,
-                    "content": raw_content,
-                    "model_content": model_content,
-                    "compressed": raw_content != model_content,
-                    "raw_content_chars": len(raw_content),
-                    "model_content_chars": len(model_content),
-                    "turn": turn + 1,
-                    "duration_ms": round((time.perf_counter() - tool_started) * 1000),
-                })
+                emit_tool_event(
+                    "tool_result",
+                    {
+                        "name": tool_name,
+                        "call_id": tool_call_id,
+                        "ok": False,
+                        "content": raw_content,
+                        "model_content": model_content,
+                        "compressed": raw_content != model_content,
+                        "raw_content_chars": len(raw_content),
+                        "model_content_chars": len(model_content),
+                        "turn": turn + 1,
+                        "duration_ms": round((time.perf_counter() - tool_started) * 1000),
+                    },
+                )
             else:
                 cached_content = await read_cached_tool_result(tool_call_id)
                 if cached_content is not None:
@@ -612,12 +616,15 @@ async def react_loop(
                                 f"Approval ID: `{approval_id}`\n\n"
                                 "Нажми Approve/Reject в Telegram или обработай approval вручную."
                             )
-                            emit_tool_event("tool_approval_required", {
-                                "name": tool_name,
-                                "call_id": tool_call_id,
-                                "approval_id": approval_id,
-                                "turn": turn + 1,
-                            })
+                            emit_tool_event(
+                                "tool_approval_required",
+                                {
+                                    "name": tool_name,
+                                    "call_id": tool_call_id,
+                                    "approval_id": approval_id,
+                                    "turn": turn + 1,
+                                },
+                            )
                             return AgentResult(
                                 messages=messages,
                                 content=content,
@@ -627,10 +634,7 @@ async def react_loop(
                                 approval_tool_name=tool_name,
                             )
 
-                        content = (
-                            f"[ERROR] Tool '{tool_name}' requires approval, "
-                            "but no approval handler is available."
-                        )
+                        content = f"[ERROR] Tool '{tool_name}' requires approval, but no approval handler is available."
                         tm = ToolMessage(content=content, tool_call_id=tool_call_id)
                         await write_tool_result(tool_call_id, str(tm.content))
                     else:
@@ -638,13 +642,15 @@ async def react_loop(
                         # Publish approval hooks + this call's context so a
                         # delegation tool can hand the same approval channel to
                         # its sub-agent (it reads this synchronously at entry).
-                        _delegation_ctx.set({
-                            "request_tool_approval": request_tool_approval,
-                            "needs_tool_approval": needs_tool_approval,
-                            "tool_name": tool_name,
-                            "tool_call_id": tool_call_id,
-                            "request": (tc.get("args") or {}).get("request", ""),
-                        })
+                        _delegation_ctx.set(
+                            {
+                                "request_tool_approval": request_tool_approval,
+                                "needs_tool_approval": needs_tool_approval,
+                                "tool_name": tool_name,
+                                "tool_call_id": tool_call_id,
+                                "request": (tc.get("args") or {}).get("request", ""),
+                            }
+                        )
                         try:
                             tm = await execute_tool(tool, tc, error_handler)
                         except SubAgentApprovalPause as pause:
@@ -661,12 +667,15 @@ async def react_loop(
                                 messages.extend(deferred)
                                 call_messages.extend(deferred)
                                 await emit_message_delta(deferred)
-                            emit_tool_event("tool_approval_required", {
-                                "name": pause.tool_name,
-                                "call_id": tool_call_id,
-                                "approval_id": pause.approval_id,
-                                "turn": turn + 1,
-                            })
+                            emit_tool_event(
+                                "tool_approval_required",
+                                {
+                                    "name": pause.tool_name,
+                                    "call_id": tool_call_id,
+                                    "approval_id": pause.approval_id,
+                                    "turn": turn + 1,
+                                },
+                            )
                             return AgentResult(
                                 messages=messages,
                                 content=(
@@ -684,24 +693,25 @@ async def react_loop(
                         log.info("Tool result: %s → %s", tool_name, str(tm.content)[:200])
                 raw_content = tool_message_raw_content(tm)
                 model_content = str(tm.content)
-                emit_tool_event("tool_result", {
-                    "name": tool_name,
-                    "call_id": tool_call_id,
-                    "ok": not raw_content.startswith("[ERROR]"),
-                    "content": raw_content,
-                    "model_content": model_content,
-                    "compressed": raw_content != model_content,
-                    "raw_content_chars": len(raw_content),
-                    "model_content_chars": len(model_content),
-                    "cached": cached_content is not None,
-                    "turn": turn + 1,
-                    "duration_ms": round((time.perf_counter() - tool_started) * 1000),
-                })
+                emit_tool_event(
+                    "tool_result",
+                    {
+                        "name": tool_name,
+                        "call_id": tool_call_id,
+                        "ok": not raw_content.startswith("[ERROR]"),
+                        "content": raw_content,
+                        "model_content": model_content,
+                        "compressed": raw_content != model_content,
+                        "raw_content_chars": len(raw_content),
+                        "model_content_chars": len(model_content),
+                        "cached": cached_content is not None,
+                        "turn": turn + 1,
+                        "duration_ms": round((time.perf_counter() - tool_started) * 1000),
+                    },
+                )
 
             tool_messages.append(tm)
-            loop_detector.record(
-                tool_name, tc.get("args", {}) or {}, tool_message_raw_content(tm)
-            )
+            loop_detector.record(tool_name, tc.get("args", {}) or {}, tool_message_raw_content(tm))
 
         messages.extend(tool_messages)
         call_messages.extend(tool_messages)

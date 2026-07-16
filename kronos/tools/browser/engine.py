@@ -26,9 +26,7 @@ async def _ensure_browser():
     try:
         from playwright.async_api import async_playwright
     except ImportError:
-        raise RuntimeError(
-            "playwright not installed. Run: pip install playwright && playwright install chromium"
-        )
+        raise RuntimeError("playwright not installed. Run: pip install playwright && playwright install chromium")
 
     async with _lock:
         if _page and not _page.is_closed():

@@ -37,25 +37,35 @@ def swarm(tmp_path, monkeypatch):
     db_dir.mkdir()
 
     from kronos.config import settings as _settings
+
     monkeypatch.setattr(_settings, "swarm_db_path", str(swarm_path))
     monkeypatch.setattr(_settings, "db_dir", str(db_dir))
     monkeypatch.setattr(_settings, "db_path", str(db_dir / "session.db"))
 
     # Reset SafeDB + SwarmStore singletons so they pick up the new paths.
     from kronos import db as _db
+
     _db._instances.clear()
     import kronos.swarm_store as ss
+
     ss._singleton = None
 
     from kronos.swarm_store import get_swarm
+
     return get_swarm()
 
 
 class TestRecordMessages:
     def test_record_inbound_and_read_back(self, swarm):
         swarm.record_inbound_message(
-            chat_id=10, topic_id=None, msg_id=1, reply_to_msg_id=None,
-            sender_id=42, sender_type="user", agent_name=None, text="hi",
+            chat_id=10,
+            topic_id=None,
+            msg_id=1,
+            reply_to_msg_id=None,
+            sender_id=42,
+            sender_type="user",
+            agent_name=None,
+            text="hi",
         )
         rows = swarm.get_recent_messages(chat_id=10, topic_id=None)
         assert len(rows) == 1
@@ -65,28 +75,50 @@ class TestRecordMessages:
     def test_idempotent_on_primary_key(self, swarm):
         for _ in range(3):
             swarm.record_inbound_message(
-                chat_id=10, topic_id=None, msg_id=1, reply_to_msg_id=None,
-                sender_id=42, sender_type="user", agent_name=None, text="hi",
+                chat_id=10,
+                topic_id=None,
+                msg_id=1,
+                reply_to_msg_id=None,
+                sender_id=42,
+                sender_type="user",
+                agent_name=None,
+                text="hi",
             )
         rows = swarm.get_recent_messages(chat_id=10, topic_id=None)
         assert len(rows) == 1
 
     def test_topic_isolation(self, swarm):
         swarm.record_inbound_message(
-            chat_id=10, topic_id=5, msg_id=1, reply_to_msg_id=None,
-            sender_id=42, sender_type="user", agent_name=None, text="in topic",
+            chat_id=10,
+            topic_id=5,
+            msg_id=1,
+            reply_to_msg_id=None,
+            sender_id=42,
+            sender_type="user",
+            agent_name=None,
+            text="in topic",
         )
         swarm.record_inbound_message(
-            chat_id=10, topic_id=None, msg_id=1, reply_to_msg_id=None,
-            sender_id=42, sender_type="user", agent_name=None, text="general",
+            chat_id=10,
+            topic_id=None,
+            msg_id=1,
+            reply_to_msg_id=None,
+            sender_id=42,
+            sender_type="user",
+            agent_name=None,
+            text="general",
         )
         assert len(swarm.get_recent_messages(chat_id=10, topic_id=5)) == 1
         assert len(swarm.get_recent_messages(chat_id=10, topic_id=None)) == 1
 
     def test_outbound_recorded_as_agent(self, swarm):
         swarm.record_outbound_message(
-            chat_id=10, topic_id=None, msg_id=999, reply_to_msg_id=1,
-            agent_name="kronos", text="my reply",
+            chat_id=10,
+            topic_id=None,
+            msg_id=999,
+            reply_to_msg_id=1,
+            agent_name="kronos",
+            text="my reply",
         )
         rows = swarm.get_recent_messages(chat_id=10, topic_id=None)
         assert rows[0]["sender_type"] == "agent"
@@ -94,12 +126,24 @@ class TestRecordMessages:
 
     def test_clear_thread_messages_is_scoped_and_keeps_facts(self, swarm):
         swarm.record_inbound_message(
-            chat_id=10, topic_id=None, msg_id=1, reply_to_msg_id=None,
-            sender_id=42, sender_type="user", agent_name=None, text="keep",
+            chat_id=10,
+            topic_id=None,
+            msg_id=1,
+            reply_to_msg_id=None,
+            sender_id=42,
+            sender_type="user",
+            agent_name=None,
+            text="keep",
         )
         swarm.record_inbound_message(
-            chat_id=20, topic_id=None, msg_id=1, reply_to_msg_id=None,
-            sender_id=42, sender_type="user", agent_name=None, text="clear me",
+            chat_id=20,
+            topic_id=None,
+            msg_id=1,
+            reply_to_msg_id=None,
+            sender_id=42,
+            sender_type="user",
+            agent_name=None,
+            text="clear me",
         )
         swarm.add_shared_fact(user_id="u1", fact="survives clear", source_agent="k")
 
@@ -116,14 +160,22 @@ class TestRecordMessages:
 class TestArbitration:
     def _claim(self, swarm, agent: str, tier: int, eta_offset: float, *, msg_id: int = 1):
         swarm.claim_reply(
-            chat_id=100, topic_id=None, root_msg_id=1, trigger_msg_id=msg_id,
-            agent_name=agent, tier=tier, eta_ts=time.time() + eta_offset,
+            chat_id=100,
+            topic_id=None,
+            root_msg_id=1,
+            trigger_msg_id=msg_id,
+            agent_name=agent,
+            tier=tier,
+            eta_ts=time.time() + eta_offset,
         )
 
     def _can_send(self, swarm, agent: str, tier: int):
         return swarm.can_send_claim(
-            chat_id=100, topic_id=None, root_msg_id=1,
-            agent_name=agent, tier=tier,
+            chat_id=100,
+            topic_id=None,
+            root_msg_id=1,
+            agent_name=agent,
+            tier=tier,
         )
 
     def test_earliest_eta_wins_at_same_tier(self, swarm):
@@ -151,8 +203,11 @@ class TestArbitration:
         self._claim(swarm, "kronos", tier=2, eta_offset=1.0, msg_id=1)
         self._claim(swarm, "analyst", tier=2, eta_offset=2.0, msg_id=2)
         swarm.cancel_claim(
-            chat_id=100, topic_id=None, trigger_msg_id=1,
-            agent_name="kronos", reason="test",
+            chat_id=100,
+            topic_id=None,
+            trigger_msg_id=1,
+            agent_name="kronos",
+            reason="test",
         )
         # Now analyst is the last remaining active claim → wins.
         assert self._can_send(swarm, "analyst", tier=2).won is True
@@ -162,8 +217,11 @@ class TestArbitration:
         for i, agent in enumerate(["kronos", "analyst"], start=1):
             self._claim(swarm, agent, tier=2, eta_offset=i * 0.1, msg_id=i)
             swarm.mark_sent(
-                chat_id=100, topic_id=None, trigger_msg_id=i,
-                agent_name=agent, reply_msg_id=i * 100,
+                chat_id=100,
+                topic_id=None,
+                trigger_msg_id=i,
+                agent_name=agent,
+                reply_msg_id=i * 100,
             )
         self._claim(swarm, "reviewer", tier=2, eta_offset=0.3, msg_id=3)
         out = self._can_send(swarm, "reviewer", tier=2)
@@ -175,8 +233,11 @@ class TestArbitration:
         for i, agent in enumerate(["kronos", "analyst"], start=1):
             self._claim(swarm, agent, tier=2, eta_offset=i * 0.1, msg_id=i)
             swarm.mark_sent(
-                chat_id=100, topic_id=None, trigger_msg_id=i,
-                agent_name=agent, reply_msg_id=i * 100,
+                chat_id=100,
+                topic_id=None,
+                trigger_msg_id=i,
+                agent_name=agent,
+                reply_msg_id=i * 100,
             )
         self._claim(swarm, "reviewer", tier=1, eta_offset=0.3, msg_id=3)
         assert self._can_send(swarm, "reviewer", tier=1).won is True
@@ -188,14 +249,23 @@ class TestExecutingLease:
 
     def _claim(self, swarm, agent: str, tier: int, eta_offset: float, *, msg_id: int):
         swarm.claim_reply(
-            chat_id=100, topic_id=None, root_msg_id=1, trigger_msg_id=msg_id,
-            agent_name=agent, tier=tier, eta_ts=time.time() + eta_offset,
+            chat_id=100,
+            topic_id=None,
+            root_msg_id=1,
+            trigger_msg_id=msg_id,
+            agent_name=agent,
+            tier=tier,
+            eta_ts=time.time() + eta_offset,
         )
 
     def _can_send(self, swarm, agent: str, tier: int, **kw):
         return swarm.can_send_claim(
-            chat_id=100, topic_id=None, root_msg_id=1,
-            agent_name=agent, tier=tier, **kw,
+            chat_id=100,
+            topic_id=None,
+            root_msg_id=1,
+            agent_name=agent,
+            tier=tier,
+            **kw,
         )
 
     def _state(self, swarm, msg_id: int):
@@ -215,7 +285,10 @@ class TestExecutingLease:
         """Simulate the bridge: win arbitration, then take the lease."""
         assert self._can_send(swarm, agent, tier).won is True
         swarm.begin_executing(
-            chat_id=100, topic_id=None, trigger_msg_id=msg_id, agent_name=agent,
+            chat_id=100,
+            topic_id=None,
+            trigger_msg_id=msg_id,
+            agent_name=agent,
         )
 
     def test_begin_executing_takes_the_lease(self, swarm):
@@ -267,8 +340,11 @@ class TestExecutingLease:
         self._claim(swarm, "kronos", tier=2, eta_offset=0.1, msg_id=1)
         self._acquire(swarm, "kronos", tier=2, msg_id=1)
         swarm.mark_sent(
-            chat_id=100, topic_id=None, trigger_msg_id=1,
-            agent_name="kronos", reply_msg_id=777,
+            chat_id=100,
+            topic_id=None,
+            trigger_msg_id=1,
+            agent_name="kronos",
+            reply_msg_id=777,
         )
         assert self._state(swarm, 1) == "sent"
 
@@ -276,12 +352,18 @@ class TestExecutingLease:
         # A cancelled claim must not be resurrected to 'sent'.
         self._claim(swarm, "kronos", tier=2, eta_offset=0.1, msg_id=1)
         swarm.cancel_claim(
-            chat_id=100, topic_id=None, trigger_msg_id=1,
-            agent_name="kronos", reason="stood down",
+            chat_id=100,
+            topic_id=None,
+            trigger_msg_id=1,
+            agent_name="kronos",
+            reason="stood down",
         )
         swarm.mark_sent(
-            chat_id=100, topic_id=None, trigger_msg_id=1,
-            agent_name="kronos", reply_msg_id=555,
+            chat_id=100,
+            topic_id=None,
+            trigger_msg_id=1,
+            agent_name="kronos",
+            reply_msg_id=555,
         )
         assert self._state(swarm, 1) == "cancelled"
 
@@ -292,8 +374,11 @@ class TestExecutingLease:
         self._acquire(swarm, "kronos", tier=2, msg_id=1)
         assert self._state(swarm, 1) == "executing"
         swarm.cancel_claim(
-            chat_id=100, topic_id=None, trigger_msg_id=1,
-            agent_name="kronos", reason="peer-reaction self-pass",
+            chat_id=100,
+            topic_id=None,
+            trigger_msg_id=1,
+            agent_name="kronos",
+            reason="peer-reaction self-pass",
         )
         assert self._state(swarm, 1) == "cancelled"
         self._claim(swarm, "analyst", tier=2, eta_offset=0.2, msg_id=2)
@@ -303,7 +388,8 @@ class TestExecutingLease:
 class TestSharedUserFacts:
     def test_add_and_search(self, swarm):
         swarm.add_shared_fact(
-            user_id="u1", fact="User runs a startup",
+            user_id="u1",
+            fact="User runs a startup",
             source_agent="kronos",
         )
         found = swarm.search_shared_facts(user_id="u1", query="startup")
@@ -348,12 +434,24 @@ class TestRetention:
     def test_prune_old_messages(self, swarm):
         # Manually age a message by patching created_at via direct SQL.
         swarm.record_inbound_message(
-            chat_id=1, topic_id=None, msg_id=1, reply_to_msg_id=None,
-            sender_id=42, sender_type="user", agent_name=None, text="old",
+            chat_id=1,
+            topic_id=None,
+            msg_id=1,
+            reply_to_msg_id=None,
+            sender_id=42,
+            sender_type="user",
+            agent_name=None,
+            text="old",
         )
         swarm.record_inbound_message(
-            chat_id=1, topic_id=None, msg_id=2, reply_to_msg_id=None,
-            sender_id=42, sender_type="user", agent_name=None, text="new",
+            chat_id=1,
+            topic_id=None,
+            msg_id=2,
+            reply_to_msg_id=None,
+            sender_id=42,
+            sender_type="user",
+            agent_name=None,
+            text="new",
         )
         ancient = time.time() - 100 * 86400  # 100 days ago
         swarm._db.write(
@@ -395,28 +493,33 @@ class TestSchemaMigration:
             )
 
         from kronos.config import settings as _settings
+
         monkeypatch.setattr(_settings, "swarm_db_path", str(swarm_path))
         monkeypatch.setattr(_settings, "db_dir", str(tmp_path / "agent"))
 
         from kronos import db as _db
+
         _db._instances.clear()
         import kronos.swarm_store as ss
+
         ss._singleton = None
 
         store = ss.get_swarm()  # must not raise
 
         with sqlite3.connect(swarm_path) as conn:
-            tables = {row[0] for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )}
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             columns = {row[1] for row in conn.execute("PRAGMA table_info(session_messages)")}
 
         assert {"handoffs", "council_sessions", "council_positions", "memory_requests"} <= tables
         assert "fingerprint" in columns
 
         handoff_id = store.create_handoff(
-            chat_id=1, topic_id=0, thread_id="1",
-            from_agent="kronos", to_agent="nexus", context="works now",
+            chat_id=1,
+            topic_id=0,
+            thread_id="1",
+            from_agent="kronos",
+            to_agent="nexus",
+            context="works now",
         )
         assert handoff_id > 0
 
@@ -456,24 +559,23 @@ class TestSchemaMigration:
             )
 
         from kronos.config import settings as _settings
+
         monkeypatch.setattr(_settings, "swarm_db_path", str(swarm_path))
         monkeypatch.setattr(_settings, "db_dir", str(tmp_path / "agent"))
 
         from kronos import db as _db
+
         _db._instances.clear()
         import kronos.swarm_store as ss
+
         ss._singleton = None
 
         ss.get_swarm()  # runs the CHECK migration on load
 
         with sqlite3.connect(swarm_path) as conn:
-            ddl = conn.execute(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name='reply_claims'"
-            ).fetchone()[0]
+            ddl = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='reply_claims'").fetchone()[0]
             assert "'executing'" in ddl
-            preserved = conn.execute(
-                "SELECT agent_name, state FROM reply_claims WHERE trigger_msg_id = 1"
-            ).fetchone()
+            preserved = conn.execute("SELECT agent_name, state FROM reply_claims WHERE trigger_msg_id = 1").fetchone()
             assert preserved == ("kronos", "sent")
             # 'executing' no longer violates the CHECK constraint.
             conn.execute(

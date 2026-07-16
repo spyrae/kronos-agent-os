@@ -148,16 +148,19 @@ def warn_deprecated_workspace_env() -> None:
 
 # --- LLM ---
 
+
 def ask_deepseek(prompt: str, timeout: int = DEEPSEEK_TIMEOUT) -> str:
     """Call DeepSeek chat completions API. Stdlib only (urllib)."""
     if not DEEPSEEK_API_KEY:
         raise RuntimeError("DEEPSEEK_API_KEY is not set")
 
-    payload = json.dumps({
-        "model": DEEPSEEK_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 4000,
-    }).encode("utf-8")
+    payload = json.dumps(
+        {
+            "model": DEEPSEEK_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 4000,
+        }
+    ).encode("utf-8")
 
     req = urllib.request.Request(
         f"{DEEPSEEK_BASE_URL}/chat/completions",
@@ -174,6 +177,7 @@ def ask_deepseek(prompt: str, timeout: int = DEEPSEEK_TIMEOUT) -> str:
 
 
 # --- Bridge communication ---
+
 
 def fetch_history(chat: str, limit: int = 300) -> dict:
     """Fetch chat history from bridge."""
@@ -193,6 +197,7 @@ def fetch_history(chat: str, limit: int = 300) -> dict:
 
 
 # --- Message sampling ---
+
 
 def sample_messages(messages: list[dict], max_count: int = 300) -> list[dict]:
     """Smart sampling for large chats.
@@ -229,6 +234,7 @@ def sample_messages(messages: list[dict], max_count: int = 300) -> list[dict]:
 
 # --- Prompt ---
 
+
 def build_prompt(chat_meta: dict, messages: list[dict]) -> str:
     """Build analysis prompt from chat metadata and messages."""
     name = chat_meta.get("first_name") or chat_meta.get("username") or "Unknown"
@@ -251,8 +257,11 @@ def build_prompt(chat_meta: dict, messages: list[dict]) -> str:
         lines.append(f"[{date}] {sender}: {text}")
 
     if injection_warnings:
-        log.warning("Potential prompt injection detected in %d messages:\n%s",
-                     len(injection_warnings), "\n".join(injection_warnings))
+        log.warning(
+            "Potential prompt injection detected in %d messages:\n%s",
+            len(injection_warnings),
+            "\n".join(injection_warnings),
+        )
 
     conversation = "\n".join(lines)
 
@@ -274,7 +283,7 @@ Username: @{username}
 ### Формат ответа (строго markdown):
 
 # Досье: {full_name} (@{username})
-*Дата: {datetime.now(UTC).strftime('%Y-%m-%d')}*
+*Дата: {datetime.now(UTC).strftime("%Y-%m-%d")}*
 *Сообщений проанализировано: {len(messages)}*
 
 ## 1. Кто этот человек
@@ -314,6 +323,7 @@ Username: @{username}
 
 # --- Save ---
 
+
 def save_dossier(handle: str, content: str) -> Path:
     """Save dossier to the runtime workspace contacts directory."""
     CONTACTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -328,9 +338,11 @@ def save_dossier(handle: str, content: str) -> Path:
 
 # --- Telegram notification ---
 
+
 def md_to_html(text: str) -> str:
     """Convert markdown to Telegram HTML (simplified)."""
     import html as _html
+
     lines = text.split("\n")
     out = []
     for line in lines:
@@ -358,7 +370,7 @@ def send_telegram(summary: str) -> None:
         return
 
     html_text = md_to_html(summary)
-    chunks = [html_text[i:i + 4000] for i in range(0, len(html_text), 4000)]
+    chunks = [html_text[i : i + 4000] for i in range(0, len(html_text), 4000)]
 
     for chunk in chunks:
         msg = {
@@ -370,7 +382,8 @@ def send_telegram(summary: str) -> None:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         payload = json.dumps(msg).encode("utf-8")
         req = urllib.request.Request(
-            url, data=payload,
+            url,
+            data=payload,
             headers={"Content-Type": "application/json"},
         )
         try:
@@ -383,6 +396,7 @@ def send_telegram(summary: str) -> None:
 
 
 # --- Main ---
+
 
 def run_profiler(chat: str, limit: int, dry_run: bool, no_notify: bool) -> None:
     log.info("Contact Profiler started: chat=%s, limit=%d, dry_run=%s", chat, limit, dry_run)

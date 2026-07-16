@@ -35,11 +35,14 @@ def _now():
 def test_cost_report_aggregates_by_tier(cost_env):
     from kronos.security.cost_stats import cost_report
 
-    _write_costs(cost_env, [
-        {"ts": _now(), "tier": "standard", "cost_usd": 0.02, "input_tokens": 100, "output_tokens": 50},
-        {"ts": _now(), "tier": "lite", "cost_usd": 0.005, "input_tokens": 20, "output_tokens": 10},
-        {"ts": _now(), "tier": "lite", "cost_usd": 0.005, "input_tokens": 20, "output_tokens": 10},
-    ])
+    _write_costs(
+        cost_env,
+        [
+            {"ts": _now(), "tier": "standard", "cost_usd": 0.02, "input_tokens": 100, "output_tokens": 50},
+            {"ts": _now(), "tier": "lite", "cost_usd": 0.005, "input_tokens": 20, "output_tokens": 10},
+            {"ts": _now(), "tier": "lite", "cost_usd": 0.005, "input_tokens": 20, "output_tokens": 10},
+        ],
+    )
     report = cost_report("today")
     assert report["total"]["requests"] == 3
     assert abs(report["total"]["cost"] - 0.03) < 1e-6
@@ -50,10 +53,13 @@ def test_cost_report_aggregates_by_tier(cost_env):
 def test_cost_report_today_excludes_old_entries(cost_env):
     from kronos.security.cost_stats import cost_report
 
-    _write_costs(cost_env, [
-        {"ts": "2020-01-01T00:00:00", "tier": "standard", "cost_usd": 1.0, "input_tokens": 1, "output_tokens": 1},
-        {"ts": _now(), "tier": "lite", "cost_usd": 0.01, "input_tokens": 1, "output_tokens": 1},
-    ])
+    _write_costs(
+        cost_env,
+        [
+            {"ts": "2020-01-01T00:00:00", "tier": "standard", "cost_usd": 1.0, "input_tokens": 1, "output_tokens": 1},
+            {"ts": _now(), "tier": "lite", "cost_usd": 0.01, "input_tokens": 1, "output_tokens": 1},
+        ],
+    )
     report = cost_report("today")
     assert report["total"]["requests"] == 1  # 2020 entry excluded
 
@@ -61,15 +67,19 @@ def test_cost_report_today_excludes_old_entries(cost_env):
 def test_swarm_cost_by_agent(cost_env):
     from kronos.security.cost_stats import swarm_cost_by_agent
 
-    _write_costs(cost_env, [
-        {"ts": _now(), "tier": "lite", "cost_usd": 0.01, "input_tokens": 1, "output_tokens": 1},
-    ])
+    _write_costs(
+        cost_env,
+        [
+            {"ts": _now(), "tier": "lite", "cost_usd": 0.01, "input_tokens": 1, "output_tokens": 1},
+        ],
+    )
     nexus = cost_env.parent / "nexus"
     (nexus / "logs").mkdir(parents=True)
     with open(nexus / "logs" / "cost.jsonl", "w") as handle:
-        handle.write(json.dumps(
-            {"ts": _now(), "tier": "standard", "cost_usd": 0.05, "input_tokens": 1, "output_tokens": 1}
-        ) + "\n")
+        handle.write(
+            json.dumps({"ts": _now(), "tier": "standard", "cost_usd": 0.05, "input_tokens": 1, "output_tokens": 1})
+            + "\n"
+        )
 
     breakdown = swarm_cost_by_agent("today")
     assert breakdown["kronos"] == 0.01
@@ -91,9 +101,12 @@ def test_should_degrade_crosses_threshold(monkeypatch):
 async def test_stats_command_formats_report(cost_env):
     from kronos.bridge import _handle_stats_command
 
-    _write_costs(cost_env, [
-        {"ts": _now(), "tier": "lite", "cost_usd": 0.01, "input_tokens": 5, "output_tokens": 5},
-    ])
+    _write_costs(
+        cost_env,
+        [
+            {"ts": _now(), "tier": "lite", "cost_usd": 0.01, "input_tokens": 5, "output_tokens": 5},
+        ],
+    )
     result = await _handle_stats_command("/stats")
     assert result is not None
     assert "Расходы" in result

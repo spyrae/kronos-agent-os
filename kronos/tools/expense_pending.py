@@ -76,15 +76,19 @@ async def resolve_pending_expense(pending_id: int, category: str) -> str:
     if row["currency"] not in SUPPORTED_CURRENCIES:
         return f"[ERROR] Валюта {row['currency']} не поддерживается для записи."
 
-    result = str(add_expense.invoke({
-        "description": row["description"],
-        "amount": row["amount"],
-        "currency": row["currency"],
-        "category": category,
-        "date": row["expense_date"],
-        "split_full": _is_split_source(row["source"]),
-        "ref": row["message_id"],
-    }))
+    result = str(
+        add_expense.invoke(
+            {
+                "description": row["description"],
+                "amount": row["amount"],
+                "currency": row["currency"],
+                "category": category,
+                "date": row["expense_date"],
+                "split_full": _is_split_source(row["source"]),
+                "ref": row["message_id"],
+            }
+        )
+    )
     if result.startswith("[ERROR]"):
         return f"[ERROR] Не удалось записать трату #{pending_id}: {result}"
 
@@ -103,11 +107,16 @@ async def resolve_pending_expense(pending_id: int, category: str) -> str:
                 except Exception as e:
                     log.warning("Archive after resolve failed for %s: %s", message_id, e)
         ledger.record(
-            message_id=message_id, source=row["source"],
+            message_id=message_id,
+            source=row["source"],
             status="archived" if archived else "recorded",
-            amount=row["amount"], currency=row["currency"], amount_idr=row["amount_idr"],
-            expense_date=row["expense_date"], description=row["description"],
-            category=category, archived=archived,
+            amount=row["amount"],
+            currency=row["currency"],
+            amount_idr=row["amount_idr"],
+            expense_date=row["expense_date"],
+            description=row["description"],
+            category=category,
+            archived=archived,
         )
 
     tail = " Письмо в архиве." if archived else " (письмо оставлено в инбоксе)"

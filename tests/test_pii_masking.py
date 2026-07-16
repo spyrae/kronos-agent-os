@@ -102,14 +102,17 @@ def test_tool_audit_summaries_mask_pii(tmp_path, monkeypatch):
     monkeypatch.setattr(audit.settings, "agent_name", "kaos")
     audit._audit_dir = None
 
-    audit.log_tool_event("tool_call", {
-        "name": "send_message",
-        "call_id": "call-1",
-        "args": {
-            "email": "roman@example.com",
-            "phone": "+79161234567",
+    audit.log_tool_event(
+        "tool_call",
+        {
+            "name": "send_message",
+            "call_id": "call-1",
+            "args": {
+                "email": "roman@example.com",
+                "phone": "+79161234567",
+            },
         },
-    })
+    )
 
     tool_log = db_path.parent / "logs" / "tool_calls.jsonl"
     entry = json.loads(tool_log.read_text(encoding="utf-8").strip())

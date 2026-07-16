@@ -36,11 +36,13 @@ async def list_files():
     for name, path in EDITABLE_FILES.items():
         if path.exists():
             content = path.read_text(encoding="utf-8")
-            files.append({
-                "name": name,
-                "size": len(content),
-                "preview": content[:200],
-            })
+            files.append(
+                {
+                    "name": name,
+                    "size": len(content),
+                    "preview": content[:200],
+                }
+            )
     return {"files": files}
 
 
@@ -92,9 +94,7 @@ async def list_proposals():
 @router.post("/proposals/{proposal_id}/decision")
 async def decide_proposal(proposal_id: int, body: ProposalDecision):
     """Approve (and apply) or reject a persona evolution proposal."""
-    decided = evolution.decide_proposal(
-        proposal_id, settings.agent_name, approved=body.approved
-    )
+    decided = evolution.decide_proposal(proposal_id, settings.agent_name, approved=body.approved)
     if decided is None:
         raise HTTPException(404, "Proposal not found or already decided")
     if not body.approved:

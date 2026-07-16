@@ -61,9 +61,7 @@ def _summarize_results(query: str, results: list[dict]) -> str:
     snippets = []
     for r in results[:5]:
         ts = datetime.fromtimestamp(r["created_at"]).strftime("%Y-%m-%d %H:%M")
-        snippets.append(
-            f"[{ts}] {r['agent_name']}/{r['role']}: {r['content'][:600]}"
-        )
+        snippets.append(f"[{ts}] {r['agent_name']}/{r['role']}: {r['content'][:600]}")
     prompt = f"""Summarize these session-search hits for the user.
 
 Query: {query}

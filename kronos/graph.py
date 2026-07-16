@@ -140,9 +140,7 @@ class KronosAgent:
             schedule_task,
         )
 
-        self._tools.extend(
-            [schedule_task, schedule_followup, list_scheduled_tasks, cancel_scheduled_task]
-        )
+        self._tools.extend([schedule_task, schedule_followup, list_scheduled_tasks, cancel_scheduled_task])
 
         # Swarm collaboration: hand-off (5.1) + council (5.2) + memory query (5.3)
         from kronos.tools.council import convene_council
@@ -262,9 +260,7 @@ class KronosAgent:
             "request_tool_approval": request_tool_approval,
         }
         if approved_tool_name:
-            kwargs["needs_tool_approval"] = self._approval_scope(
-                approved_tool_name, approved_tool_args
-            )
+            kwargs["needs_tool_approval"] = self._approval_scope(approved_tool_name, approved_tool_args)
 
         return kwargs
 
@@ -306,6 +302,7 @@ class KronosAgent:
         """
         emit = self._emit_tool_event
         if on_tool_event is not None:
+
             def emit(event: str, payload: dict[str, Any], _extra=on_tool_event) -> None:
                 self._emit_tool_event(event, payload)
                 _extra(event, payload)
@@ -470,20 +467,24 @@ class KronosAgent:
 
         deleg_tool = self._approval_tool_map().get(deleg_name)
         if deleg_tool is None:
-            return {"tool_message": ToolMessage(
-                content=f"[ERROR] Delegation tool '{deleg_name}' is no longer available after restart.",
-                tool_call_id=call_id,
-            )}
+            return {
+                "tool_message": ToolMessage(
+                    content=f"[ERROR] Delegation tool '{deleg_name}' is no longer available after restart.",
+                    tool_call_id=call_id,
+                )
+            }
 
         # Publish the exemption + approval channel so the re-run sub-agent
         # executes the approved call (and can pause anew for a different one).
-        ctx_token = publish_delegation_ctx({
-            "request_tool_approval": request_tool_approval,
-            "needs_tool_approval": needs_tool_approval,
-            "tool_name": deleg_name,
-            "tool_call_id": call_id,
-            "request": request,
-        })
+        ctx_token = publish_delegation_ctx(
+            {
+                "request_tool_approval": request_tool_approval,
+                "needs_tool_approval": needs_tool_approval,
+                "tool_name": deleg_name,
+                "tool_call_id": call_id,
+                "request": request,
+            }
+        )
         try:
             tool_message = await execute_tool(
                 deleg_tool,
@@ -504,7 +505,9 @@ class KronosAgent:
             clear_delegation_ctx(ctx_token)
 
         await self._session_store.save_tool_result(
-            turn_id=turn_id, tool_call_id=call_id, content=str(tool_message.content),
+            turn_id=turn_id,
+            tool_call_id=call_id,
+            content=str(tool_message.content),
         )
         return {"tool_message": tool_message}
 

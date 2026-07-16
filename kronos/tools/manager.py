@@ -72,7 +72,9 @@ async def managed_mcp_tools():
 
     log.info(
         "Loaded %d tools from %d/%d servers",
-        len(all_tools), len(config) - len(failed), len(config),
+        len(all_tools),
+        len(config) - len(failed),
+        len(config),
     )
 
     for tool in all_tools:

@@ -56,25 +56,22 @@ def collect() -> dict:
         # /global/spend/logs returns [{"date": "YYYY-MM-DD", "spend": float}, ...]
         # IMPORTANT: LiteLLM v1.83 ignores start_date/end_date params and
         # always returns the last 30 days. So we filter locally.
-        spend_data = _api_get("/global/spend/logs", {
-            "start_date": yesterday_date,
-            "end_date": today_date,
-        })
+        spend_data = _api_get(
+            "/global/spend/logs",
+            {
+                "start_date": yesterday_date,
+                "end_date": today_date,
+            },
+        )
         if not isinstance(spend_data, list):
             spend_data = spend_data.get("data", []) if isinstance(spend_data, dict) else []
 
         # 24h spend = today + yesterday entries.
         spend_24h = sum(
-            float(s.get("spend", 0) or 0)
-            for s in spend_data
-            if str(s.get("date", "")) in (today_date, yesterday_date)
+            float(s.get("spend", 0) or 0) for s in spend_data if str(s.get("date", "")) in (today_date, yesterday_date)
         )
         # 7d spend = entries with date >= 7-day cutoff.
-        spend_7d = sum(
-            float(s.get("spend", 0) or 0)
-            for s in spend_data
-            if str(s.get("date", "")) >= seven_days_ago
-        )
+        spend_7d = sum(float(s.get("spend", 0) or 0) for s in spend_data if str(s.get("date", "")) >= seven_days_ago)
         # 30d total (whatever LiteLLM returned).
         spend_30d = sum(float(s.get("spend", 0) or 0) for s in spend_data)
 
@@ -92,10 +89,7 @@ def collect() -> dict:
         active_models = [m for m in (models or []) if (m.get("total_spend") or 0) > 0]
         active_models.sort(key=lambda m: m.get("total_spend") or 0, reverse=True)
         top = active_models[:3]
-        top_models_str = (
-            ", ".join(f"{m['model']}: ${float(m['total_spend']):.2f}" for m in top)
-            if top else "N/A"
-        )
+        top_models_str = ", ".join(f"{m['model']}: ${float(m['total_spend']):.2f}" for m in top) if top else "N/A"
         models_tracked = len(active_models)
 
         return {

@@ -128,12 +128,14 @@ async def _extract_and_build_graph(facts: list[str]) -> tuple[int, int]:
 
     model = get_model(ModelTier.LITE)
     from langchain_core.messages import HumanMessage
+
     response = model.invoke([HumanMessage(content=prompt)])
     reply = response.content if isinstance(response.content, str) else str(response.content)
 
     # Parse JSON from response
     import re
-    match = re.search(r'\{[\s\S]*\}', reply)
+
+    match = re.search(r"\{[\s\S]*\}", reply)
     if not match:
         log.warning("No JSON in entity extraction response")
         return 0, 0
@@ -177,9 +179,7 @@ async def _generate_insights(recent_facts: list[str]) -> list[str]:
 
     # Get graph context
     db = kg._get_db()
-    rows = db.read(
-        "SELECT name, type FROM entities ORDER BY updated_at DESC LIMIT 20"
-    )
+    rows = db.read("SELECT name, type FROM entities ORDER BY updated_at DESC LIMIT 20")
 
     graph_parts = []
     for row in rows:
@@ -203,7 +203,8 @@ async def _generate_insights(recent_facts: list[str]) -> list[str]:
         reply = response.content if isinstance(response.content, str) else str(response.content)
 
         import re
-        match = re.search(r'\[[\s\S]*\]', reply)
+
+        match = re.search(r"\[[\s\S]*\]", reply)
         if match:
             return json.loads(match.group())
     except Exception as e:

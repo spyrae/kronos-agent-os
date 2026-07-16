@@ -121,7 +121,7 @@ async def synthesize(text: str) -> str | None:
 
 def _detect_voice(text: str) -> str:
     """Detect language and return appropriate voice."""
-    cyrillic_count = sum(1 for c in text if '\u0400' <= c <= '\u04ff')
+    cyrillic_count = sum(1 for c in text if "\u0400" <= c <= "\u04ff")
     total = len(text.replace(" ", ""))
     if total == 0:
         return EDGE_VOICE_RU
@@ -137,9 +137,16 @@ async def _convert_to_ogg(mp3_path: str, ogg_path: str) -> bool:
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-i", mp3_path,
-            "-c:a", "libopus", "-b:a", "48k",
-            "-vn", "-y", ogg_path,
+            "ffmpeg",
+            "-i",
+            mp3_path,
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "48k",
+            "-vn",
+            "-y",
+            ogg_path,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )

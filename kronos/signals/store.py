@@ -321,8 +321,12 @@ class SignalStore:
         source_ids = cluster.source_ids or tuple(sorted({row["source_id"] for row in item_rows}))
         platform_ids = cluster.platform_ids or tuple(sorted({row["source_platform"] for row in item_rows}))
         evidence_count = cluster.evidence_count or len(cluster.item_ids)
-        first_seen_at = cluster.first_seen_at or _min_non_empty(row["published_at"] or row["fetched_at"] for row in item_rows)
-        last_seen_at = cluster.last_seen_at or _max_non_empty(row["published_at"] or row["fetched_at"] for row in item_rows) or now
+        first_seen_at = cluster.first_seen_at or _min_non_empty(
+            row["published_at"] or row["fetched_at"] for row in item_rows
+        )
+        last_seen_at = (
+            cluster.last_seen_at or _max_non_empty(row["published_at"] or row["fetched_at"] for row in item_rows) or now
+        )
 
         def tx(conn: Connection) -> int:
             cursor = conn.execute(
@@ -662,9 +666,7 @@ def _ensure_columns(conn: Connection, table: str, columns: dict[str, str]) -> No
 
 def _content_hash(item: SignalItem) -> str:
     semantic_content = "\n".join(
-        part.strip()
-        for part in (item.normalized_text, item.text, item.title)
-        if part and part.strip()
+        part.strip() for part in (item.normalized_text, item.text, item.title) if part and part.strip()
     )
     content = semantic_content or "\n".join(
         part.strip()

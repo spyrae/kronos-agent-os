@@ -147,19 +147,19 @@ def _make_delegation_tool(agent_name: str, description: str, agent_fn: Callable)
                 "needs_tool_approval": ctx.get("needs_tool_approval"),
                 "request_tool_approval": ctx.get("request_tool_approval"),
             }
-            active_token = enter_delegation({
-                "tool_name": ctx.get("tool_name", f"delegate_to_{agent_name}"),
-                "tool_call_id": ctx.get("tool_call_id", ""),
-                "request": request,
-            })
+            active_token = enter_delegation(
+                {
+                    "tool_name": ctx.get("tool_name", f"delegate_to_{agent_name}"),
+                    "tool_call_id": ctx.get("tool_call_id", ""),
+                    "request": request,
+                }
+            )
         try:
             result = await agent_fn([HumanMessage(content=request)], **hooks)
             if getattr(result, "waiting_approval", False):
                 # The sub-agent paused for approval — bubble it up so the whole
                 # turn pauses rather than returning half-done text here.
-                raise SubAgentApprovalPause(
-                    result.approval_id, result.approval_tool_name or ""
-                )
+                raise SubAgentApprovalPause(result.approval_id, result.approval_tool_name or "")
             return result.content
         except SubAgentApprovalPause:
             raise
@@ -222,12 +222,14 @@ def build_supervisor(
     # Deep Research — multi-step pipeline
     try:
         deep_research = create_deep_research_agent(tools, on_tool_event=on_tool_event)
-        delegation_tools.append(_make_delegation_tool(
-            "deep_research",
-            'Глубокое исследование (multi-step: plan → search → evaluate → synthesize). '
-            'Для "исследуй", "research", "проверь идею", "анализ рынка", "тренды"',
-            deep_research,
-        ))
+        delegation_tools.append(
+            _make_delegation_tool(
+                "deep_research",
+                "Глубокое исследование (multi-step: plan → search → evaluate → synthesize). "
+                'Для "исследуй", "research", "проверь идею", "анализ рынка", "тренды"',
+                deep_research,
+            )
+        )
         descriptions.append(
             "- **delegate_to_deep_research**: глубокое исследование "
             '(multi-step). Для "исследуй", "research", "проверь идею"'
@@ -239,15 +241,15 @@ def build_supervisor(
     # Topic Research — blog topic discovery pipeline
     try:
         topic_research = create_topic_research_agent(tools, on_tool_event=on_tool_event)
-        delegation_tools.append(_make_delegation_tool(
-            "topic_research",
-            'Поиск и валидация тем для блога. '
-            'Для "найди темы", "topic research", "blog topics", "контент-план"',
-            topic_research,
-        ))
+        delegation_tools.append(
+            _make_delegation_tool(
+                "topic_research",
+                'Поиск и валидация тем для блога. Для "найди темы", "topic research", "blog topics", "контент-план"',
+                topic_research,
+            )
+        )
         descriptions.append(
-            '- **delegate_to_topic_research**: поиск тем для блога. '
-            'Для "найди темы", "topic research", "контент-план"'
+            '- **delegate_to_topic_research**: поиск тем для блога. Для "найди темы", "topic research", "контент-план"'
         )
         log.info("Topic Research agent created")
     except Exception as e:
@@ -256,12 +258,14 @@ def build_supervisor(
     # Knowledge Pipeline — durable file-handoff knowledge processing
     try:
         knowledge_pipeline = create_knowledge_pipeline_agent()
-        delegation_tools.append(_make_delegation_tool(
-            "knowledge_pipeline",
-            'Обработка знаний через file handoff: notes/inbox → ops/queue task → claims → wiki links → verify → Mem0. '
-            'Для "запомни как знание", "обработай knowledge", "claims", "wiki links", "notes/inbox"',
-            knowledge_pipeline,
-        ))
+        delegation_tools.append(
+            _make_delegation_tool(
+                "knowledge_pipeline",
+                "Обработка знаний через file handoff: notes/inbox → ops/queue task → claims → wiki links → verify → Mem0. "
+                'Для "запомни как знание", "обработай knowledge", "claims", "wiki links", "notes/inbox"',
+                knowledge_pipeline,
+            )
+        )
         descriptions.append(
             "- **delegate_to_knowledge_pipeline**: durable обработка знаний "
             "(notes/inbox, task files, claims, wiki links, verify, Mem0)"
@@ -273,23 +277,27 @@ def build_supervisor(
     # Research — quick web search
     research = create_research_agent(tools, on_tool_event=on_tool_event)
     if research:
-        delegation_tools.append(_make_delegation_tool(
-            "research",
-            "Быстрый поиск в интернете, извлечение контента, анализ источников",
-            research,
-        ))
+        delegation_tools.append(
+            _make_delegation_tool(
+                "research",
+                "Быстрый поиск в интернете, извлечение контента, анализ источников",
+                research,
+            )
+        )
         descriptions.append("- **delegate_to_research**: быстрый поиск в интернете")
         log.info("Research agent created")
 
     # Task — productivity (Notion except expenses)
     task = create_task_agent(tools, on_tool_event=on_tool_event)
     if task:
-        delegation_tools.append(_make_delegation_tool(
-            "task",
-            "Способ работать с Notion (кроме расходов), задачами, календарём, email, файлами. "
-            "Расходы НЕ делегируй сюда: для расходов используй только прямой tool add_expense.",
-            task,
-        ))
+        delegation_tools.append(
+            _make_delegation_tool(
+                "task",
+                "Способ работать с Notion (кроме расходов), задачами, календарём, email, файлами. "
+                "Расходы НЕ делегируй сюда: для расходов используй только прямой tool add_expense.",
+                task,
+            )
+        )
         descriptions.append(
             "- **delegate_to_task**: работа с Notion (кроме расходов), "
             "задачами, календарём, email, файлами. "
@@ -300,26 +308,28 @@ def build_supervisor(
     # Finance — market data
     finance = create_finance_agent(tools, on_tool_event=on_tool_event)
     if finance:
-        delegation_tools.append(_make_delegation_tool(
-            "finance",
-            "Финансовый анализ: цены акций, рыночные данные, метрики компаний",
-            finance,
-        ))
+        delegation_tools.append(
+            _make_delegation_tool(
+                "finance",
+                "Финансовый анализ: цены акций, рыночные данные, метрики компаний",
+                finance,
+            )
+        )
         descriptions.append("- **delegate_to_finance**: цены акций, финансовый анализ")
         log.info("Finance agent created")
 
     # Telegram Channels — no MCP tools needed
     try:
         tg_channels = create_telegram_channels_agent()
-        delegation_tools.append(_make_delegation_tool(
-            "telegram_channels",
-            'Мониторинг публичных Telegram-каналов. '
-            'Для "посты из канала", "дайджест каналов", "сравни каналы", "топ постов"',
-            tg_channels,
-        ))
-        descriptions.append(
-            '- **delegate_to_telegram_channels**: мониторинг публичных Telegram-каналов'
+        delegation_tools.append(
+            _make_delegation_tool(
+                "telegram_channels",
+                "Мониторинг публичных Telegram-каналов. "
+                'Для "посты из канала", "дайджест каналов", "сравни каналы", "топ постов"',
+                tg_channels,
+            )
         )
+        descriptions.append("- **delegate_to_telegram_channels**: мониторинг публичных Telegram-каналов")
         log.info("Telegram Channels agent created")
     except Exception as e:
         log.warning("Telegram Channels agent failed to create: %s", e)
@@ -327,16 +337,16 @@ def build_supervisor(
     # Analytics — infra health, metrics, on-demand queries
     try:
         analytics = create_analytics_agent()
-        delegation_tools.append(_make_delegation_tool(
-            "analytics",
-            'Аналитика: инфра, продукт, пользователи, App Store, трафик, health check. '
-            'Для "серверы", "ошибки", "пользователи", "DAU", "рейтинг", "App Store", '
-            '"трафик", "health", "status", "метрики", "pulse", "как дела", "как продукт"',
-            analytics,
-        ))
-        descriptions.append(
-            '- **delegate_to_analytics**: инфра, продукт, пользователи, App Store, трафик, daily pulse'
+        delegation_tools.append(
+            _make_delegation_tool(
+                "analytics",
+                "Аналитика: инфра, продукт, пользователи, App Store, трафик, health check. "
+                'Для "серверы", "ошибки", "пользователи", "DAU", "рейтинг", "App Store", '
+                '"трафик", "health", "status", "метрики", "pulse", "как дела", "как продукт"',
+                analytics,
+            )
         )
+        descriptions.append("- **delegate_to_analytics**: инфра, продукт, пользователи, App Store, трафик, daily pulse")
         log.info("Analytics agent created")
     except Exception as e:
         log.warning("Analytics agent failed to create: %s", e)
@@ -344,15 +354,16 @@ def build_supervisor(
     # Competitor Monitor — no MCP tools needed
     try:
         competitor_monitor = create_competitor_monitor_agent()
-        delegation_tools.append(_make_delegation_tool(
-            "competitor_monitor",
-            'Мониторинг конкурентов: App Store/Play Store данные, изменения, дайджест. '
-            'Для "конкуренты", "competitors", "что нового у Wanderlog", "competitor check"',
-            competitor_monitor,
-        ))
+        delegation_tools.append(
+            _make_delegation_tool(
+                "competitor_monitor",
+                "Мониторинг конкурентов: App Store/Play Store данные, изменения, дайджест. "
+                'Для "конкуренты", "competitors", "что нового у Wanderlog", "competitor check"',
+                competitor_monitor,
+            )
+        )
         descriptions.append(
-            '- **delegate_to_competitor_monitor**: мониторинг конкурентов '
-            '(App Store, Play Store, изменения, дайджест)'
+            "- **delegate_to_competitor_monitor**: мониторинг конкурентов (App Store, Play Store, изменения, дайджест)"
         )
         log.info("Competitor Monitor agent created")
     except Exception as e:
@@ -368,16 +379,18 @@ def build_supervisor(
             server_ops = None
 
         if server_ops is not None:
-            delegation_tools.append(_make_delegation_tool(
-                "server_ops",
-                'Диагностика и управление серверами через SSH: логи, статус сервисов, ошибки, '
-                'рестарт, диск, swarm.db. Для "серверы", "логи", "рестартни", "ошибки на сервере", '
-                '"что упало", "диск забит", "swarm.db"',
-                server_ops,
-            ))
+            delegation_tools.append(
+                _make_delegation_tool(
+                    "server_ops",
+                    "Диагностика и управление серверами через SSH: логи, статус сервисов, ошибки, "
+                    'рестарт, диск, swarm.db. Для "серверы", "логи", "рестартни", "ошибки на сервере", '
+                    '"что упало", "диск забит", "swarm.db"',
+                    server_ops,
+                )
+            )
             descriptions.append(
-                '- **delegate_to_server_ops**: SSH-диагностика серверов '
-                '(логи, статус, ошибки, рестарт сервисов, диск, swarm.db)'
+                "- **delegate_to_server_ops**: SSH-диагностика серверов "
+                "(логи, статус, ошибки, рестарт сервисов, диск, swarm.db)"
             )
             log.info("Server Ops agent created")
         else:
@@ -391,9 +404,7 @@ def build_supervisor(
     disabled_tools = _disabled_delegation_tool_names()
     if disabled_tools:
         delegation_tools = [t for t in delegation_tools if t.name not in disabled_tools]
-        descriptions = [
-            d for d in descriptions if not any(name in d for name in disabled_tools)
-        ]
+        descriptions = [d for d in descriptions if not any(name in d for name in disabled_tools)]
         log.info("Agent registry disabled: %s", ", ".join(sorted(disabled_tools)))
 
     if not delegation_tools:
@@ -402,11 +413,13 @@ def build_supervisor(
 
     # Build skill catalog for supervisor
     from kronos.skills.store import SkillStore
+
     skill_store = SkillStore(settings.workspace_path)
     skill_catalog = skill_store.build_catalog()
 
     # Persona context — only core identity
     from kronos.persona import load_persona
+
     persona = load_persona(settings.workspace_path)
     persona_snippet = persona[:3000] if persona else ""
 
@@ -420,9 +433,15 @@ def build_supervisor(
 
     # Supervisor-only tools: skills, gateway, dynamic tools
     SUPERVISOR_TOOL_NAMES = {
-        "load_skill", "load_skill_reference", "approve_skill",
-        "mcp_add_server", "mcp_remove_server", "mcp_list_servers", "mcp_reload",
-        "create_new_tool", "list_dynamic_tools",
+        "load_skill",
+        "load_skill_reference",
+        "approve_skill",
+        "mcp_add_server",
+        "mcp_remove_server",
+        "mcp_list_servers",
+        "mcp_reload",
+        "create_new_tool",
+        "list_dynamic_tools",
     }
     supervisor_tools = [t for t in tools if t.name in SUPERVISOR_TOOL_NAMES]
 
@@ -433,9 +452,15 @@ def build_supervisor(
         resolve_pending_expense,
         skip_pending_expense,
     )
+
     direct_tools = [
-        add_expense, add_tranche, replace_tranche, get_budget,
-        list_pending_expenses, resolve_pending_expense, skip_pending_expense,
+        add_expense,
+        add_tranche,
+        replace_tranche,
+        get_budget,
+        list_pending_expenses,
+        resolve_pending_expense,
+        skip_pending_expense,
     ]
 
     # Combine: delegation tools + supervisor-only tools + direct tools
@@ -467,6 +492,9 @@ def build_supervisor(
 
     log.info(
         "Supervisor created with %d delegation + %d supervisor + %d direct tools (total: %d)",
-        len(delegation_tools), len(supervisor_tools), len(direct_tools), len(all_tools),
+        len(delegation_tools),
+        len(supervisor_tools),
+        len(direct_tools),
+        len(all_tools),
     )
     return run

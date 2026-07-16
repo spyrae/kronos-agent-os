@@ -178,7 +178,9 @@ def render_svg(
         is_active = index == active
         fill = "#1E293B" if is_active else "#111827"
         stroke = "#38BDF8" if is_active else "#334155"
-        cards.append(f'<rect x="{x}" y="470" width="148" height="126" rx="14" fill="{fill}" stroke="{stroke}" stroke-width="2"/>')
+        cards.append(
+            f'<rect x="{x}" y="470" width="148" height="126" rx="14" fill="{fill}" stroke="{stroke}" stroke-width="2"/>'
+        )
         cards.append(_text(x + 18, 502, step["label"], 16, 800, "#F8FAFC" if is_active else "#CBD5E1"))
         cards.append(_text(x + 18, 532, step["panel"], 13, 500, "#93C5FD" if is_active else "#94A3B8"))
         cards.append(f'<circle cx="{x + 74}" cy="576" r="10" fill="{"#22C55E" if index <= active else "#475569"}"/>')
@@ -188,29 +190,31 @@ def render_svg(
         proof_text.append(_text(658, 260 + index * 34, value, 16, 700, color))
 
     step = steps[active]
-    return "\n".join([
-        '<svg width="1200" height="720" viewBox="0 0 1200 720" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">',
-        '  <title id="title">KAOS durable agent demo</title>',
-        '  <desc id="desc">A public-safe storyboard showing a durable KAOS agent using memory, skills, tool audit, jobs, and dashboard control room.</desc>',
-        '  <rect width="1200" height="720" rx="24" fill="#0B1020"/>',
-        '  <rect x="36" y="36" width="1128" height="648" rx="22" fill="#111827" stroke="#253247"/>',
-        '  <rect x="70" y="70" width="1060" height="78" rx="18" fill="#172033" stroke="#2B3A52"/>',
-        _text(102, 116, "Kronos Agent OS", 30, 800, "#F8FAFC"),
-        _text(388, 116, subtitle, 18, 600, "#94A3B8"),
-        '  <rect x="914" y="91" width="174" height="34" rx="17" fill="#12352C" stroke="#2DD4BF"/>',
-        _text(940, 114, "safe demo data", 14, 800, "#A7F3D0"),
-        '  <rect x="70" y="178" width="500" height="244" rx="18" fill="#0F172A" stroke="#26364E"/>',
-        _text(102, 222, "Step " + str(active + 1) + ": " + step["title"], 30, 800, "#F8FAFC"),
-        *_paragraph(102, 262, step["body"]),
-        '  <rect x="102" y="306" width="414" height="64" rx="12" fill="#172033" stroke="#334155"/>',
-        _text(130, 346, step["panel"], 22, 800, "#93C5FD"),
-        '  <rect x="626" y="178" width="504" height="244" rx="18" fill="#0F172A" stroke="#26364E"/>',
-        _text(658, 220, "What viewers see", 22, 800, "#F8FAFC"),
-        *proof_text,
-        '  <path d="M70 533H1130" stroke="#334155" stroke-width="4"/>',
-        *cards,
-        '</svg>',
-    ])
+    return "\n".join(
+        [
+            '<svg width="1200" height="720" viewBox="0 0 1200 720" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">',
+            '  <title id="title">KAOS durable agent demo</title>',
+            '  <desc id="desc">A public-safe storyboard showing a durable KAOS agent using memory, skills, tool audit, jobs, and dashboard control room.</desc>',
+            '  <rect width="1200" height="720" rx="24" fill="#0B1020"/>',
+            '  <rect x="36" y="36" width="1128" height="648" rx="22" fill="#111827" stroke="#253247"/>',
+            '  <rect x="70" y="70" width="1060" height="78" rx="18" fill="#172033" stroke="#2B3A52"/>',
+            _text(102, 116, "Kronos Agent OS", 30, 800, "#F8FAFC"),
+            _text(388, 116, subtitle, 18, 600, "#94A3B8"),
+            '  <rect x="914" y="91" width="174" height="34" rx="17" fill="#12352C" stroke="#2DD4BF"/>',
+            _text(940, 114, "safe demo data", 14, 800, "#A7F3D0"),
+            '  <rect x="70" y="178" width="500" height="244" rx="18" fill="#0F172A" stroke="#26364E"/>',
+            _text(102, 222, "Step " + str(active + 1) + ": " + step["title"], 30, 800, "#F8FAFC"),
+            *_paragraph(102, 262, step["body"]),
+            '  <rect x="102" y="306" width="414" height="64" rx="12" fill="#172033" stroke="#334155"/>',
+            _text(130, 346, step["panel"], 22, 800, "#93C5FD"),
+            '  <rect x="626" y="178" width="504" height="244" rx="18" fill="#0F172A" stroke="#26364E"/>',
+            _text(658, 220, "What viewers see", 22, 800, "#F8FAFC"),
+            *proof_text,
+            '  <path d="M70 533H1130" stroke="#334155" stroke-width="4"/>',
+            *cards,
+            "</svg>",
+        ]
+    )
 
 
 def _render_gif(steps: list[dict], output: Path, *, subtitle: str, proof_lines: list[tuple[str, str]]) -> str:
@@ -222,36 +226,48 @@ def _render_gif(steps: list[dict], output: Path, *, subtitle: str, proof_lines: 
         for index in range(len(steps)):
             svg_path = tmp_dir / f"frame-{index:02d}.svg"
             png_path = tmp_dir / f"frame-{index:02d}.png"
-            svg_path.write_text(render_svg(index, steps=steps, subtitle=subtitle, proof_lines=proof_lines), encoding="utf-8")
+            svg_path.write_text(
+                render_svg(index, steps=steps, subtitle=subtitle, proof_lines=proof_lines), encoding="utf-8"
+            )
             subprocess.run(["rsvg-convert", str(svg_path), "-o", str(png_path)], check=True)
 
         palette = tmp_dir / "palette.png"
-        subprocess.run([
-            "ffmpeg",
-            "-y",
-            "-framerate",
-            "1",
-            "-i",
-            str(tmp_dir / "frame-%02d.png"),
-            "-vf",
-            "palettegen",
-            str(palette),
-        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run([
-            "ffmpeg",
-            "-y",
-            "-framerate",
-            "1",
-            "-i",
-            str(tmp_dir / "frame-%02d.png"),
-            "-i",
-            str(palette),
-            "-lavfi",
-            "paletteuse",
-            "-loop",
-            "0",
-            str(output),
-        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-framerate",
+                "1",
+                "-i",
+                str(tmp_dir / "frame-%02d.png"),
+                "-vf",
+                "palettegen",
+                str(palette),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-framerate",
+                "1",
+                "-i",
+                str(tmp_dir / "frame-%02d.png"),
+                "-i",
+                str(palette),
+                "-lavfi",
+                "paletteuse",
+                "-loop",
+                "0",
+                str(output),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
     return str(output)
 
 

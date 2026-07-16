@@ -91,6 +91,7 @@ async def _headers() -> dict[str, str]:
 
 # --- API Helpers ---
 
+
 async def _get(path: str) -> dict:
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(f"{PLAY_BASE}{path}", headers=await _headers())
@@ -122,6 +123,7 @@ async def _put(path: str, payload: dict) -> dict:
 
 # --- Edits API ---
 
+
 async def create_edit(package: str = DEFAULT_PACKAGE) -> str:
     """Create a new edit (draft). Returns edit ID."""
     data = await _post(f"/{package}/edits")
@@ -149,6 +151,7 @@ async def delete_edit(package: str = DEFAULT_PACKAGE, edit_id: str = "") -> None
 
 
 # --- Listings (Metadata) ---
+
 
 async def get_listing(
     locale: str,
@@ -233,20 +236,25 @@ async def update_listing(
         "language": locale,
         "title": title if title is not None else current.get("title", ""),
         "shortDescription": (
-            short_description if short_description is not None
-            else current.get("short_description", "")
+            short_description if short_description is not None else current.get("short_description", "")
         ),
-        "fullDescription": (
-            full_description if full_description is not None
-            else current.get("full_description", "")
-        ),
+        "fullDescription": (full_description if full_description is not None else current.get("full_description", "")),
     }
 
     result = await _put(f"/{package}/edits/{edit_id}/listings/{locale}", payload)
-    log.info("Updated Play Store listing: %s.%s", locale, ", ".join(
-        k for k, v in {"title": title, "short_description": short_description,
-                       "full_description": full_description}.items() if v is not None
-    ))
+    log.info(
+        "Updated Play Store listing: %s.%s",
+        locale,
+        ", ".join(
+            k
+            for k, v in {
+                "title": title,
+                "short_description": short_description,
+                "full_description": full_description,
+            }.items()
+            if v is not None
+        ),
+    )
 
     if auto_commit:
         await commit_edit(package, edit_id)

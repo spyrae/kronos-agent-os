@@ -33,12 +33,14 @@ FOCUS_ROTATION = [
 
 def _load_criteria() -> str:
     from kronos.workspace import ws
+
     path = ws.skill_ref("people-scout", "CRITERIA")
     return path.read_text(encoding="utf-8").strip() if path.exists() else ""
 
 
 def _load_seen() -> set[str]:
     from kronos.workspace import ws
+
     path = ws.skill_ref("people-scout", "SEEN")
     if not path.exists():
         return set()
@@ -48,6 +50,7 @@ def _load_seen() -> set[str]:
 
 def _save_seen(new_urls: list[str]) -> None:
     from kronos.workspace import ws
+
     path = ws.skill_ref("people-scout", "SEEN")
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
@@ -80,7 +83,7 @@ async def run_people_scout() -> None:
 Фокус недели: {focus}
 
 Критерии отбора:
-{criteria if criteria else 'Interesting people in tech, startups, AI'}
+{criteria if criteria else "Interesting people in tech, startups, AI"}
 {seen_text}
 
 Для каждого профиля:
@@ -101,6 +104,7 @@ async def run_people_scout() -> None:
 
     model = get_model(ModelTier.STANDARD)
     from langchain_core.messages import HumanMessage
+
     response = model.invoke([HumanMessage(content=prompt)])
     reply = response.content if isinstance(response.content, str) else str(response.content)
 

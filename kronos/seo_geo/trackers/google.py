@@ -66,11 +66,13 @@ def _serper_search(query: str, country: str = "us", count: int = 20) -> list[dic
     if not api_key:
         return []
 
-    body = json.dumps({
-        "q": query,
-        "num": count,
-        "gl": country,  # geolocation: 'us' / 'ru'
-    }).encode()
+    body = json.dumps(
+        {
+            "q": query,
+            "num": count,
+            "gl": country,  # geolocation: 'us' / 'ru'
+        }
+    ).encode()
     req = urllib.request.Request(
         "https://google.serper.dev/search",
         data=body,
@@ -99,12 +101,17 @@ def _exa_search(query: str, count: int = 20) -> list[dict]:
     api_key = os.environ.get("EXA_API_KEY") or ""
     if not api_key:
         return []
-    body = json.dumps({
-        "query": query, "numResults": count, "type": "auto",
-    }).encode()
+    body = json.dumps(
+        {
+            "query": query,
+            "numResults": count,
+            "type": "auto",
+        }
+    ).encode()
     req = urllib.request.Request(
         "https://api.exa.ai/search",
-        data=body, method="POST",
+        data=body,
+        method="POST",
         headers={
             "x-api-key": api_key,
             "Content-Type": "application/json",

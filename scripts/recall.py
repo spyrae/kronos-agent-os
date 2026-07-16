@@ -89,16 +89,19 @@ def setup_logging(*, enable_file: bool = True) -> None:
 
 # --- LLM ---
 
+
 def ask_deepseek(prompt: str, timeout: int = 60) -> str:
     """Call DeepSeek chat completions API. Stdlib only (urllib)."""
     if not DEEPSEEK_API_KEY:
         raise RuntimeError("DEEPSEEK_API_KEY is not set")
 
-    payload = json.dumps({
-        "model": DEEPSEEK_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 4000,
-    }).encode("utf-8")
+    payload = json.dumps(
+        {
+            "model": DEEPSEEK_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 4000,
+        }
+    ).encode("utf-8")
 
     req = urllib.request.Request(
         f"{DEEPSEEK_BASE_URL}/chat/completions",
@@ -115,6 +118,7 @@ def ask_deepseek(prompt: str, timeout: int = 60) -> str:
 
 
 # --- Database ---
+
 
 def init_db() -> sqlite3.Connection:
     """Create/open the recall database with FTS5."""
@@ -153,6 +157,7 @@ def init_db() -> sqlite3.Connection:
 
 # --- Indexing ---
 
+
 def extract_messages_from_audit(filepath: Path) -> list[dict]:
     """Extract messages from Kronos Agent OS audit.jsonl.
 
@@ -182,21 +187,25 @@ def extract_messages_from_audit(filepath: Path) -> list[dict]:
         meta_str = json.dumps(meta, ensure_ascii=False) if meta else ""
 
         if inp and len(inp) >= 5:
-            messages.append({
-                "session_id": "audit",
-                "role": "user",
-                "content": inp,
-                "timestamp": ts,
-                "metadata": meta_str,
-            })
+            messages.append(
+                {
+                    "session_id": "audit",
+                    "role": "user",
+                    "content": inp,
+                    "timestamp": ts,
+                    "metadata": meta_str,
+                }
+            )
         if out and len(out) >= 5:
-            messages.append({
-                "session_id": "audit",
-                "role": "assistant",
-                "content": out,
-                "timestamp": ts,
-                "metadata": meta_str,
-            })
+            messages.append(
+                {
+                    "session_id": "audit",
+                    "role": "assistant",
+                    "content": out,
+                    "timestamp": ts,
+                    "metadata": meta_str,
+                }
+            )
 
     return messages
 
@@ -276,6 +285,7 @@ def build_index(*, force_empty: bool = False) -> int:
 
 # --- Search ---
 
+
 def search(query: str, limit: int = 10, role_filter: str = "") -> list[dict]:
     """Search FTS5 index."""
     if not DB_PATH.exists():
@@ -286,7 +296,7 @@ def search(query: str, limit: int = 10, role_filter: str = "") -> list[dict]:
     conn.row_factory = sqlite3.Row
 
     # Escape FTS5 special characters
-    safe_query = re.sub(r'[^\w\s]', ' ', query).strip()
+    safe_query = re.sub(r"[^\w\s]", " ", query).strip()
     if not safe_query:
         return []
 
@@ -315,14 +325,16 @@ def search(query: str, limit: int = 10, role_filter: str = "") -> list[dict]:
 
     results = []
     for row in rows:
-        results.append({
-            "session_id": row["session_id"],
-            "source": row["source"],
-            "role": row["role"],
-            "content": row["content"],
-            "timestamp": row["timestamp"],
-            "rank": row["rank"],
-        })
+        results.append(
+            {
+                "session_id": row["session_id"],
+                "source": row["source"],
+                "role": row["role"],
+                "content": row["content"],
+                "timestamp": row["timestamp"],
+                "rank": row["rank"],
+            }
+        )
 
     conn.close()
     return results
@@ -346,12 +358,10 @@ def format_results(results: list[dict]) -> str:
 
 # --- LLM Summarization ---
 
+
 def summarize_results(query: str, results: list[dict]) -> str:
     """Summarize search results via DeepSeek API."""
-    context = "\n\n".join(
-        f"[{r['timestamp'][:16]}] {r['role']}: {r['content'][:500]}"
-        for r in results[:10]
-    )
+    context = "\n\n".join(f"[{r['timestamp'][:16]}] {r['role']}: {r['content'][:500]}" for r in results[:10])
 
     prompt = f"""Пользователь ищет в истории разговоров: "{query}"
 
@@ -370,6 +380,7 @@ def summarize_results(query: str, results: list[dict]) -> str:
 
 # --- Stats ---
 
+
 def show_stats() -> None:
     """Show index statistics."""
     if not DB_PATH.exists():
@@ -378,12 +389,8 @@ def show_stats() -> None:
 
     conn = sqlite3.connect(str(DB_PATH))
     total = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-    by_source = conn.execute(
-        "SELECT source, COUNT(*) FROM messages GROUP BY source"
-    ).fetchall()
-    by_role = conn.execute(
-        "SELECT role, COUNT(*) FROM messages GROUP BY role"
-    ).fetchall()
+    by_source = conn.execute("SELECT source, COUNT(*) FROM messages GROUP BY source").fetchall()
+    by_role = conn.execute("SELECT role, COUNT(*) FROM messages GROUP BY role").fetchall()
     state = conn.execute("SELECT * FROM index_state").fetchall()
     conn.close()
 
@@ -396,6 +403,7 @@ def show_stats() -> None:
 
 
 # --- CLI ---
+
 
 def main() -> None:
     if len(sys.argv) < 2:

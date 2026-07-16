@@ -61,11 +61,11 @@ def get_memory():
 
     log.info(
         "Initializing Mem0: qdrant=%s, collection=%s, llm=deepseek, embedder=huggingface/multi-qa-MiniLM-L6-cos-v1",
-        settings.mem0_qdrant_path, collection_name,
+        settings.mem0_qdrant_path,
+        collection_name,
     )
 
     return Memory.from_config(config)
-
 
 
 def search_memories(query: str, user_id: str, limit: int = 5) -> list[str]:
@@ -104,7 +104,10 @@ def search_memories(query: str, user_id: str, limit: int = 5) -> list[str]:
     if memories:
         log.info(
             "Hybrid search for user %s: %d vector + %d fts → %d merged",
-            user_id, len(vector_results), len(fts_results), len(memories),
+            user_id,
+            len(vector_results),
+            len(fts_results),
+            len(memories),
         )
         # Touch accessed facts (Ebbinghaus: boost relevance on access)
         fts.touch_facts(memories, user_id)

@@ -23,6 +23,7 @@ async def run_seo_geo_weekly() -> None:
         return
     from kronos.seo_geo.reporter import format_weekly_report
     from kronos.seo_geo.runner import run_full_check
+
     try:
         counts = run_full_check(tiers=("A", "B"))
         log.info("seo_geo weekly counts: %s", counts)
@@ -42,6 +43,7 @@ async def run_seo_geo_gsc_daily() -> None:
     if settings.agent_name != "nexus":
         return
     from kronos.seo_geo.runner import run_gsc_only
+
     try:
         counts = run_gsc_only()
         log.info("seo_geo gsc counts: %s", counts)

@@ -88,11 +88,7 @@ async def run_discord(agent: KronosAgent) -> None:
 
     allowed_guilds = set()
     if settings.discord_allowed_guilds:
-        allowed_guilds = {
-            int(gid.strip())
-            for gid in settings.discord_allowed_guilds.split(",")
-            if gid.strip()
-        }
+        allowed_guilds = {int(gid.strip()) for gid in settings.discord_allowed_guilds.split(",") if gid.strip()}
 
     @client.event
     async def on_ready():
@@ -132,7 +128,7 @@ async def run_discord(agent: KronosAgent) -> None:
         if isinstance(message.channel, discord.Thread):
             thread_id = message.channel.id
 
-        channel_label = f"#{message.channel}" if hasattr(message.channel, 'name') else "DM"
+        channel_label = f"#{message.channel}" if hasattr(message.channel, "name") else "DM"
         log.info("[Discord %s] %s: %s", channel_label, message.author, text[:100])
 
         # Show typing while processing
@@ -146,7 +142,7 @@ async def run_discord(agent: KronosAgent) -> None:
 
         # Discord message limit is 2000 chars
         if len(reply) > 2000:
-            chunks = [reply[i:i + 2000] for i in range(0, len(reply), 2000)]
+            chunks = [reply[i : i + 2000] for i in range(0, len(reply), 2000)]
             for chunk in chunks:
                 await message.channel.send(chunk)
         else:

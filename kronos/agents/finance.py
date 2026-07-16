@@ -25,10 +25,7 @@ FINANCE_SYSTEM_PROMPT = """Ты — Finance Agent в системе Kronos. Тв
 
 def create_finance_agent(tools: list[BaseTool], on_tool_event=None):
     """Create finance agent with market data tools."""
-    finance_tools = [
-        t for t in tools
-        if any(prefix in t.name.lower() for prefix in FINANCE_TOOL_PREFIXES)
-    ]
+    finance_tools = [t for t in tools if any(prefix in t.name.lower() for prefix in FINANCE_TOOL_PREFIXES)]
 
     if not finance_tools:
         return None

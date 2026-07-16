@@ -79,14 +79,16 @@ async def run_analytics_alerts() -> None:
         # NTFY push for critical anomalies
         if anomaly.severity == "critical":
             send_ntfy(
-                f"ANOMALY: {anomaly.metric} {anomaly.direction} "
-                f"(z={anomaly.z_score})",
+                f"ANOMALY: {anomaly.metric} {anomaly.direction} (z={anomaly.z_score})",
                 priority=4,
             )
 
         log.info(
             "Anomaly alert sent: %s %s (z=%.1f, %s)",
-            anomaly.metric, anomaly.direction, anomaly.z_score, anomaly.severity,
+            anomaly.metric,
+            anomaly.direction,
+            anomaly.z_score,
+            anomaly.severity,
         )
 
     if bundle and summary:

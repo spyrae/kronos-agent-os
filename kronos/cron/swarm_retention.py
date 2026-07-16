@@ -26,8 +26,7 @@ async def run_swarm_retention() -> None:
     # Swarm messages (shared ledger across all agents)
     try:
         deleted = get_swarm().prune_old_messages(older_than_days=MESSAGE_RETENTION_DAYS)
-        log.info("Swarm retention: pruned %d messages older than %d days",
-                 deleted, MESSAGE_RETENTION_DAYS)
+        log.info("Swarm retention: pruned %d messages older than %d days", deleted, MESSAGE_RETENTION_DAYS)
     except Exception as e:
         log.error("Swarm retention failed: %s", e)
 
@@ -38,7 +37,8 @@ async def run_swarm_retention() -> None:
         if snap_n or change_n:
             log.info(
                 "Competitor retention: pruned %d snapshots, %d changes",
-                snap_n, change_n,
+                snap_n,
+                change_n,
             )
     except Exception as e:
         log.error("Competitor retention failed: %s", e)

@@ -26,13 +26,15 @@ def test_template_install_dry_run_does_not_write(capsys):
     target = ROOT / "workspaces" / "template-smoke-agent"
     assert not target.exists()
 
-    result = main([
-        "templates",
-        "install",
-        "research-agent",
-        "template-smoke-agent",
-        "--dry-run",
-    ])
+    result = main(
+        [
+            "templates",
+            "install",
+            "research-agent",
+            "template-smoke-agent",
+            "--dry-run",
+        ]
+    )
     out = capsys.readouterr().out
 
     assert result == 0
@@ -105,15 +107,17 @@ Follow the reviewed protocol.
     assert "status: draft" in skill_file.read_text(encoding="utf-8")
 
     export_path = tmp_path / "exported" / "SKILL.md"
-    result = main([
-        "skills",
-        "export",
-        "external-cli",
-        "--agent",
-        "hub-agent",
-        "--output",
-        str(export_path),
-    ])
+    result = main(
+        [
+            "skills",
+            "export",
+            "external-cli",
+            "--agent",
+            "hub-agent",
+            "--output",
+            str(export_path),
+        ]
+    )
     out = capsys.readouterr().out
 
     assert result == 0

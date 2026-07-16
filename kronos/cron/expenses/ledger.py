@@ -164,17 +164,27 @@ class ExpenseLedger:
                 updated_at=excluded.updated_at
             """,
             (
-                message_id, source, status, amount, currency, amount_idr,
-                expense_date, description, category, notion_page_id,
-                int(archived), error, now, now,
+                message_id,
+                source,
+                status,
+                amount,
+                currency,
+                amount_idr,
+                expense_date,
+                description,
+                category,
+                notion_page_id,
+                int(archived),
+                error,
+                now,
+                now,
             ),
         )
 
     def mark_archived(self, message_id: str) -> None:
         """Flag the source email as removed from the inbox (status → archived)."""
         self._db.write(
-            "UPDATE processed_emails SET archived = 1, status = 'archived', "
-            "updated_at = ? WHERE message_id = ?",
+            "UPDATE processed_emails SET archived = 1, status = 'archived', updated_at = ? WHERE message_id = ?",
             (_now(), message_id),
         )
 
@@ -219,8 +229,16 @@ class ExpenseLedger:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
             """,
             (
-                message_id, source, description, amount, currency, amount_idr,
-                expense_date, guessed_category, reason, _now(),
+                message_id,
+                source,
+                description,
+                amount,
+                currency,
+                amount_idr,
+                expense_date,
+                guessed_category,
+                reason,
+                _now(),
             ),
         )
         return int(cursor.lastrowid)
@@ -240,8 +258,7 @@ class ExpenseLedger:
     def resolve_pending(self, pending_id: int, category: str) -> None:
         """Mark a pending expense resolved with the user-chosen category."""
         self._db.write(
-            "UPDATE pending_expenses SET status = 'resolved', resolved_category = ?, "
-            "resolved_at = ? WHERE id = ?",
+            "UPDATE pending_expenses SET status = 'resolved', resolved_category = ?, resolved_at = ? WHERE id = ?",
             (category, _now(), pending_id),
         )
 
@@ -268,8 +285,7 @@ class ExpenseLedger:
 
     def set_meta(self, key: str, value: str) -> None:
         self._db.write(
-            "INSERT INTO meta (key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, value),
         )
 

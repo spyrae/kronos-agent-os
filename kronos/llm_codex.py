@@ -168,7 +168,8 @@ def _build_prompt(messages: list[BaseMessage], tools: list[Any], model_name: str
     model_context = (
         f"Runtime identity: KAOS is using Codex CLI as its LLM backend with model `{model_name}`. "
         "If asked what model/backend is running, answer with that instead of saying the model is hidden.\n"
-        if model_name else ""
+        if model_name
+        else ""
     )
     if not tools:
         return (
@@ -265,11 +266,13 @@ def _parse_output(output: str, tools: list[Any]) -> AIMessage:
             args = _parse_json(args) or {}
         if not isinstance(name, str) or not isinstance(args, dict):
             continue
-        tool_calls.append({
-            "id": str(raw.get("id") or f"call_{index}_{uuid4().hex[:8]}"),
-            "name": name,
-            "args": args,
-        })
+        tool_calls.append(
+            {
+                "id": str(raw.get("id") or f"call_{index}_{uuid4().hex[:8]}"),
+                "name": name,
+                "args": args,
+            }
+        )
 
     if not tool_calls:
         return AIMessage(content=output.strip())
@@ -291,7 +294,7 @@ def _parse_json(text: str) -> Any:
         end = cleaned.rfind("}")
         if start >= 0 and end > start:
             try:
-                return json.loads(cleaned[start:end + 1])
+                return json.loads(cleaned[start : end + 1])
             except json.JSONDecodeError:
                 return None
     return None

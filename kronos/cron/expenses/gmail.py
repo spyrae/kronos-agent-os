@@ -170,9 +170,7 @@ class GmailClient:
             log.info("No Gmail search tool available")
             return []
         try:
-            result = await tool.ainvoke(
-                {"query": query, "user_google_email": self._account, "page_size": limit}
-            )
+            result = await tool.ainvoke({"query": query, "user_google_email": self._account, "page_size": limit})
         except Exception as e:
             log.warning("Gmail search failed for %r: %s", query, e)
             return []
@@ -223,11 +221,13 @@ class GmailClient:
             )
             return False
         try:
-            result = await tool.ainvoke({
-                "message_id": message_id,
-                "user_google_email": self._account,
-                "remove_label_ids": ["INBOX"],
-            })
+            result = await tool.ainvoke(
+                {
+                    "message_id": message_id,
+                    "user_google_email": self._account,
+                    "remove_label_ids": ["INBOX"],
+                }
+            )
         except Exception as e:
             log.warning("Gmail archive failed for %s: %s", message_id, e)
             return False

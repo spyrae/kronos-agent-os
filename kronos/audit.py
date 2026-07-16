@@ -77,7 +77,7 @@ def _redact_string(value: str, *, max_len: int = 500) -> str:
         redacted = pattern.sub(replacement, redacted)
     redacted = mask_pii(redacted)
     if len(redacted) > max_len:
-        return f"{redacted[:max_len - 3]}..."
+        return f"{redacted[: max_len - 3]}..."
     return redacted
 
 
@@ -243,7 +243,11 @@ def log_request(
 
         log.debug(
             "Audit: tier=%s, tokens=%d+%d, cost=$%.6f, duration=%dms",
-            tier, input_tokens, output_tokens, approx_cost, duration_ms,
+            tier,
+            input_tokens,
+            output_tokens,
+            approx_cost,
+            duration_ms,
         )
 
     except Exception as e:

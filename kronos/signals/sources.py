@@ -252,9 +252,7 @@ def _parse_source(entry: object, *, index: int, source_name: str) -> SignalSourc
 
     source_id = _require_string(data, "id", context)
     if not _SOURCE_ID_RE.match(source_id):
-        raise SignalSourceConfigError(
-            f"{context}.id must match {_SOURCE_ID_RE.pattern!r}; got {source_id!r}"
-        )
+        raise SignalSourceConfigError(f"{context}.id must match {_SOURCE_ID_RE.pattern!r}; got {source_id!r}")
 
     platform = _normalize_platform(_require_string(data, "platform", context))
     _require_allowed(platform, ALLOWED_PLATFORMS, f"{context}.platform")
@@ -311,11 +309,7 @@ def _parse_legacy_group_digest_sources(
     *,
     existing_sources: tuple[SignalSource, ...] = (),
 ) -> tuple[SignalSource, ...]:
-    existing_locators = {
-        (source.platform, source.locator.lower())
-        for source in existing_sources
-        if source.locator
-    }
+    existing_locators = {(source.platform, source.locator.lower()) for source in existing_sources if source.locator}
     existing_ids = {source.id for source in existing_sources}
     sources: list[SignalSource] = []
     current_category = ""

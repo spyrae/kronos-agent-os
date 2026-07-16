@@ -25,14 +25,16 @@ async def score_topics(state: TopicResearchState) -> dict:
     # Prepare topics JSON for LLM (truncated to fit context)
     topics_for_scoring = []
     for t in validated[:30]:
-        topics_for_scoring.append({
-            "title_en": t.get("title_en", t.get("title", "")),
-            "title_ru": t.get("title_ru", ""),
-            "primary_keyword": t.get("primary_keyword", ""),
-            "unique_angle": t.get("unique_angle", ""),
-            "content_brief": t.get("content_brief", ""),
-            "validation": t.get("validation", {}),
-        })
+        topics_for_scoring.append(
+            {
+                "title_en": t.get("title_en", t.get("title", "")),
+                "title_ru": t.get("title_ru", ""),
+                "primary_keyword": t.get("primary_keyword", ""),
+                "unique_angle": t.get("unique_angle", ""),
+                "content_brief": t.get("content_brief", ""),
+                "validation": t.get("validation", {}),
+            }
+        )
 
     topics_json = json.dumps(topics_for_scoring, ensure_ascii=False, indent=2)
 
@@ -90,7 +92,10 @@ def evaluate_quality(state: TopicResearchState) -> str:
     else:
         log.info(
             "Quality check: only %d topics above %d (iter %d/%d), retrying",
-            len(quality_topics), threshold, iteration, max_iterations,
+            len(quality_topics),
+            threshold,
+            iteration,
+            max_iterations,
         )
         return "discover"
 

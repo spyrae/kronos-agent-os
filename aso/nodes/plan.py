@@ -59,7 +59,7 @@ def _build_plan_prompt(state: ASOState) -> str:
         for key, data in rankings.items():
             pos = data.get("position")
             pos_str = f"#{pos}" if pos else "не найдено"
-            sections.append(f"- \"{data.get('keyword')}\" ({data.get('country')}): {pos_str}")
+            sections.append(f'- "{data.get("keyword")}" ({data.get("country")}): {pos_str}')
         sections.append("")
 
     # Competitors

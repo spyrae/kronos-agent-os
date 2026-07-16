@@ -61,6 +61,7 @@ class SummarizeEngine(ContextEngine):
     def compact(self, state: AgentState) -> AgentState:
         # Import here to avoid circular deps
         from kronos.memory.compaction import compact_messages
+
         return compact_messages(state)
 
 
@@ -83,7 +84,7 @@ class SlidingWindowEngine(ContextEngine):
             return {}
 
         dropped = len(messages) - self.window_size
-        kept = list(messages[-self.window_size:])
+        kept = list(messages[-self.window_size :])
 
         log.info("Sliding window: dropped %d messages, kept %d", dropped, self.window_size)
 
@@ -125,6 +126,7 @@ class HybridEngine(ContextEngine):
         if user_id and to_flush:
             try:
                 from kronos.memory.store import add_memories
+
                 flush_pairs = []
                 for msg in to_flush:
                     if isinstance(msg, HumanMessage):

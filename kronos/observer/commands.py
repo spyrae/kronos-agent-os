@@ -193,10 +193,7 @@ def render_observer_status(status: ObserverStatus) -> str:
             f"scanned={run['scanned_count']} captured={run['captured_count']} "
             f"skipped={run['skipped_count']} errors={run['error_count']}"
         )
-        lines.append(
-            f"- {run['source_kind']} {run['status']} at {run['logged_at']} "
-            f"({counters})"
-        )
+        lines.append(f"- {run['source_kind']} {run['status']} at {run['logged_at']} ({counters})")
     return "\n".join(lines).strip()
 
 

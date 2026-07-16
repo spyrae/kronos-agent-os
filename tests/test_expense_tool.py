@@ -87,10 +87,7 @@ def test_add_expense_updates_budget_after_notion_success(monkeypatch, tmp_path):
     assert captured_properties["Amount_USD"] == {"number": 25.25}
     assert captured_properties["Rate"] == {"number": 233.5}
     assert captured_properties["Rate_USD"] == {"number": 16300.0}
-    assert (
-        "| 1 | 01.06.2026 | 5,000,000 | 4,588,500 | 233.5 | 16300 | Test |"
-        in budget_file.read_text()
-    )
+    assert "| 1 | 01.06.2026 | 5,000,000 | 4,588,500 | 233.5 | 16300 | Test |" in budget_file.read_text()
 
 
 def test_add_expense_idr_legacy_tranche_yields_no_usd(monkeypatch, tmp_path):
@@ -231,14 +228,11 @@ def test_add_expense_split_full_halves_everything_for_idr(monkeypatch, tmp_path)
     assert "✅ 'Ужин' — 205,750 IDR" in result
     assert "(split, твоя доля)" in result
     assert captured_properties["Amount_IDR"] == {"number": 205750}
-    assert captured_properties["Amount_RUB"] == {"number": 881}    # 205750 / 233.5
+    assert captured_properties["Amount_RUB"] == {"number": 881}  # 205750 / 233.5
     assert captured_properties["Amount_USD"] == {"number": 12.62}  # 205750 / 16300
     assert captured_properties["Split"] == {"checkbox": True}
     # Budget deducts the halved amount, not the full charge.
-    assert (
-        "| 1 | 01.06.2026 | 5,000,000 | 4,794,250 | 233.5 | 16300 | Test |"
-        in budget_file.read_text()
-    )
+    assert "| 1 | 01.06.2026 | 5,000,000 | 4,794,250 | 233.5 | 16300 | Test |" in budget_file.read_text()
 
 
 def test_add_expense_split_keeps_idr_whole_and_halves_only_share(monkeypatch, tmp_path):
@@ -266,16 +260,13 @@ def test_add_expense_split_keeps_idr_whole_and_halves_only_share(monkeypatch, tm
         }
     )
 
-    assert "✅ 'Кафе' — 411,500 IDR" in result   # full charge shown
+    assert "✅ 'Кафе' — 411,500 IDR" in result  # full charge shown
     assert captured_properties["Amount_IDR"] == {"number": 411500}  # NOT halved
-    assert captured_properties["Amount_RUB"] == {"number": 881}     # 1762 / 2
-    assert captured_properties["Amount_USD"] == {"number": 12.62}   # 25.25 / 2
+    assert captured_properties["Amount_RUB"] == {"number": 881}  # 1762 / 2
+    assert captured_properties["Amount_USD"] == {"number": 12.62}  # 25.25 / 2
     assert captured_properties["Split"] == {"checkbox": True}
     # The full charge still leaves the shared IDR budget.
-    assert (
-        "| 1 | 01.06.2026 | 5,000,000 | 4,588,500 | 233.5 | 16300 | Test |"
-        in budget_file.read_text()
-    )
+    assert "| 1 | 01.06.2026 | 5,000,000 | 4,588,500 | 233.5 | 16300 | Test |" in budget_file.read_text()
 
 
 def test_add_expense_split_full_halves_rub_without_fifo(monkeypatch):
@@ -304,7 +295,7 @@ def test_add_expense_split_full_halves_rub_without_fifo(monkeypatch):
     )
 
     assert "✅ 'Подписка' — 248 ₽" in result
-    assert captured_properties["Amount_RUB"] == {"number": 248}   # 496 / 2
+    assert captured_properties["Amount_RUB"] == {"number": 248}  # 496 / 2
     assert captured_properties["Split"] == {"checkbox": True}
 
 

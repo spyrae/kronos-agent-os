@@ -92,14 +92,20 @@ def collect() -> dict:
         total_users = _count("global_users")
 
         # New users in last 24h (using created_at filter)
-        new_users = _count("global_users", {
-            "created_at": "gte.now()-interval'24 hours'",
-        })
+        new_users = _count(
+            "global_users",
+            {
+                "created_at": "gte.now()-interval'24 hours'",
+            },
+        )
 
         # Active trips (not archived)
-        active_trips = _count("trip", {
-            "is_archived": "eq.false",
-        })
+        active_trips = _count(
+            "trip",
+            {
+                "is_archived": "eq.false",
+            },
+        )
 
         # Total trips
         total_trips = _count("trip")

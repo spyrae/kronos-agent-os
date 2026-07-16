@@ -246,10 +246,15 @@ def test_github_release_hygiene_surfaces_are_present():
 def test_public_product_surface_centers_agent_os_not_swarm_only():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     intro = readme.split("## Quickstart", 1)[0].lower()
-    architecture_intro = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8").split(
-        "## System Map",
-        1,
-    )[0].lower()
+    architecture_intro = (
+        (ROOT / "docs" / "ARCHITECTURE.md")
+        .read_text(encoding="utf-8")
+        .split(
+            "## System Map",
+            1,
+        )[0]
+        .lower()
+    )
 
     assert "kronos agent os" in intro
     assert "agent operating layer" in intro

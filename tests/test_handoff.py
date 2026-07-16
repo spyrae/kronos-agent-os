@@ -23,11 +23,13 @@ def swarm(tmp_path, monkeypatch):
 
     original_profiles = {name: dict(prof) for name, prof in AGENT_PROFILES.items()}
     AGENT_PROFILES.clear()
-    AGENT_PROFILES.update({
-        "kronos": {"username": "kronosagnt", "aliases": ["kronos"], "role": "strategic advisor"},
-        "nexus": {"username": "nexusagnt", "aliases": ["nexus"], "role": "data analyst"},
-        "lacuna": {"username": "lacunaagnt", "aliases": ["lacuna"], "role": "creative director"},
-    })
+    AGENT_PROFILES.update(
+        {
+            "kronos": {"username": "kronosagnt", "aliases": ["kronos"], "role": "strategic advisor"},
+            "nexus": {"username": "nexusagnt", "aliases": ["nexus"], "role": "data analyst"},
+            "lacuna": {"username": "lacunaagnt", "aliases": ["lacuna"], "role": "creative director"},
+        }
+    )
 
     from kronos import db as _db
 
@@ -45,8 +47,12 @@ def swarm(tmp_path, monkeypatch):
 
 def _create(swarm, to_agent="nexus", context="analyze metrics", chat=1):
     return swarm.create_handoff(
-        chat_id=chat, topic_id=None, thread_id=str(chat),
-        from_agent="kronos", to_agent=to_agent, context=context,
+        chat_id=chat,
+        topic_id=None,
+        thread_id=str(chat),
+        from_agent="kronos",
+        to_agent=to_agent,
+        context=context,
     )
 
 
@@ -127,9 +133,7 @@ async def test_intake_runs_agent_and_delivers(swarm, monkeypatch):
 
     monkeypatch.setattr("kronos.bridge._agent", FakeAgent())
     sent: list[str] = []
-    monkeypatch.setattr(
-        cron_handoff, "send_webhook", lambda text, *a, **k: sent.append(text) or True
-    )
+    monkeypatch.setattr(cron_handoff, "send_webhook", lambda text, *a, **k: sent.append(text) or True)
 
     await cron_handoff.run_handoff_intake()
 

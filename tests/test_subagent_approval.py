@@ -53,12 +53,14 @@ def _server_ops_delegation(sub_responses: list[AIMessage], executed: list):
 @pytest.fixture(autouse=True)
 def _approvals_on(monkeypatch):
     from kronos.config import settings
+
     monkeypatch.setattr(settings, "tool_approvals_enabled", True)
 
 
 # --------------------------------------------------------------------------
 # Bubble-up: a sub-agent's approval-worthy tool pauses the whole turn
 # --------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_subagent_approval_bubbles_up_and_tags_delegation():
@@ -102,17 +104,21 @@ async def test_subagent_safe_tool_runs_without_pause():
     """A non-approval-worthy sub-agent tool executes normally (no false pause)."""
     executed: list = []
     search = _make_tool("search_logs", result="42 lines", calls=executed)
-    sub_model = _make_model([
-        _ai_tool_call("search_logs", {"q": "err"}, "call_s"),
-        AIMessage(content="found 42 error lines"),
-    ])
+    sub_model = _make_model(
+        [
+            _ai_tool_call("search_logs", {"q": "err"}, "call_s"),
+            AIMessage(content="found 42 error lines"),
+        ]
+    )
     sub_agent = create_agent(sub_model, [search], "sub", "server_ops_agent")
     delegation_tool = _make_delegation_tool("server_ops", "delegate", sub_agent)
 
-    top_model = _make_model([
-        _ai_tool_call("delegate_to_server_ops", {"request": "search errors"}, "call_deleg"),
-        AIMessage(content="done"),
-    ])
+    top_model = _make_model(
+        [
+            _ai_tool_call("delegate_to_server_ops", {"request": "search errors"}, "call_deleg"),
+            AIMessage(content="done"),
+        ]
+    )
 
     result = await react_loop(
         model=top_model,
@@ -128,6 +134,7 @@ async def test_subagent_safe_tool_runs_without_pause():
 # --------------------------------------------------------------------------
 # Resume: re-delegate with the approved sub-call exempted
 # --------------------------------------------------------------------------
+
 
 def _fake_agent(delegation_tool: StructuredTool):
     """Minimal object exposing the two attrs _resume_delegated_approval needs."""
@@ -207,6 +214,7 @@ async def test_resume_rejection_short_circuits_delegation():
 # Session store round-trips the delegation context
 # --------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_pending_approval_round_trips_delegation(tmp_path: Path):
     from kronos.session import SessionStore
@@ -254,8 +262,12 @@ async def test_pending_approvals_migration_from_old_schema(tmp_path: Path):
     store = SessionStore(db_path)
     turn_id = await store.begin_turn("t", "hi")  # first use migrates (adds the column)
     approval_id = await store.create_pending_approval(
-        turn_id=turn_id, thread_id="t", tool_call_id="c",
-        tool_name="restart_service", args={}, delegation={"tool_name": "delegate_to_x"},
+        turn_id=turn_id,
+        thread_id="t",
+        tool_call_id="c",
+        tool_name="restart_service",
+        args={},
+        delegation={"tool_name": "delegate_to_x"},
     )
     assert (await store.get_pending_approval(approval_id))["delegation"] == {"tool_name": "delegate_to_x"}
 

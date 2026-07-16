@@ -51,9 +51,7 @@ class MCPGateway:
     def _load_dynamic_servers(self) -> None:
         """Load dynamically added servers from DB."""
         conn = sqlite3.connect(str(self._db_path))
-        rows = conn.execute(
-            "SELECT name, config FROM mcp_servers WHERE enabled = 1"
-        ).fetchall()
+        rows = conn.execute("SELECT name, config FROM mcp_servers WHERE enabled = 1").fetchall()
         conn.close()
 
         for name, config_json in rows:
@@ -110,8 +108,12 @@ class MCPGateway:
             log.warning("No MCP servers configured")
             return []
 
-        log.info("Starting %d MCP servers (%d static + %d dynamic)...",
-                 len(combined), len(self._static_config), len(self._dynamic_config))
+        log.info(
+            "Starting %d MCP servers (%d static + %d dynamic)...",
+            len(combined),
+            len(self._static_config),
+            len(self._dynamic_config),
+        )
 
         client = MultiServerMCPClient(combined)
         self._tools = await client.get_tools()

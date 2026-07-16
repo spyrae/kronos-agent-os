@@ -79,8 +79,7 @@ def _filter_messages(messages: list[dict], *, min_reactions: int, min_views: int
     return [
         message
         for message in scored
-        if int(message.get("reactions") or 0) >= min_reactions
-        or int(message.get("views") or 0) >= min_views
+        if int(message.get("reactions") or 0) >= min_reactions or int(message.get("views") or 0) >= min_views
     ]
 
 

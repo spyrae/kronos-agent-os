@@ -44,9 +44,13 @@ def test_evaluate_quality_uses_lite_judge(monkeypatch):
     )
     monkeypatch.setattr(nodes, "get_model", lambda _tier: model)
 
-    result = nodes.evaluate_quality(_state(search_results=[
-        {"query": "q1", "source": "brave", "content": "x" * 6000, "url": ""},
-    ]))
+    result = nodes.evaluate_quality(
+        _state(
+            search_results=[
+                {"query": "q1", "source": "brave", "content": "x" * 6000, "url": ""},
+            ]
+        )
+    )
 
     assert result["quality_score"] == 60
     assert "LLM judge score: 60/100" in result["quality_feedback"]
@@ -63,9 +67,13 @@ def test_evaluate_quality_falls_back_to_heuristic_feedback(monkeypatch):
 
     monkeypatch.setattr(nodes, "get_model", fail_get_model)
 
-    result = nodes.evaluate_quality(_state(search_results=[
-        {"query": "q1", "source": "brave", "content": "x" * 6000, "url": ""},
-    ]))
+    result = nodes.evaluate_quality(
+        _state(
+            search_results=[
+                {"query": "q1", "source": "brave", "content": "x" * 6000, "url": ""},
+            ]
+        )
+    )
 
     assert result["quality_score"] == 60
     assert "Gaps to address" in result["quality_feedback"]
@@ -77,18 +85,19 @@ def test_evaluate_quality_keeps_deterministic_heuristic_floor(monkeypatch):
     from kronos.agents.deep_research import nodes
 
     model = CapturingModel(
-        '{"score": 0, "weak_areas": ["Synthetic content"], '
-        '"feedback": "Collected text looks repetitive."}'
+        '{"score": 0, "weak_areas": ["Synthetic content"], "feedback": "Collected text looks repetitive."}'
     )
     monkeypatch.setattr(nodes, "get_model", lambda _tier: model)
 
-    result = nodes.evaluate_quality(_state(
-        mode="topic",
-        search_results=[
-            {"query": "q1", "source": "brave", "content": "x" * 6000, "url": ""},
-            {"query": "q2", "source": "exa", "content": "y" * 5000, "url": ""},
-        ],
-    ))
+    result = nodes.evaluate_quality(
+        _state(
+            mode="topic",
+            search_results=[
+                {"query": "q1", "source": "brave", "content": "x" * 6000, "url": ""},
+                {"query": "q2", "source": "exa", "content": "y" * 5000, "url": ""},
+            ],
+        )
+    )
 
     assert result["quality_score"] == 75
     assert "LLM judge was stricter" in result["quality_feedback"]
@@ -123,10 +132,12 @@ def test_plan_more_queries_uses_quality_feedback(monkeypatch):
     model = CapturingModel('[{"query": "AI travel planner competitors", "tool": "brave"}]')
     monkeypatch.setattr(nodes, "get_model", lambda _tier: model)
 
-    result = nodes.plan_more_queries(_state(
-        search_results=[{"query": "q1", "source": "brave", "content": "short", "url": ""}],
-        quality_feedback="Need independent competitors and demand signal.",
-    ))
+    result = nodes.plan_more_queries(
+        _state(
+            search_results=[{"query": "q1", "source": "brave", "content": "short", "url": ""}],
+            quality_feedback="Need independent competitors and demand signal.",
+        )
+    )
 
     assert result["search_queries"][0]["query"] == "AI travel planner competitors"
     assert "Need independent competitors and demand signal." in model.prompts[0]
@@ -139,11 +150,13 @@ def test_synthesize_report_includes_self_correction_feedback(monkeypatch):
     model = CapturingModel("final report")
     monkeypatch.setattr(nodes, "get_model", lambda _tier: model)
 
-    result = nodes.synthesize_report(_state(
-        search_results=[{"query": "q1", "source": "brave", "content": "x" * 6000, "url": ""}],
-        quality_score=60,
-        quality_feedback="Need stronger evidence and explicit limitations.",
-    ))
+    result = nodes.synthesize_report(
+        _state(
+            search_results=[{"query": "q1", "source": "brave", "content": "x" * 6000, "url": ""}],
+            quality_score=60,
+            quality_feedback="Need stronger evidence and explicit limitations.",
+        )
+    )
 
     assert result["report"] == "final report"
     assert result["messages"] == [AIMessage(content="final report")]
@@ -158,12 +171,14 @@ def test_self_correct_report_rewrites_draft_once(monkeypatch):
     model = CapturingModel("corrected report")
     monkeypatch.setattr(nodes, "get_model", lambda _tier: model)
 
-    result = nodes.self_correct_report(_state(
-        report="draft report",
-        quality_score=60,
-        quality_feedback="Need stronger evidence and explicit limitations.",
-        correction_count=0,
-    ))
+    result = nodes.self_correct_report(
+        _state(
+            report="draft report",
+            quality_score=60,
+            quality_feedback="Need stronger evidence and explicit limitations.",
+            correction_count=0,
+        )
+    )
 
     assert result["report"] == "corrected report"
     assert result["messages"] == [AIMessage(content="corrected report")]

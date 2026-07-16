@@ -56,7 +56,9 @@ def _seed_memory_dbs(db_dir, swarm_db):
         conn.execute(
             "CREATE TABLE shared_user_facts (id INTEGER PRIMARY KEY, user_id TEXT, fact TEXT, source_agent TEXT, created_at REAL, last_accessed_at REAL, access_count INTEGER)"
         )
-        conn.execute("INSERT INTO shared_user_facts VALUES (1, 'u1', 'Shared launch preference', 'kaos', 100.0, 200.0, 2)")
+        conn.execute(
+            "INSERT INTO shared_user_facts VALUES (1, 'u1', 'Shared launch preference', 'kaos', 100.0, 200.0, 2)"
+        )
 
     with sqlite3.connect(db_dir / "session.db") as conn:
         conn.execute("CREATE TABLE sessions (thread_id TEXT PRIMARY KEY, messages TEXT, updated_at TEXT)")

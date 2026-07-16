@@ -22,15 +22,18 @@ def test_tool_event_audit_redacts_secret_args(tmp_path, monkeypatch):
     )
 
     try:
-        audit.log_tool_event("tool_call", {
-            "name": "fetch_url",
-            "call_id": "call-1",
-            "turn": 1,
-            "args": {
-                "url": "https://example.com?api_key=super-secret-key",
-                "token": "plain-secret",
+        audit.log_tool_event(
+            "tool_call",
+            {
+                "name": "fetch_url",
+                "call_id": "call-1",
+                "turn": 1,
+                "args": {
+                    "url": "https://example.com?api_key=super-secret-key",
+                    "token": "plain-secret",
+                },
             },
-        })
+        )
     finally:
         audit.reset_tool_audit_context(token)
 
@@ -48,13 +51,16 @@ def test_tool_event_audit_redacts_secret_args(tmp_path, monkeypatch):
 def test_tool_result_audit_marks_blocked_and_errors(tmp_path, monkeypatch):
     tool_log = _configure_audit_path(tmp_path, monkeypatch)
 
-    audit.log_tool_event("tool_result", {
-        "name": "mcp_add_server",
-        "call_id": "call-2",
-        "ok": False,
-        "content": "Blocked: dynamic MCP server management is disabled.",
-        "duration_ms": 7,
-    })
+    audit.log_tool_event(
+        "tool_result",
+        {
+            "name": "mcp_add_server",
+            "call_id": "call-2",
+            "ok": False,
+            "content": "Blocked: dynamic MCP server management is disabled.",
+            "duration_ms": 7,
+        },
+    )
 
     entry = json.loads(tool_log.read_text(encoding="utf-8").strip())
 
@@ -69,16 +75,19 @@ def test_tool_result_audit_marks_blocked_and_errors(tmp_path, monkeypatch):
 def test_tool_result_audit_records_compression_metadata(tmp_path, monkeypatch):
     tool_log = _configure_audit_path(tmp_path, monkeypatch)
 
-    audit.log_tool_event("tool_result", {
-        "name": "brave_search",
-        "call_id": "call-3",
-        "ok": True,
-        "content": "full raw search result",
-        "model_content": "compressed search summary",
-        "compressed": True,
-        "raw_content_chars": 22,
-        "model_content_chars": 25,
-    })
+    audit.log_tool_event(
+        "tool_result",
+        {
+            "name": "brave_search",
+            "call_id": "call-3",
+            "ok": True,
+            "content": "full raw search result",
+            "model_content": "compressed search summary",
+            "compressed": True,
+            "raw_content_chars": 22,
+            "model_content_chars": 25,
+        },
+    )
 
     entry = json.loads(tool_log.read_text(encoding="utf-8").strip())
 

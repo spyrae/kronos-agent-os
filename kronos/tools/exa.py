@@ -98,15 +98,16 @@ def search(query: str, count: int = 10, freshness: str = "pd") -> list[SearchRes
 
         results = []
         for item in data.get("results", []):
-            results.append(SearchResult(
-                title=item.get("title") or "",
-                url=item.get("url") or "",
-                # Exa returns text/highlight; prefer summary if present
-                description=(item.get("summary")
-                             or item.get("text")
-                             or item.get("highlights", [""])[0]
-                             or "")[:300],
-            ))
+            results.append(
+                SearchResult(
+                    title=item.get("title") or "",
+                    url=item.get("url") or "",
+                    # Exa returns text/highlight; prefer summary if present
+                    description=(item.get("summary") or item.get("text") or item.get("highlights", [""])[0] or "")[
+                        :300
+                    ],
+                )
+            )
 
         log.debug("Exa search '%s': %d results", query[:50], len(results))
         return results

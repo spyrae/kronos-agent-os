@@ -105,7 +105,7 @@ def _chunk_summarize(conversation_text: str) -> str:
             chunk_summaries.append(summary)
         except Exception as e:
             log.error("Chunk %d summarization failed: %s", i, e)
-            chunk_summaries.append(f"[Chunk {i+1}: summarization failed]")
+            chunk_summaries.append(f"[Chunk {i + 1}: summarization failed]")
 
     # If multiple chunks, do a final merge pass
     if len(chunk_summaries) > 1:
@@ -160,13 +160,13 @@ def compact_messages(state: AgentState) -> AgentState:
             log.error("Compaction memory flush failed: %s", e)
 
     # Replace messages: summary + recent
-    summary_msg = SystemMessage(
-        content=f"[Previous conversation summary]\n{summary}"
-    )
+    summary_msg = SystemMessage(content=f"[Previous conversation summary]\n{summary}")
 
     log.info(
         "Compacted: %d messages → summary (%d chars) + %d recent",
-        len(old_messages), len(summary), len(recent_messages),
+        len(old_messages),
+        len(summary),
+        len(recent_messages),
     )
 
     return {"messages": [summary_msg] + list(recent_messages)}

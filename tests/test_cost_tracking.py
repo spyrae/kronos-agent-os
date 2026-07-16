@@ -28,6 +28,7 @@ def cost_env(tmp_path, monkeypatch):
     db_dir.mkdir()
 
     from kronos.config import settings
+
     monkeypatch.setattr(settings, "swarm_db_path", str(swarm_path))
     monkeypatch.setattr(settings, "db_dir", str(db_dir))
     monkeypatch.setattr(settings, "db_path", str(db_dir / "session.db"))
@@ -53,6 +54,7 @@ def cost_env(tmp_path, monkeypatch):
 # Pricing
 # --------------------------------------------------------------------------
 
+
 def test_pricing_known_default_codex_and_env(monkeypatch):
     from kronos.security.cost_tracking import _price_for, estimate_cost_usd
 
@@ -72,6 +74,7 @@ def test_pricing_known_default_codex_and_env(monkeypatch):
 # --------------------------------------------------------------------------
 # Usage extraction
 # --------------------------------------------------------------------------
+
 
 def test_extract_usage_prefers_usage_metadata():
     from kronos.security.cost_tracking import _extract_usage
@@ -109,7 +112,9 @@ def test_handler_estimates_when_provider_reports_no_usage(cost_env):
     handler = get_cost_callbacks()[0]
     run_id = "run-codex-1"
     handler.on_chat_model_start(
-        {}, [[HumanMessage(content="x" * 350)]], run_id=run_id,
+        {},
+        [[HumanMessage(content="x" * 350)]],
+        run_id=run_id,
     )
     message = AIMessage(content="y" * 70, response_metadata={"model_name": "deepseek-chat"})
     result = LLMResult(generations=[[ChatGeneration(message=message)]])
@@ -127,6 +132,7 @@ def test_handler_estimates_when_provider_reports_no_usage(cost_env):
 # --------------------------------------------------------------------------
 # Recording wiring (swarm ledger + session guardian)
 # --------------------------------------------------------------------------
+
 
 def test_record_llm_cost_updates_swarm_and_session(cost_env):
     from kronos.audit import reset_tool_audit_context, set_tool_audit_context
@@ -159,6 +165,7 @@ def test_record_llm_cost_without_session_still_logs_daily(cost_env):
 # --------------------------------------------------------------------------
 # Guardian limits
 # --------------------------------------------------------------------------
+
 
 def test_session_limit_enforced_after_record(cost_env):
     from kronos.security.cost_guardian import get_guardian
@@ -208,6 +215,7 @@ def test_add_cost_upserts_and_separates_days(cost_env):
 # --------------------------------------------------------------------------
 # End-to-end: the ContextVar must reach on_llm_end through model.ainvoke
 # --------------------------------------------------------------------------
+
 
 async def test_callback_records_through_model_ainvoke(cost_env):
     from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel

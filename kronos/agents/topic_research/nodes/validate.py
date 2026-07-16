@@ -74,7 +74,8 @@ async def validate_topics(state: TopicResearchState, tools: list[BaseTool], on_t
 def _parse_json_object(text: str) -> dict | None:
     """Extract JSON object from LLM response."""
     import re
-    match = re.search(r'\{[\s\S]*\}', text)
+
+    match = re.search(r"\{[\s\S]*\}", text)
     if match:
         try:
             return json.loads(match.group())

@@ -48,7 +48,8 @@ def collect() -> dict:
 
     try:
         # Completed issues this week
-        completed_data = _graphql("""
+        completed_data = _graphql(
+            """
             query($after: DateTimeOrDuration!) {
                 issues(
                     filter: {
@@ -60,7 +61,9 @@ def collect() -> dict:
                     nodes { id }
                 }
             }
-        """, {"after": week_ago})
+        """,
+            {"after": week_ago},
+        )
         completed = len(completed_data.get("issues", {}).get("nodes", []))
 
         # In Progress issues

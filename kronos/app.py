@@ -44,9 +44,14 @@ _LEGACY_MOVES: tuple[tuple[str, str], ...] = (
 # Legacy names that were accidentally shared across agents. Only "kronos"
 # inherits them; others start with fresh per-agent stores.
 _KRONOS_ONLY_LEGACY = {
-    "memory_fts.db", "memory_fts.db-wal", "memory_fts.db-shm",
-    "knowledge_graph.db", "knowledge_graph.db-wal", "knowledge_graph.db-shm",
-    "mcp_registry.db", "qdrant",
+    "memory_fts.db",
+    "memory_fts.db-wal",
+    "memory_fts.db-shm",
+    "knowledge_graph.db",
+    "knowledge_graph.db-wal",
+    "knowledge_graph.db-shm",
+    "mcp_registry.db",
+    "qdrant",
 }
 
 
@@ -84,6 +89,7 @@ def _ensure_data_dirs() -> None:
     Path(settings.swarm_db_path).parent.mkdir(parents=True, exist_ok=True)
     # Force schema init so the first group message does not pay the cost.
     from kronos.swarm_store import get_swarm
+
     get_swarm()
     log.info("Data dirs ready: %s (swarm=%s)", db_dir, settings.swarm_db_path)
 
@@ -128,15 +134,11 @@ async def main():
             asyncio.create_task(run_bridge(agent), name="bridge"),
             asyncio.create_task(run_discord(agent), name="discord"),
             asyncio.create_task(scheduler.run(), name="scheduler"),
-            asyncio.create_task(
-                run_dashboard(scheduler=scheduler, agent=agent), name="dashboard"
-            ),
+            asyncio.create_task(run_dashboard(scheduler=scheduler, agent=agent), name="dashboard"),
         ]
         stop_task = asyncio.create_task(stop_event.wait(), name="stop")
 
-        done, _pending = await asyncio.wait(
-            [*services, stop_task], return_when=asyncio.FIRST_COMPLETED
-        )
+        done, _pending = await asyncio.wait([*services, stop_task], return_when=asyncio.FIRST_COMPLETED)
 
         # Signal received, or a service returned/crashed → tear everything down.
         log.info("Shutting down services…")

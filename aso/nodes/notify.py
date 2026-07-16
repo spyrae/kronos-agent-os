@@ -60,6 +60,7 @@ def notify(state: ASOState) -> dict:
 
 # --- Formatters ---
 
+
 def _format_monitor_report(state: ASOState) -> str:
     """Format monitor + analysis results."""
     cycle_id = state.get("cycle_id", "?")
@@ -119,21 +120,16 @@ def _format_monitor_data(state: ASOState) -> str:
     if rankings:
         found = sum(1 for r in rankings.values() if r.get("found"))
         parts.append(f"Keywords: {found}/{len(rankings)} in top-50")
-        ranked = [
-            (r["keyword"], r["position"])
-            for r in rankings.values()
-            if r.get("position")
-        ]
+        ranked = [(r["keyword"], r["position"]) for r in rankings.values() if r.get("position")]
         ranked.sort(key=lambda x: x[1])
         for kw, pos in ranked[:5]:
-            parts.append(f"  #{pos} \"{kw}\"")
+            parts.append(f'  #{pos} "{kw}"')
 
     # Competitors
     competitors = state.get("competitor_data", [])
     if competitors:
         comp_str = ", ".join(
-            f"{c.get('competitor_name', '?')} ({c.get('average_rating', '?')}⭐)"
-            for c in competitors[:3]
+            f"{c.get('competitor_name', '?')} ({c.get('average_rating', '?')}⭐)" for c in competitors[:3]
         )
         parts.append(f"Competitors: {comp_str}")
 
@@ -154,8 +150,8 @@ def _format_execution(state: ASOState) -> str:
 
     for ch in applied:
         parts.append(f"  {ch.get('locale')}.{ch.get('field')}:")
-        parts.append(f"    \"{ch.get('old_value', '')}\"")
-        parts.append(f"    → \"{ch.get('new_value', '')}\"")
+        parts.append(f'    "{ch.get("old_value", "")}"')
+        parts.append(f'    → "{ch.get("new_value", "")}"')
 
     if errors:
         parts.append(f"\n⚠️ Ошибки ({len(errors)}):")

@@ -87,9 +87,7 @@ def test_record_capture_persists_standalone_url_when_sink_not_configured(tmp_pat
     assert metadata["source_kind"] == "telegram_link"
     assert metadata["message_id"] == 100
     assert metadata["timestamp"] == "2026-06-19T08:00:00Z"
-    assert metadata["bookmarks"] == [
-        {"status": "not_configured", "url": "https://example.com/article"}
-    ]
+    assert metadata["bookmarks"] == [{"status": "not_configured", "url": "https://example.com/article"}]
     assert (workspace.root / task["inbox_path"]).exists()
 
 

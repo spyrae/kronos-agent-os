@@ -129,7 +129,7 @@ def test_deploy_first_run_skips_systemd_when_manage_systemd_false(tmp_path: Path
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Skipping systemd unit install (KAOS_MANAGE_SYSTEMD=false)." in result.stdout
     assert not sudo_log.exists()
-    assert 'install -e app/.[dev]' in pip_log.read_text(encoding="utf-8")
+    assert "install -e app/.[dev]" in pip_log.read_text(encoding="utf-8")
     assert "install edge-tts" in pip_log.read_text(encoding="utf-8")
 
 
@@ -237,7 +237,7 @@ def test_deploy_runs_eval_gate_before_sync() -> None:
 
     assert "run_eval_gate()" in text
     assert "pytest -q -m eval" in text
-    assert text.index("run_eval_gate\nsync_files") < text.index("if [ \"${1:-}\" = \"--first-run\" ]; then")
+    assert text.index("run_eval_gate\nsync_files") < text.index('if [ "${1:-}" = "--first-run" ]; then')
 
 
 def test_deploy_aborts_when_eval_gate_fails_before_sync(tmp_path: Path) -> None:

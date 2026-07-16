@@ -37,10 +37,7 @@ class SignalDryRunArtifact:
             + (f", {self.source_errors.get(source_id, 0)} errors" if self.source_errors.get(source_id, 0) else "")
             for source_id, count in sorted(self.source_counts.items())
         ]
-        evidence_lines = [
-            f"- {level}: {count}"
-            for level, count in sorted(self.evidence_counts.items())
-        ] or ["- none"]
+        evidence_lines = [f"- {level}: {count}" for level, count in sorted(self.evidence_counts.items())] or ["- none"]
         return "\n".join(
             [
                 f"# Signal dry-run: {self.category}",

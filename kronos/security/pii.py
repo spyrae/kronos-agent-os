@@ -25,14 +25,10 @@ IP_MASK = "***.***.***.***"
 
 _EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
 _CARD_RE = re.compile(r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b")
-_RU_PHONE_RE = re.compile(
-    r"(?<!\d)\+?7[\s-]?\(?\d{3}\)?[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}(?!\d)"
-)
+_RU_PHONE_RE = re.compile(r"(?<!\d)\+?7[\s-]?\(?\d{3}\)?[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}(?!\d)")
 _INT_PHONE_RE = re.compile(r"(?<!\d)\+\d{1,3}[\s-]?\d{4,14}(?!\d)")
 _PASSPORT_RU_RE = re.compile(r"\b\d{4}\s?\d{6}\b")
-_IP_RE = re.compile(
-    r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b"
-)
+_IP_RE = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b")
 
 
 def mask_pii(text: str) -> str:

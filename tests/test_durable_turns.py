@@ -425,12 +425,8 @@ async def test_ainvoke_forwards_per_call_tool_events(tmp_path: Path, monkeypatch
     async def do_thing() -> str:
         return "ok"
 
-    tool = StructuredTool.from_function(
-        coroutine=do_thing, name="do_thing", description="a tool"
-    )
-    model = _make_model(
-        [_ai_with_tool_call("do_thing", tool_call_id="c1"), AIMessage(content="done")]
-    )
+    tool = StructuredTool.from_function(coroutine=do_thing, name="do_thing", description="a tool")
+    model = _make_model([_ai_with_tool_call("do_thing", tool_call_id="c1"), AIMessage(content="done")])
     agent = _minimal_agent(store)
     agent._tools = [tool]
 
@@ -520,8 +516,7 @@ async def test_stale_approval_expires_instead_of_resuming(tmp_path: Path) -> Non
     conn = sqlite3.connect(db_path)
     try:
         conn.execute(
-            "UPDATE pending_approvals SET requested_at = datetime('now', ?) "
-            "WHERE approval_id = ?",
+            "UPDATE pending_approvals SET requested_at = datetime('now', ?) WHERE approval_id = ?",
             (f"-{APPROVAL_TTL_SECONDS + 120} seconds", approval_id),
         )
         conn.commit()

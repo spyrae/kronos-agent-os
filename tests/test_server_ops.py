@@ -52,9 +52,7 @@ def captured_ssh(monkeypatch):
 
 
 async def _run(query, server_name="primary"):
-    return await server_ops.server_query_swarm.ainvoke(
-        {"query": query, "server_name": server_name}
-    )
+    return await server_ops.server_query_swarm.ainvoke({"query": query, "server_name": server_name})
 
 
 async def test_valid_select_passes_sql_via_stdin(registry, captured_ssh):

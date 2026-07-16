@@ -48,8 +48,10 @@ def patched_settings(workspace_dir, monkeypatch, tmp_path):
 
     # Reset SafeDB / swarm singletons so they pick up the new paths.
     from kronos import db as _db
+
     _db._instances.clear()
     import kronos.swarm_store as ss
+
     ss._singleton = None
 
     return settings

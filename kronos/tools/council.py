@@ -71,7 +71,4 @@ def convene_council(question: str, participants: list[str]) -> str:
         participants=names,
     )
     swarm.incr_metric("councils_convened")
-    return (
-        f"🏛 Созвал консилиум #{session_id}: {', '.join(names)}. "
-        "Соберу их позиции и синтезирую единый ответ здесь."
-    )
+    return f"🏛 Созвал консилиум #{session_id}: {', '.join(names)}. Соберу их позиции и синтезирую единый ответ здесь."

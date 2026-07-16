@@ -122,18 +122,20 @@ def _job_payload(name: str, job) -> dict:
 
 
 def _demo_jobs() -> list[dict]:
-    return [{
-        "name": "demo-daily-brief",
-        "enabled": False,
-        "running": False,
-        "status": "demo",
-        "schedule": "daily 09:00 UTC",
-        "last_run": None,
-        "next_run": None,
-        "owner": "demo",
-        "capabilities": ["memory", "notifications"],
-        "safe_controls": {"pause": False, "resume": False, "trigger_now": False},
-    }]
+    return [
+        {
+            "name": "demo-daily-brief",
+            "enabled": False,
+            "running": False,
+            "status": "demo",
+            "schedule": "daily 09:00 UTC",
+            "last_run": None,
+            "next_run": None,
+            "owner": "demo",
+            "capabilities": ["memory", "notifications"],
+            "safe_controls": {"pause": False, "resume": False, "trigger_now": False},
+        }
+    ]
 
 
 @router.get("/stats")
@@ -224,7 +226,7 @@ async def get_requests(limit: int = Query(50, le=500), offset: int = Query(0)):
     # Reverse chronological
     entries.reverse()
     total = len(entries)
-    page = entries[offset:offset + limit]
+    page = entries[offset : offset + limit]
 
     return {"requests": page, "total": total}
 
@@ -237,6 +239,7 @@ async def get_cost_history(days: int = Query(7, le=90)):
         return {"days": []}
 
     from collections import defaultdict
+
     daily: dict[str, float] = defaultdict(float)
     daily_count: dict[str, int] = defaultdict(int)
 

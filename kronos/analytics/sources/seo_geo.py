@@ -33,9 +33,7 @@ def collect() -> dict:
         top20 = sum(1 for r in ranked if r["position"] <= 20)
         # GEO
         rates = store.citation_rate(site_id, days=7)
-        avg_rate = (
-            round(sum(rates.values()) / len(rates), 1) if rates else 0.0
-        )
+        avg_rate = round(sum(rates.values()) / len(rates), 1) if rates else 0.0
         # GSC
         gsc_28d = store.gsc_totals(site_id, days=28)
 

@@ -298,10 +298,7 @@ class SkillStore:
             tier_note = f" ({skill.tier})" if skill.tier else ""
             tags_note = f" #{' #'.join(skill.tags)}" if skill.tags else ""
             status_note = " [draft; load for review before relying on it]" if skill.status == "draft" else ""
-            lines.append(
-                f"- **{skill.name}**{tier_note}: {skill.description}"
-                f"{status_note}{refs_note}{tags_note}"
-            )
+            lines.append(f"- **{skill.name}**{tier_note}: {skill.description}{status_note}{refs_note}{tags_note}")
 
         return "\n".join(lines)
 

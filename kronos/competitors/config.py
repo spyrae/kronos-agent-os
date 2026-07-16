@@ -22,18 +22,19 @@ def load_competitors(path: Path | None = None) -> list[CompetitorConfig]:
     raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
     competitors = []
     for entry in raw.get("competitors", []):
-        competitors.append(CompetitorConfig(
-            id=entry["id"],
-            name=entry["name"],
-            tier=entry.get("tier", 2),
-            ios_id=entry.get("ios_id", ""),
-            android_package=entry.get("android_package", ""),
-            website=entry.get("website", ""),
-            blog_rss=entry.get("blog_rss", ""),
-            twitter=entry.get("twitter", ""),
-            linkedin=entry.get("linkedin", ""),
-        ))
+        competitors.append(
+            CompetitorConfig(
+                id=entry["id"],
+                name=entry["name"],
+                tier=entry.get("tier", 2),
+                ios_id=entry.get("ios_id", ""),
+                android_package=entry.get("android_package", ""),
+                website=entry.get("website", ""),
+                blog_rss=entry.get("blog_rss", ""),
+                twitter=entry.get("twitter", ""),
+                linkedin=entry.get("linkedin", ""),
+            )
+        )
 
-    log.info("Loaded %d competitors (%d tier-1)", len(competitors),
-             sum(1 for c in competitors if c.tier == 1))
+    log.info("Loaded %d competitors (%d tier-1)", len(competitors), sum(1 for c in competitors if c.tier == 1))
     return competitors

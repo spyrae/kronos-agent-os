@@ -454,11 +454,7 @@ def is_runtime_llm_configured() -> bool:
 
 def provider_chain(tier: ModelTier = ModelTier.STANDARD) -> list[str]:
     """Return normalized provider ids for a tier."""
-    raw = (
-        settings.kaos_standard_provider_chain
-        if tier == ModelTier.STANDARD
-        else settings.kaos_lite_provider_chain
-    )
+    raw = settings.kaos_standard_provider_chain if tier == ModelTier.STANDARD else settings.kaos_lite_provider_chain
     return _parse_chain(raw or "deepseek")
 
 
@@ -474,16 +470,18 @@ def describe_custom_provider_chain(chain: list[str]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for provider in chain:
         config = resolve_provider_config(provider)
-        rows.append({
-            "provider": provider,
-            "configured": bool(config and config.ready),
-            "model": config.model if config else "",
-            "base_url": config.base_url if config else "",
-            "api_key_env": config.api_key_env if config else "",
-            "api_key_required": config.api_key_required if config else True,
-            "adapter": config.adapter if config else "",
-            "command": config.command if config else "",
-        })
+        rows.append(
+            {
+                "provider": provider,
+                "configured": bool(config and config.ready),
+                "model": config.model if config else "",
+                "base_url": config.base_url if config else "",
+                "api_key_env": config.api_key_env if config else "",
+                "api_key_required": config.api_key_required if config else True,
+                "adapter": config.adapter if config else "",
+                "command": config.command if config else "",
+            }
+        )
     return rows
 
 
@@ -534,11 +532,7 @@ def resolve_provider_config(provider: str) -> ProviderConfig | None:
 def active_provider_cooldowns() -> dict[str, float]:
     """Providers currently in cooldown → seconds remaining. Empty = all healthy."""
     now = time.time()
-    return {
-        provider: round(until - now, 1)
-        for provider, until in _state._cooldowns.items()
-        if until > now
-    }
+    return {provider: round(until - now, 1) for provider, until in _state._cooldowns.items() if until > now}
 
 
 def reset_provider_state() -> None:
@@ -728,11 +722,7 @@ def _observability_callbacks() -> list[BaseCallbackHandler]:
 
 
 def _parse_chain(value: str) -> list[str]:
-    providers = [
-        _normalize_provider_id(item)
-        for item in re.split(r"[, ]+", value.strip())
-        if item.strip()
-    ]
+    providers = [_normalize_provider_id(item) for item in re.split(r"[, ]+", value.strip()) if item.strip()]
     return providers
 
 

@@ -29,6 +29,7 @@ log = logging.getLogger("kronos.agents.telegram_channels")
 # LangChain tool wrappers (sync wrappers over async functions)
 # ---------------------------------------------------------------------------
 
+
 def _format_posts(posts, max_text: int = 200) -> str:
     """Format posts list as compact text for LLM."""
     if not posts:
@@ -38,9 +39,7 @@ def _format_posts(posts, max_text: int = 200) -> str:
         text = p.text[:max_text] + "..." if len(p.text) > max_text else p.text
         fwd = f" (fwd: {p.fwd_from})" if p.fwd_from else ""
         reactions = f" | {p.reactions} reactions" if p.reactions else ""
-        lines.append(
-            f"[{p.date}] {p.views} views{reactions}{fwd}\n{text}"
-        )
+        lines.append(f"[{p.date}] {p.views} views{reactions}{fwd}\n{text}")
     return "\n\n".join(lines)
 
 
@@ -72,10 +71,7 @@ async def _tool_channel_info(channel: str) -> str:
     """
     info = await get_channel_info(channel)
     return (
-        f"Канал: @{info.username}\n"
-        f"Название: {info.title}\n"
-        f"Описание: {info.description}\n"
-        f"Подписчики: {info.subscribers}"
+        f"Канал: @{info.username}\nНазвание: {info.title}\nОписание: {info.description}\nПодписчики: {info.subscribers}"
     )
 
 

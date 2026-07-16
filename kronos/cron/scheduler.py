@@ -17,6 +17,7 @@ from kronos.config import settings
 
 log = logging.getLogger("kronos.cron.scheduler")
 
+
 def _state_file() -> Path:
     # Per-agent last_run persistence, next to the agent's session DB — NOT a
     # swarm-shared file. A shared data/cron_state.json let 6 agents clobber each
@@ -38,6 +39,7 @@ def _append_run_history(entry: dict) -> None:
     except Exception as e:
         log.debug("Failed to write cron run history: %s", e)
 
+
 # UTC+8 timezone for scheduling
 UTC8 = timezone(timedelta(hours=8))
 
@@ -49,6 +51,7 @@ CRON_ALERT_THRESHOLD = 3
 @dataclass
 class CronJob:
     """A scheduled task."""
+
     name: str
     func: Callable[[], Awaitable[None]]
     interval_seconds: int | None = None  # for periodic tasks
@@ -100,19 +103,13 @@ class Scheduler:
         except Exception as e:
             log.warning("Failed to save cron state: %s", e)
 
-    def add_periodic(
-        self, name: str, func: Callable[[], Awaitable[None]], interval_seconds: int
-    ) -> None:
+    def add_periodic(self, name: str, func: Callable[[], Awaitable[None]], interval_seconds: int) -> None:
         self.add(CronJob(name=name, func=func, interval_seconds=interval_seconds))
 
-    def add_daily(
-        self, name: str, func: Callable[[], Awaitable[None]], hour_utc: int
-    ) -> None:
+    def add_daily(self, name: str, func: Callable[[], Awaitable[None]], hour_utc: int) -> None:
         self.add(CronJob(name=name, func=func, cron_hour=hour_utc))
 
-    def add_weekly(
-        self, name: str, func: Callable[[], Awaitable[None]], weekday: int, hour_utc: int
-    ) -> None:
+    def add_weekly(self, name: str, func: Callable[[], Awaitable[None]], weekday: int, hour_utc: int) -> None:
         self.add(CronJob(name=name, func=func, cron_hour=hour_utc, cron_weekday=weekday))
 
     def _should_run(self, job: CronJob) -> bool:
@@ -194,20 +191,25 @@ class Scheduler:
             job.consecutive_failures += 1
             log.error(
                 "[cron] Failed: %s (%.1fs) [%d in a row]: %s",
-                job.name, duration, job.consecutive_failures, e,
+                job.name,
+                duration,
+                job.consecutive_failures,
+                e,
             )
             await self._maybe_alert(job)
         finally:
             job._running = False
-            _append_run_history({
-                "ts": started_at,
-                "job": job.name,
-                "status": status,
-                "duration_ms": round(duration * 1000),
-                "error": error,
-                "enabled": job.enabled,
-                "agent": settings.agent_name,
-            })
+            _append_run_history(
+                {
+                    "ts": started_at,
+                    "job": job.name,
+                    "status": status,
+                    "duration_ms": round(duration * 1000),
+                    "error": error,
+                    "enabled": job.enabled,
+                    "agent": settings.agent_name,
+                }
+            )
             self._save_state()
 
     async def run(self) -> None:

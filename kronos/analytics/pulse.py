@@ -150,13 +150,10 @@ async def answer_health_query(question: str) -> str:
     """Answer an on-demand health question using current data."""
     metrics = _collect_all()
 
-    sections = "\n".join(
-        f"{name}: {_format_source(name, data)}"
-        for name, data in metrics.items()
-    )
+    sections = "\n".join(f"{name}: {_format_source(name, data)}" for name, data in metrics.items())
 
     prompt = (
-        f"User question: \"{question}\"\n\n"
+        f'User question: "{question}"\n\n'
         f"Current system data:\n{sections}\n\n"
         f"Answer concisely with specific numbers. Russian. Telegram format."
     )

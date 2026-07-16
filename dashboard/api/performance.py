@@ -24,9 +24,14 @@ async def get_agent_performance():
     if reg_file.exists():
         registry = json.loads(reg_file.read_text())
 
-    agent_data: dict[str, dict] = defaultdict(lambda: {
-        "latencies": [], "ops": 0, "write_latencies": [], "read_latencies": [],
-    })
+    agent_data: dict[str, dict] = defaultdict(
+        lambda: {
+            "latencies": [],
+            "ops": 0,
+            "write_latencies": [],
+            "read_latencies": [],
+        }
+    )
 
     if audit_file.exists():
         with open(audit_file) as f:
@@ -60,13 +65,15 @@ async def get_agent_performance():
         score = round(max(0, min(100, 100 - avg_lat / 50)), 1)
 
         enabled = registry.get(name, {}).get("enabled", True)
-        agents.append({
-            "name": name,
-            "score": score,
-            "ops": data["ops"],
-            "write_latency_ms": round(sum(w_lats) / max(len(w_lats), 1), 1) if w_lats else 0,
-            "read_latency_ms": round(sum(r_lats) / max(len(r_lats), 1), 1) if r_lats else 0,
-            "status": "running" if enabled else "stopped",
-        })
+        agents.append(
+            {
+                "name": name,
+                "score": score,
+                "ops": data["ops"],
+                "write_latency_ms": round(sum(w_lats) / max(len(w_lats), 1), 1) if w_lats else 0,
+                "read_latency_ms": round(sum(r_lats) / max(len(r_lats), 1), 1) if r_lats else 0,
+                "status": "running" if enabled else "stopped",
+            }
+        )
 
     return {"agents": agents}

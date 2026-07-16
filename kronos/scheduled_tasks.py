@@ -41,9 +41,7 @@ def _init_schema(conn) -> None:
     # Migrate DBs created before the kind column existed (roadmap 4.3).
     cols = {row[1] for row in conn.execute("PRAGMA table_info(scheduled_tasks)")}
     if "kind" not in cols:
-        conn.execute(
-            "ALTER TABLE scheduled_tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'reminder'"
-        )
+        conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'reminder'")
 
 
 def _db():
@@ -81,8 +79,7 @@ def due_tasks(agent_name: str, now: float | None = None) -> list[dict]:
     """Pending tasks for this agent whose run_at has passed."""
     now = time.time() if now is None else now
     rows = _db().read(
-        "SELECT * FROM scheduled_tasks "
-        "WHERE status='pending' AND agent_name=? AND run_at<=? ORDER BY run_at",
+        "SELECT * FROM scheduled_tasks WHERE status='pending' AND agent_name=? AND run_at<=? ORDER BY run_at",
         (agent_name, now),
     )
     return [dict(row) for row in rows]
@@ -105,8 +102,7 @@ def complete_task(task_id: int, recur_seconds: int, run_at: float) -> None:
 def cancel_task(task_id: int, agent_name: str) -> bool:
     """Cancel a pending task owned by this agent. Returns True if one changed."""
     cursor = _db().write(
-        "UPDATE scheduled_tasks SET status='cancelled' "
-        "WHERE id=? AND agent_name=? AND status='pending'",
+        "UPDATE scheduled_tasks SET status='cancelled' WHERE id=? AND agent_name=? AND status='pending'",
         (task_id, agent_name),
     )
     return cursor.rowcount > 0
@@ -115,8 +111,7 @@ def cancel_task(task_id: int, agent_name: str) -> bool:
 def list_pending(agent_name: str) -> list[dict]:
     """All pending tasks for this agent, soonest first."""
     rows = _db().read(
-        "SELECT * FROM scheduled_tasks "
-        "WHERE status='pending' AND agent_name=? ORDER BY run_at",
+        "SELECT * FROM scheduled_tasks WHERE status='pending' AND agent_name=? ORDER BY run_at",
         (agent_name,),
     )
     return [dict(row) for row in rows]

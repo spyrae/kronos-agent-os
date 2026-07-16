@@ -32,8 +32,7 @@ def _build_eval_prompt(state: ASOState) -> str:
     applied = changes.get("applied", [])
     for ch in applied:
         sections.append(
-            f"- {ch.get('locale')}.{ch.get('field')}: "
-            f"\"{ch.get('old_value', '')}\" → \"{ch.get('new_value', '')}\""
+            f'- {ch.get("locale")}.{ch.get("field")}: "{ch.get("old_value", "")}" → "{ch.get("new_value", "")}"'
         )
     sections.append(f"\nОжидалось: {plan.get('expected_impact', '?')}")
     sections.append("")
@@ -45,12 +44,11 @@ def _build_eval_prompt(state: ASOState) -> str:
     if kw_before:
         sections.append("- Keywords:")
         for kw, pos in sorted(kw_before.items(), key=lambda x: x[1]):
-            sections.append(f"  #{pos} \"{kw}\"")
+            sections.append(f'  #{pos} "{kw}"')
     ratings_before = baseline.get("ratings", {})
     if ratings_before.get("avg_rating"):
         sections.append(
-            f"- Rating: {ratings_before['avg_rating']} "
-            f"({ratings_before.get('total_ratings', '?')} ratings)"
+            f"- Rating: {ratings_before['avg_rating']} ({ratings_before.get('total_ratings', '?')} ratings)"
         )
     sections.append("")
 
@@ -65,13 +63,10 @@ def _build_eval_prompt(state: ASOState) -> str:
             if kw in kw_before:
                 diff = kw_before[kw] - pos  # positive = improved
                 delta = f" ({'+' if diff > 0 else ''}{diff})"
-            sections.append(f"  #{pos} \"{kw}\"{delta}")
+            sections.append(f'  #{pos} "{kw}"{delta}')
     ratings_after = post.get("ratings", {})
     if ratings_after.get("avg_rating"):
-        sections.append(
-            f"- Rating: {ratings_after['avg_rating']} "
-            f"({ratings_after.get('total_ratings', '?')} ratings)"
-        )
+        sections.append(f"- Rating: {ratings_after['avg_rating']} ({ratings_after.get('total_ratings', '?')} ratings)")
     sections.append("")
 
     # Measurement period

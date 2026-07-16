@@ -3,16 +3,17 @@
 from typing import Literal, TypedDict
 
 ResearchMode = Literal[
-    "topic",        # глубокое погружение в тему
-    "validation",   # проверка идеи (конкуренты, рынок)
-    "market",       # анализ рынка и pain points
+    "topic",  # глубокое погружение в тему
+    "validation",  # проверка идеи (конкуренты, рынок)
+    "market",  # анализ рынка и pain points
     "competitive",  # разбор конкурента
-    "trends",       # трендовый анализ
+    "trends",  # трендовый анализ
 ]
 
 
 class SearchResult(TypedDict):
     """A single search result with source."""
+
     query: str
     source: str  # brave, exa, reddit, youtube, content-core
     content: str

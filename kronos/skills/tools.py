@@ -46,8 +46,7 @@ def load_skill(skill_name: str) -> str:
     if skill.status == "draft":
         result = (
             "⚡ Это черновик навыка, созданного автоматически. "
-            "Если он полезен — скажи 'одобрить skill " + skill_name + "'.\n\n"
-            + result
+            "Если он полезен — скажи 'одобрить skill " + skill_name + "'.\n\n" + result
         )
     return result
 

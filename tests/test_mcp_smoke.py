@@ -31,6 +31,7 @@ def test_mcp_config_not_empty(mcp_config):
 def test_mcp_config_has_brave(mcp_config):
     """Brave search should be configured (has API key)."""
     from kronos.config import settings
+
     if not settings.brave_api_key:
         pytest.skip("BRAVE_API_KEY not set")
     assert "brave-search" in mcp_config

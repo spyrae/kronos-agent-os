@@ -25,11 +25,13 @@ async def test_cost_history_aggregates_daily_values(tmp_path, monkeypatch):
     logs.mkdir(parents=True)
     monkeypatch.setattr(monitoring.settings, "db_path", str(tmp_path / "kaos" / "session.db"))
     (logs / "cost.jsonl").write_text(
-        "\n".join([
-            json.dumps({"ts": "2026-04-26T10:00:00+00:00", "cost_usd": 0.0123}),
-            json.dumps({"ts": "2026-04-26T11:00:00+00:00", "cost_usd": 0.0044}),
-            json.dumps({"ts": "2026-04-27T10:00:00+00:00", "cost_usd": 0.02}),
-        ]),
+        "\n".join(
+            [
+                json.dumps({"ts": "2026-04-26T10:00:00+00:00", "cost_usd": 0.0123}),
+                json.dumps({"ts": "2026-04-26T11:00:00+00:00", "cost_usd": 0.0044}),
+                json.dumps({"ts": "2026-04-27T10:00:00+00:00", "cost_usd": 0.02}),
+            ]
+        ),
         encoding="utf-8",
     )
 
@@ -43,10 +45,12 @@ async def test_cost_history_aggregates_daily_values(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_jobs_endpoint_reports_schedule_and_controls(monkeypatch):
-    fake_scheduler = SimpleNamespace(jobs={
-        "heartbeat": _job(last_run=1777284000.0),
-        "news-monitor": _job(interval_seconds=None, cron_hour=0),
-    })
+    fake_scheduler = SimpleNamespace(
+        jobs={
+            "heartbeat": _job(last_run=1777284000.0),
+            "news-monitor": _job(interval_seconds=None, cron_hour=0),
+        }
+    )
     monkeypatch.setattr(monitoring, "_scheduler", fake_scheduler)
     monkeypatch.setattr(monitoring.settings, "agent_name", "kaos")
 
@@ -80,10 +84,20 @@ async def test_job_history_filters_by_job(tmp_path, monkeypatch):
     logs.mkdir(parents=True)
     monkeypatch.setattr(monitoring.settings, "db_path", str(tmp_path / "kaos" / "session.db"))
     (logs / "cron_runs.jsonl").write_text(
-        "\n".join([
-            json.dumps({"ts": "2026-04-27T10:00:00+00:00", "job": "heartbeat", "status": "ok", "duration_ms": 10}),
-            json.dumps({"ts": "2026-04-27T11:00:00+00:00", "job": "news-monitor", "status": "error", "duration_ms": 20, "error": "boom"}),
-        ]),
+        "\n".join(
+            [
+                json.dumps({"ts": "2026-04-27T10:00:00+00:00", "job": "heartbeat", "status": "ok", "duration_ms": 10}),
+                json.dumps(
+                    {
+                        "ts": "2026-04-27T11:00:00+00:00",
+                        "job": "news-monitor",
+                        "status": "error",
+                        "duration_ms": 20,
+                        "error": "boom",
+                    }
+                ),
+            ]
+        ),
         encoding="utf-8",
     )
 

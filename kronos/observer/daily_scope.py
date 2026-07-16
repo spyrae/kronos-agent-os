@@ -35,9 +35,7 @@ def build_daily_scope(
             continue
 
         agreements = [
-            excerpt
-            for excerpt in excerpts
-            if any(marker in excerpt.casefold() for marker in AGREEMENT_MARKERS)
+            excerpt for excerpt in excerpts if any(marker in excerpt.casefold() for marker in AGREEMENT_MARKERS)
         ]
         last_direction = str(messages[0].get("direction") or "")
         risk = last_direction == "incoming"

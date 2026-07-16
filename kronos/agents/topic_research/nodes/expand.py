@@ -49,10 +49,14 @@ async def expand_topics(state: TopicResearchState, tools: list[BaseTool], on_too
         for keyword in seeds[:2]:
             try:
                 if brave:
-                    result = await _audited_tool_call(brave, {
-                        "query": f"site:{blog.replace(' ', '')} {keyword}",
-                        "count": 3,
-                    }, on_tool_event)
+                    result = await _audited_tool_call(
+                        brave,
+                        {
+                            "query": f"site:{blog.replace(' ', '')} {keyword}",
+                            "count": 3,
+                        },
+                        on_tool_event,
+                    )
                     competitor_topics.append(f"[{blog}] {result}")
             except Exception as e:
                 log.debug("Competitor search failed: %s", e)
@@ -61,10 +65,14 @@ async def expand_topics(state: TopicResearchState, tools: list[BaseTool], on_too
     for keyword in seeds[:2]:
         try:
             if brave:
-                result = await _audited_tool_call(brave, {
-                    "query": f"site:reddit.com {keyword} question advice",
-                    "count": 5,
-                }, on_tool_event)
+                result = await _audited_tool_call(
+                    brave,
+                    {
+                        "query": f"site:reddit.com {keyword} question advice",
+                        "count": 5,
+                    },
+                    on_tool_event,
+                )
                 result_str = str(result)
                 for line in result_str.split("\n"):
                     if "?" in line and len(line) > 20:
@@ -92,7 +100,9 @@ async def expand_topics(state: TopicResearchState, tools: list[BaseTool], on_too
 
     log.info(
         "Expanded: %d topics, %d PAA questions, %d competitor refs",
-        len(raw_topics), len(paa_questions), len(competitor_topics),
+        len(raw_topics),
+        len(paa_questions),
+        len(competitor_topics),
     )
 
     return {

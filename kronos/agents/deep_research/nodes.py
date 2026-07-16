@@ -33,10 +33,21 @@ def set_tools(tools: list[BaseTool], on_tool_event=None) -> None:
     """Register search tools and build a ReAct search agent."""
     global _tools, _search_agent
     _tools = [
-        t for t in tools
-        if any(kw in t.name.lower() for kw in (
-            "brave", "exa", "fetch", "content", "extract", "reddit", "search", "transcript",
-        ))
+        t
+        for t in tools
+        if any(
+            kw in t.name.lower()
+            for kw in (
+                "brave",
+                "exa",
+                "fetch",
+                "content",
+                "extract",
+                "reddit",
+                "search",
+                "transcript",
+            )
+        )
     ]
     if _tools:
         _search_agent = create_agent(
@@ -83,8 +94,11 @@ Mode:"""
 
     # Normalize
     mode_map = {
-        "topic": "topic", "validation": "validation", "market": "market",
-        "competitive": "competitive", "trends": "trends",
+        "topic": "topic",
+        "validation": "validation",
+        "market": "market",
+        "competitive": "competitive",
+        "trends": "trends",
     }
     mode = mode_map.get(mode_text, "topic")
 
@@ -97,7 +111,7 @@ def plan_queries(state: DeepResearchState) -> DeepResearchState:
     model = get_model(ModelTier.LITE)
     available = [t.name for t in _tools]
 
-    prompt = f"""Plan search queries for a {state['mode']} research on: "{state['topic']}"
+    prompt = f"""Plan search queries for a {state["mode"]} research on: "{state["topic"]}"
 
 Available search tools: {available}
 
@@ -136,7 +150,9 @@ Return ONLY the JSON array, no other text."""
         queries = [
             {"query": state["topic"], "tool": "brave"},
             {"query": f"{state['topic']} обзор анализ", "tool": "brave"},
-            {"query": state["topic"], "tool": "exa"} if "exa" in available else {"query": state["topic"], "tool": "brave"},
+            {"query": state["topic"], "tool": "exa"}
+            if "exa" in available
+            else {"query": state["topic"], "tool": "brave"},
         ]
 
     log.info("Planned %d queries for '%s'", len(queries), state["topic"][:50])
@@ -154,8 +170,7 @@ async def execute_searches(state: DeepResearchState) -> DeepResearchState:
 
     # Build a single prompt for the search agent with all queries
     queries_text = "\n".join(
-        f"- {q.get('query', '')} (use {q.get('tool', 'any available')} tool)"
-        for q in queries if q.get("query")
+        f"- {q.get('query', '')} (use {q.get('tool', 'any available')} tool)" for q in queries if q.get("query")
     )
 
     search_prompt = f"""Execute these search queries and return ALL results.
@@ -174,15 +189,18 @@ Execute each query one by one. Return all results you find."""
             if isinstance(msg, AIMessage) and msg.content:
                 content = msg.content if isinstance(msg.content, str) else str(msg.content)
                 if len(content) > 100:
-                    results.append(SearchResult(
-                        query=state["topic"],
-                        source="search_agent",
-                        content=content[:5000],
-                        url="",
-                    ))
+                    results.append(
+                        SearchResult(
+                            query=state["topic"],
+                            source="search_agent",
+                            content=content[:5000],
+                            url="",
+                        )
+                    )
 
-        log.info("Search agent returned %d results, total chars: %d",
-                 len(results), sum(len(r["content"]) for r in results))
+        log.info(
+            "Search agent returned %d results, total chars: %d", len(results), sum(len(r["content"]) for r in results)
+        )
 
     except Exception as e:
         log.error("Search agent failed: %s", e)
@@ -217,7 +235,10 @@ def evaluate_quality(state: DeepResearchState) -> DeepResearchState:
 
     log.info(
         "Quality evaluation: score=%d, results=%d, feedback=%s, iteration=%d",
-        score, len(results), feedback[:200], iteration,
+        score,
+        len(results),
+        feedback[:200],
+        iteration,
     )
     return {"quality_score": score, "quality_feedback": feedback}
 
@@ -338,8 +359,7 @@ def _score_research_quality(results: list[SearchResult], mode: str = "topic") ->
     if gaps:
         sections.append("Gaps to address:\n" + "\n".join(f"- {item}" for item in gaps))
     sections.append(
-        "Synthesis instruction: address these gaps directly, label weak evidence, "
-        "and avoid unsupported certainty."
+        "Synthesis instruction: address these gaps directly, label weak evidence, and avoid unsupported certainty."
     )
     return score, "\n\n".join(sections)
 
@@ -348,9 +368,7 @@ def _build_research_context(results: list[SearchResult], max_chars: int) -> str:
     """Build compact source context for judge and synthesis prompts."""
     context_parts = []
     for i, r in enumerate(results, 1):
-        context_parts.append(
-            f"[Source {i}: {r['source']}] Query: {r['query']}\n{r['content'][:2000]}"
-        )
+        context_parts.append(f"[Source {i}: {r['source']}] Query: {r['query']}\n{r['content'][:2000]}")
     return "\n\n---\n\n".join(context_parts)[:max_chars]
 
 
@@ -369,7 +387,7 @@ def _parse_json_object(content: str) -> dict | None:
         return None
 
     try:
-        parsed = json.loads(cleaned[start:end + 1])
+        parsed = json.loads(cleaned[start : end + 1])
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
@@ -402,8 +420,7 @@ def _format_judge_feedback(score: int, weak_areas: list, feedback: str) -> str:
     if feedback.strip():
         sections.append(f"Feedback:\n{feedback.strip()}")
     sections.append(
-        "Synthesis instruction: address these gaps directly, label weak evidence, "
-        "and avoid unsupported certainty."
+        "Synthesis instruction: address these gaps directly, label weak evidence, and avoid unsupported certainty."
     )
     return "\n\n".join(sections)
 
@@ -435,10 +452,10 @@ def plan_more_queries(state: DeepResearchState) -> DeepResearchState:
     existing = [r["query"] for r in state.get("search_results", [])]
     feedback = state.get("quality_feedback", "")
 
-    prompt = f"""I'm researching: "{state['topic']}" (mode: {state['mode']})
+    prompt = f"""I'm researching: "{state["topic"]}" (mode: {state["mode"]})
 
 Already searched:
-{chr(10).join(f'- {q}' for q in existing)}
+{chr(10).join(f"- {q}" for q in existing)}
 
 Quality feedback:
 {feedback or "The current data is insufficient."}
@@ -485,6 +502,7 @@ def synthesize_report(state: DeepResearchState) -> DeepResearchState:
         quality_feedback_block = f"Structured feedback для self-correction:\n{quality_feedback}"
 
     from kronos.workspace import ws
+
     skill_path = str(ws.skill_path("deep-research"))
 
     try:
@@ -495,7 +513,7 @@ def synthesize_report(state: DeepResearchState) -> DeepResearchState:
 
     prompt = f"""Ты — Deep Research Agent (INTJ). Составь структурированный отчёт.
 
-Тема: {state['topic']}
+Тема: {state["topic"]}
 Режим: {mode}
 
 {f"Следуй формату отчёта из skill definition для режима '{mode}':" if skill_content else ""}
