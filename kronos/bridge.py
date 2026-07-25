@@ -61,6 +61,7 @@ from kronos.bridge_topics import (
     _positive_int,
     _resolve_topic_route,
     _same_telegram_chat,
+    _thread_id_for,
     _topic_id_from_env_or_setting,
     _topic_owner_agents,
 )
@@ -111,6 +112,7 @@ __all__ = [
     "_positive_int",
     "_resolve_topic_route",
     "_same_telegram_chat",
+    "_thread_id_for",
     "_topic_id_from_env_or_setting",
     "_topic_owner_agents",
     "_transcribe_voice",
@@ -496,7 +498,7 @@ async def _clear_context(chat_id: int, topic_id: int | None = None) -> str:
     swarm message ledger. Learned user facts (Mem0 / shared_user_facts) are
     cross-conversation and are NOT removed here — see clear_context's message.
     """
-    thread_id = f"{chat_id}:{topic_id}" if topic_id else str(chat_id)
+    thread_id = _thread_id_for(chat_id, topic_id)
     result = await _agent.clear_context(thread_id)
     try:
         from kronos.swarm_store import get_swarm
@@ -640,7 +642,7 @@ async def _ask_agent(
     history and causing verbatim-parrot replies.
     """
     # Topic-aware thread isolation
-    thread_id = f"{chat_id}:{topic_id}" if topic_id else str(chat_id)
+    thread_id = _thread_id_for(chat_id, topic_id)
 
     # Start typing indicator + live progress reporter
     stop_typing = asyncio.Event()
@@ -1106,6 +1108,22 @@ async def run_bridge(agent: KronosAgent) -> None:
             elif _group_router:
                 # Multi-agent group routing (all group types)
                 decision = await _group_router.decide(event, _client)
+
+                # An owned topic gets a deadline, registered even when this agent
+                # skips: the silence worth escalating is the owner's, and the
+                # owner may be the process that is down.
+                if decision.topic_owner:
+                    swarm.watch_sla(
+                        chat_id=event.chat_id,
+                        topic_id=topic_id_inbound,
+                        root_msg_id=event.message.id,
+                        thread_id=_thread_id_for(event.chat_id, topic_id_inbound),
+                        topic=decision.topic,
+                        owner_agent=decision.topic_owner,
+                        request=text,
+                        sla_minutes=decision.owner_sla_minutes,
+                    )
+
                 if not decision.should_respond:
                     # Count "skipped because another agent was addressed" as
                     # a successful addressing-correctness event, and count

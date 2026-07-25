@@ -325,6 +325,30 @@ def _schema(conn) -> None:
             updated_at REAL NOT NULL,
             PRIMARY KEY (day, agent)
         );
+
+        -- SLA watch (moat 11.2): a message on an owned topic gets a deadline.
+        -- Any agent that recognised the topic registers the row — including a
+        -- non-owner, because the case worth covering is precisely the one where
+        -- the owner's process is down and cannot register anything. UNIQUE makes
+        -- that a race nobody loses, and the escalation job claims each due row
+        -- atomically so six processes create exactly one hand-off.
+        CREATE TABLE IF NOT EXISTS sla_watch (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            topic_id INTEGER NOT NULL DEFAULT 0,
+            root_msg_id INTEGER NOT NULL,
+            thread_id TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            owner_agent TEXT NOT NULL,
+            request TEXT NOT NULL DEFAULT '',
+            deadline_ts REAL NOT NULL,
+            state TEXT NOT NULL CHECK (state IN ('waiting','escalated','answered','dropped')),
+            created_at REAL NOT NULL,
+            resolved_at REAL,
+            UNIQUE(chat_id, topic_id, root_msg_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sla_watch_due
+            ON sla_watch(state, deadline_ts);
         """
     )
 
@@ -649,6 +673,88 @@ class SwarmStore:
             (chat_id, topic_id or 0, root_msg_id),
         )
         return int(row["c"]) if row else 0
+
+    # ------------------------------------------------------------------
+    # SLA watch (moat 11.2): owned topics get a deadline
+    # ------------------------------------------------------------------
+
+    def watch_sla(
+        self,
+        *,
+        chat_id: int,
+        topic_id: int | None,
+        root_msg_id: int,
+        thread_id: str,
+        topic: str,
+        owner_agent: str,
+        request: str,
+        sla_minutes: int,
+    ) -> bool:
+        """Register the owner's response deadline. True if this call created it.
+
+        Idempotent per root message: whichever agent recognises the topic first
+        registers the watch, the rest are no-ops.
+        """
+        now = time.time()
+        cursor = self._db.write(
+            """
+            INSERT OR IGNORE INTO sla_watch
+                (chat_id, topic_id, root_msg_id, thread_id, topic, owner_agent,
+                 request, deadline_ts, state, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)
+            """,
+            (
+                chat_id,
+                topic_id or 0,
+                root_msg_id,
+                thread_id,
+                topic,
+                owner_agent,
+                request[:4000],
+                now + max(sla_minutes, 1) * 60,
+                now,
+            ),
+        )
+        return cursor.rowcount > 0
+
+    def due_sla_watches(self, *, now: float | None = None, limit: int = 20) -> list[dict]:
+        """Watches whose deadline has passed and that are still waiting."""
+        rows = self._db.read(
+            """
+            SELECT * FROM sla_watch
+            WHERE state = 'waiting' AND deadline_ts <= ?
+            ORDER BY deadline_ts ASC
+            LIMIT ?
+            """,
+            (now if now is not None else time.time(), limit),
+        )
+        return [dict(row) for row in rows]
+
+    def resolve_sla_watch(self, watch_id: int, *, state: str) -> bool:
+        """Move a waiting watch to a terminal state. True if this call won.
+
+        The compare-and-set is what makes escalation safe across six processes:
+        each polls the same due rows, and only the one whose UPDATE changed a
+        row goes on to create the hand-off.
+        """
+        if state not in ("escalated", "answered", "dropped"):
+            raise ValueError(f"unknown sla_watch state: {state}")
+
+        def _tx(conn):
+            cur = conn.execute(
+                "UPDATE sla_watch SET state = ?, resolved_at = ? WHERE id = ? AND state = 'waiting'",
+                (state, time.time(), watch_id),
+            )
+            return cur.rowcount > 0
+
+        return self._db.write_tx(_tx)
+
+    def sla_watches(self, *, since_ts: float = 0.0, limit: int = 200) -> list[dict]:
+        rows = self._db.read(
+            "SELECT * FROM sla_watch WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?",
+            (since_ts, limit),
+        )
+        return [dict(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Cross-agent hand-offs (roadmap 5.1)
