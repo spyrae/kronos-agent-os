@@ -185,6 +185,10 @@ class ScriptedChatModel:
         self._script = list(script)
         self._scenario = scenario_name
         self.calls = 0
+        # react_loop deliberately swallows a failed model call (production users
+        # get a message, not a crash), so the runner cannot see the exception
+        # below. This flag is how the signal survives that boundary.
+        self.exhausted = False
 
     def bind_tools(self, tools: list) -> "ScriptedChatModel":
         """Tools do not change a scripted answer, so binding keeps the same tape.
@@ -194,8 +198,13 @@ class ScriptedChatModel:
         """
         return self
 
+    @property
+    def script_length(self) -> int:
+        return len(self._script)
+
     def _next(self) -> AIMessage:
         if self.calls >= len(self._script):
+            self.exhausted = True
             raise ScenarioError(
                 f"scenario '{self._scenario}': the agent requested model turn "
                 f"{self.calls + 1} but the script has {len(self._script)}"
