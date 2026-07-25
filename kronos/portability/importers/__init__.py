@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
 
-from kronos.portability.importers import chatgpt, obsidian
+from kronos.portability.importers import chatgpt, claude_projects, letta, obsidian, telegram
 from kronos.portability.manifest import BundleError, BundleManifest
 
 
@@ -39,15 +39,21 @@ class ImporterResult:
         return "\n".join(lines)
 
 
+# Detection order matters: claude-projects and letta identify themselves by a
+# specific marker file, while obsidian accepts any markdown directory, so the
+# strict ones must be probed first. `available()` keeps that order stable.
 _REGISTRY: dict[str, ModuleType] = {
     chatgpt.NAME: chatgpt,
+    claude_projects.NAME: claude_projects,
+    letta.NAME: letta,
+    telegram.NAME: telegram,
     obsidian.NAME: obsidian,
 }
 
 
 def available() -> list[str]:
-    """Importer names, sorted for stable CLI help output."""
-    return sorted(_REGISTRY)
+    """Importer names in detection order (strict matchers first)."""
+    return list(_REGISTRY)
 
 
 def get_importer(name: str) -> ModuleType:
