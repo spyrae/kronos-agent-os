@@ -135,14 +135,21 @@ def _page_label(url: str) -> str:
 
 
 async def _llm_diff(old_content: str, new_content: str, url: str) -> str | None:
-    """Use LLM to determine if a web page change is meaningful."""
+    """Use LLM to determine if a web page change is meaningful.
+
+    Both versions are a competitor's own page: exactly the place to plant
+    "ignore previous instructions" and have a scheduled job read it. The page
+    text is framed as data; the instructions around it are not.
+    """
+    from kronos.security.untrusted import frame_external
+
     prompt = (
         "Compare two versions of a web page. "
         "If changes are cosmetic (CSS, layout, minor rewording) — respond with exactly 'NO_CHANGE'. "
         "If text, messaging, pricing, or features changed — describe in 1 sentence.\n\n"
         f"URL: {url}\n\n"
-        f"OLD:\n{old_content[:1500]}\n\n"
-        f"NEW:\n{new_content[:1500]}"
+        f"OLD:\n{frame_external(old_content[:1500], source=f'page:{url}')}\n\n"
+        f"NEW:\n{frame_external(new_content[:1500], source=f'page:{url}')}"
     )
 
     model = get_model(ModelTier.LITE)

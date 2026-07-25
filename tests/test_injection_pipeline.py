@@ -11,15 +11,15 @@ import pytest
 from langchain_core.tools import BaseTool
 
 from kronos.config import settings
-from kronos.engine import (
+from kronos.engine import execute_tool
+from kronos.security.sanitize import detect_injection, strip_injection
+from kronos.security.untrusted import (
     INJECTION_ACTION_BLOCK,
     INJECTION_ACTION_LOG,
     INJECTION_ACTION_STRIP,
     INJECTION_BLOCKED_MESSAGE,
-    execute_tool,
+    mark_untrusted,
 )
-from kronos.security.sanitize import detect_injection, strip_injection
-from kronos.security.untrusted import mark_untrusted
 
 CORPUS = Path(__file__).parent / "fixtures" / "injections.txt"
 

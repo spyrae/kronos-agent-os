@@ -48,8 +48,17 @@ egress:
   mode: open                          # allowlist | open
   dry_run: true
   domains: []
-    # - api.telegram.org
-    # - "*.githubusercontent.com"
+    # Typical set for a full install — check `kaos policy report` and the
+    # dry-run log before enforcing, since a missing host silently stops a job:
+    # - api.telegram.org            # bridge + notifications
+    # - t.me                        # public channel signals
+    # - api.search.brave.com        # web search
+    # - api.exa.ai                  # search fallback
+    # - "*.githubusercontent.com"   # skill imports
+    # - itunes.apple.com            # App Store signals
+    # ...plus your own analytics hosts (Grafana, Zabbix, Sentry, PostHog,
+    # Supabase, Langfuse, Linear): they are configured by URL in .env, so the
+    # allowlist must include whichever ones you actually use.
   allowed_commands: []                # stdio MCP servers, e.g. npx / uvx
 
 # How long local history is kept.

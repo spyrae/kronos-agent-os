@@ -19,6 +19,8 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from kronos.security.egress import check_url
+
 log = logging.getLogger("kronos.tools.exa")
 
 EXA_API_URL = "https://api.exa.ai/search"
@@ -83,6 +85,7 @@ def search(query: str, count: int = 10, freshness: str = "pd") -> list[SearchRes
         body["startPublishedDate"] = start_date
 
     try:
+        check_url(EXA_API_URL, tool="exa_search")
         req = urllib.request.Request(
             EXA_API_URL,
             data=json.dumps(body).encode("utf-8"),

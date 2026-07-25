@@ -115,6 +115,29 @@ command rather than a domain. A server whose command is not allowed is skipped,
 not fatal — one unlisted command should not take the whole agent down — and the
 decision is audited.
 
+### Scheduled pipelines count too
+
+Egress and untrusted framing were built for the agent's tool loop, but the cron
+pipelines read the same hostile internet on a schedule and hand it to a model.
+They are covered by the same two mechanisms:
+
+| Pipeline | External content | Where it is framed |
+|---|---|---|
+| Signal digests | feed titles, post summaries fed to the editor model | `signals/digest.py` — the candidate catalog and headline block; the numbering and your instructions stay outside the frame |
+| Competitor monitoring | both versions of a competitor's page in the LLM diff | `competitors/web_fetchers.py` |
+| Search + public channels | Brave, Exa, `t.me/s` requests | egress check inside `tools/brave.py`, `tools/exa.py`, `tools/telegram_channels.py` — one hook per funnel covers every caller |
+
+A competitor's pricing page is the natural place to plant "ignore previous
+instructions" and wait for a weekly job to read it. That is why framing happens
+around the *fragment*: wrapping the whole prompt would frame your own
+instructions as untrusted data and teach the model to ignore them.
+
+Analytics sources (Grafana, Zabbix, Sentry, PostHog, Supabase, Langfuse, Linear)
+are your own services configured by URL in `.env`. They are not framed — their
+output is numbers you asked for — but with `egress.mode: allowlist` their hosts
+must be listed, or the daily pulse quietly stops fetching. This is the main
+reason to keep `dry_run: true` for a day before enforcing.
+
 ## What The Agent Did: tamper-evident audit
 
 `logs/tool_calls.jsonl` and `logs/audit.jsonl` are hash-chained: every entry
