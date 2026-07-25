@@ -116,6 +116,24 @@ class RetentionPolicy(BaseModel):
     swarm_messages_days: int = 30
 
 
+class DurablePolicy(BaseModel):
+    """How an interrupted turn is handled on the next start."""
+
+    # "report" reproduces the historical behaviour (restore history, note the
+    # interruption). "resume" re-executes the unanswered part. Default stays
+    # report so an upgrade never changes what a restart does without being asked.
+    resume_mode: str = "report"
+    max_resume_attempts: int = 2
+
+    @field_validator("resume_mode")
+    @classmethod
+    def _known_mode(cls, value: str) -> str:
+        cleaned = (value or "").strip().lower()
+        if cleaned not in ("report", "resume"):
+            raise ValueError("resume_mode must be 'report' or 'resume'")
+        return cleaned
+
+
 class PiiPolicy(BaseModel):
     mask_in_logs: bool = True
     mask_in_cassettes: bool = True
@@ -131,6 +149,7 @@ class Policy(BaseModel):
     untrusted_output: UntrustedOutputPolicy = Field(default_factory=UntrustedOutputPolicy)
     egress: EgressPolicy = Field(default_factory=EgressPolicy)
     retention: RetentionPolicy = Field(default_factory=RetentionPolicy)
+    durable: DurablePolicy = Field(default_factory=DurablePolicy)
     pii: PiiPolicy = Field(default_factory=PiiPolicy)
 
     # Where this policy came from; "" means "no file, code defaults".

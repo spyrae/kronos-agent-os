@@ -449,6 +449,90 @@ class KronosAgent:
         )
         return result.content
 
+    async def resume_interrupted_turn(self, turn: dict) -> str | None:
+        """Finish a turn whose process died mid-flight.
+
+        Safe to call because two guarantees are already in place: tool results are
+        memoized per turn (an answered call is not re-run) and side-effecting
+        tools consult the effects ledger (a sent message is not re-sent). Without
+        those, re-execution would duplicate real-world actions — which is why
+        this landed after the ledger, not before.
+        """
+        if not self._session_store:
+            return None
+
+        turn_id = str(turn.get("turn_id") or "")
+        thread_id = str(turn.get("thread_id") or "")
+        if not turn_id or not thread_id:
+            return None
+
+        messages = await self._session_store.load_turn_messages(thread_id, turn_id)
+        if not messages:
+            await self._session_store.fail_turn(turn_id, "nothing to resume")
+            return None
+
+        react_loop_kwargs = self._build_durable_react_loop_kwargs(
+            turn_id=turn_id,
+            thread_id=thread_id,
+        )
+        audit_token = set_tool_audit_context(
+            agent=settings.agent_name,
+            thread_id=thread_id,
+            session_id=thread_id,
+            source_kind="durable_resume",
+        )
+        try:
+            result = await self._run_model_loop(
+                messages=messages,
+                source_message=str(turn.get("input_message") or ""),
+                react_loop_kwargs=react_loop_kwargs,
+            )
+        except Exception as e:
+            log.error("Resume failed for turn %s: %s", turn_id, e)
+            await self._session_store.fail_turn(turn_id, f"resume failed: {e}")
+            return None
+        finally:
+            reset_tool_audit_context(audit_token)
+
+        if getattr(result, "waiting_approval", False):
+            # The resumed turn hit an approval gate: leave it pending, exactly as
+            # a first-time run would.
+            self._last_pending_approval_id = result.approval_id
+            return result.content
+
+        save_messages = [message for message in result.messages if not isinstance(message, SystemMessage)]
+        await self._session_store.finalize_turn(
+            thread_id=thread_id,
+            messages=save_messages,
+            turn_id=turn_id,
+        )
+        log.info("Resumed interrupted turn %s (attempt %s)", turn_id, turn.get("attempts"))
+        return result.content
+
+    async def resume_abandoned_turns(self, *, deliver=None, max_attempts: int = 2) -> int:
+        """Claim and finish every interrupted turn. Returns how many completed.
+
+        ``deliver(thread_id, text)`` publishes the answer; without it the turn is
+        still completed and journalled, which is what a CLI or test wants.
+        """
+        if not self._session_store:
+            return 0
+
+        claimed = await self._session_store.claim_turns_for_resume(max_attempts=max_attempts)
+        finished = 0
+        for turn in claimed:
+            answer = await self.resume_interrupted_turn(turn)
+            if not answer:
+                continue
+            finished += 1
+            if deliver:
+                try:
+                    await deliver(turn["thread_id"], answer)
+                except Exception as e:
+                    # The turn is finished and journalled; only delivery failed.
+                    log.error("Could not deliver resumed answer for %s: %s", turn["turn_id"], e)
+        return finished
+
     async def _resume_delegated_approval(
         self,
         *,

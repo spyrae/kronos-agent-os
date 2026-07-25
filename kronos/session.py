@@ -142,6 +142,16 @@ class SessionStore:
                 CREATE INDEX IF NOT EXISTS idx_active_turns_running
                     ON active_turns(status, started_at)
             """)
+            # attempts arrived with durable resume: a turn that keeps dying must
+            # not be retried forever. Backfill on databases created before it.
+            cursor = await db.execute("PRAGMA table_info(active_turns)")
+            turn_columns = {row[1] for row in await cursor.fetchall()}
+            if "attempts" not in turn_columns:
+                try:
+                    await db.execute("ALTER TABLE active_turns ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" not in str(e).lower():
+                        raise
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS turn_journal (
                     turn_id TEXT NOT NULL,
@@ -310,6 +320,91 @@ class SessionStore:
                 (turn_id, tool_call_id, content),
             )
             await db.commit()
+
+    async def claim_turns_for_resume(self, *, max_attempts: int = 2) -> list[dict]:
+        """Claim interrupted turns for re-execution, newest-first per thread.
+
+        Returns rows the caller should finish. Three outcomes are decided here,
+        under one transaction, so two processes cannot both claim a turn:
+
+        * a turn whose thread already saw a newer turn is marked ``superseded`` —
+          the user asked again, and answering the stale question would be noise;
+        * a turn that has already burned its attempts is failed, so a crash loop
+          cannot resurrect itself forever;
+        * anything else flips to ``resuming`` and is handed back.
+        """
+        claimed: list[dict] = []
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    """
+                    SELECT turn_id, thread_id, input_message, attempts, rowid
+                    FROM active_turns
+                    WHERE status = 'running'
+                    ORDER BY rowid ASC
+                    """
+                )
+                rows = await cursor.fetchall()
+
+                for turn_id, thread_id, input_message, attempts, row_id in rows:
+                    # Ordering by rowid, not started_at: CURRENT_TIMESTAMP has
+                    # second resolution, so two turns in the same second would
+                    # both look "not newer" and a stale one would be resumed.
+                    newer = await db.execute(
+                        """
+                        SELECT 1 FROM active_turns
+                        WHERE thread_id = ? AND rowid > ?
+                        LIMIT 1
+                        """,
+                        (thread_id, row_id),
+                    )
+                    if await newer.fetchone():
+                        await db.execute(
+                            """
+                            UPDATE active_turns
+                            SET status = 'superseded', completed_at = CURRENT_TIMESTAMP,
+                                error = 'superseded by a newer turn in this thread'
+                            WHERE turn_id = ?
+                            """,
+                            (turn_id,),
+                        )
+                        continue
+
+                    if int(attempts or 0) >= max_attempts:
+                        await db.execute(
+                            """
+                            UPDATE active_turns
+                            SET status = 'failed', completed_at = CURRENT_TIMESTAMP,
+                                error = 'gave up after ' || ? || ' resume attempt(s)'
+                            WHERE turn_id = ?
+                            """,
+                            (int(attempts or 0), turn_id),
+                        )
+                        continue
+
+                    await db.execute(
+                        "UPDATE active_turns SET status = 'resuming', attempts = attempts + 1 WHERE turn_id = ?",
+                        (turn_id,),
+                    )
+                    claimed.append(
+                        {
+                            "turn_id": str(turn_id),
+                            "thread_id": str(thread_id),
+                            "input_message": str(input_message or ""),
+                            "attempts": int(attempts or 0) + 1,
+                        }
+                    )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+
+        if claimed:
+            log.warning("Claimed %d interrupted turn(s) for resume", len(claimed))
+            self._record_durable_metric("durable_turns_resumed", len(claimed))
+        return claimed
 
     async def get_external_effect(self, key: str) -> str | None:
         """Return the recorded result of a side-effecting call, if it already ran.
