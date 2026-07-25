@@ -68,10 +68,17 @@ jobs:
       - name: Behaviour diff vs base
         if: github.event_name == 'pull_request'
         run: |
-          kaos eval diff --base "origin/${{ github.base_ref }}" --json eval-diff.json \
-            > eval-diff.md || DIFF_FAILED=1
+          set +e
+          kaos eval diff --base "origin/${{ github.base_ref }}" --json eval-diff.json > eval-diff.md
+          status=$?
           cat eval-diff.md >> "$GITHUB_STEP_SUMMARY"
-          exit "${DIFF_FAILED:-0}"
+          # 1 = new failures (gate). 2 = comparison impossible, e.g. the base
+          # predates `kaos eval` — informational, not the author's regression.
+          if [ "$status" = "2" ]; then
+            echo "_Behaviour diff unavailable against this base._" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          exit "$status"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

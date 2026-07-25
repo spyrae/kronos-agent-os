@@ -129,6 +129,16 @@ def test_eval_diff_flags_a_new_failure_with_exit_code(tmp_path, capsys):
     assert "new_failure" in capsys.readouterr().out
 
 
+def test_eval_diff_returns_2_when_it_cannot_compare(tmp_path, capsys):
+    """An unusable base is not the author's regression, so it must not gate CI."""
+    suite = _scenario_dir(tmp_path)
+
+    code = main(["eval", "diff", "--suite", str(suite), "--base-json", str(tmp_path / "absent.json")])
+
+    assert code == 2
+    assert "Diff unavailable:" in capsys.readouterr().out
+
+
 def test_eval_capture_requires_a_target(tmp_path, capsys):
     code = main(["eval", "capture", "--suite", str(tmp_path)])
 

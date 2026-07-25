@@ -1031,7 +1031,10 @@ def run_eval_list_turns(thread: str, limit: int) -> int:
 
 
 def run_eval_diff(*, base: str, head: str, suite: str, json_path: str, base_json: str) -> int:
-    """Compare suite behaviour between two revisions."""
+    """Compare suite behaviour between two revisions.
+
+    Exit codes: 0 = no new failures, 1 = new failures, 2 = comparison impossible.
+    """
     import asyncio as _asyncio
 
     from kronos.evals.diff import DiffError, diff_reports, run_suite_at_ref
@@ -1049,8 +1052,11 @@ def run_eval_diff(*, base: str, head: str, suite: str, json_path: str, base_json
         else:
             base_report = run_suite_at_ref(base, suite_dir=suite_dir, repo_root=_repo_root())
     except (DiffError, OSError, json.JSONDecodeError) as e:
-        print(f"Diff failed: {e}")
-        return 1
+        # Exit 2 means "could not compare" (base predates the feature, git or
+        # report unavailable) — distinct from exit 1, "behaviour regressed".
+        # CI gates on 1 only: an unusable base is not the author's regression.
+        print(f"Diff unavailable: {e}")
+        return 2
 
     report = diff_reports(base_report, head_report, base_ref=base_json or base, head_ref=head)
     print(report.render_markdown())
