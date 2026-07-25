@@ -7,7 +7,12 @@ Tier 1: Explicit addressing (1-5s delay)
   - @mention of my username, reply to my message
 
 Tier 2: Topic relevance (5-20s delay, user messages only)
-  - LLM quick-check: is this my domain? Score 1-10, respond if ≥7
+  - Owner-first: if the message is about a topic this agent `owns`, it answers
+    without the relevance check and on the fast lane, so it wins arbitration
+    against agents who merely find the topic interesting
+  - Otherwise LLM quick-check: is this my domain? Score 1-10, respond if ≥7
+  - A non-owner who would answer an owned topic waits, giving the owner a head
+    start; if the owner is down, the deferred reply still lands
   - Skipped entirely when another known agent is addressed
   - After delay: check if ≥MAX_PEER_REPLIES peers already replied → skip
 
@@ -20,8 +25,16 @@ Cross-agent addressing guard
   - If the user @-addresses specific known agents (by username or alias),
     only those agents pass Tier 1; everyone else skips silently. This is
     the guard that fixes "Impulse answers when Nexus was addressed".
+
+Two kinds of "topic" meet here, and they are not the same thing. A Telegram
+forum topic is routed by id in `bridge_topics` (`TOPIC_*` + `*_agent`): a hard
+assignment where non-owners never even reach this router. What `owns` in
+agents.yaml describes is a *subject* — "planning", "metrics" — recognised from
+the message itself, which is what the shared stream needs, because there every
+agent sees every message.
 """
 
+import hashlib
 import logging
 import random
 import re
@@ -36,6 +49,18 @@ MAX_PEER_REPLIES = 2
 
 # Tier 3: cooldown between peer reactions per agent (seconds).
 PEER_REACTION_COOLDOWN = 300  # 5 minutes
+
+# Topic classification is agent-independent and messages repeat (edits, retries),
+# so the lite-tier answer is cached per process for five minutes.
+TOPIC_CACHE_TTL = 300
+
+# How long a non-owner defers to the topic owner. Bounded below the swarm's
+# CLAIM_EXPIRY_SECONDS on purpose: a claim held longer than that expires and can
+# never win arbitration, so a literal SLA-long sleep would mean "never answer"
+# while still costing a task and an LLM call. Within this window a live owner
+# always wins (their eta is seconds away); past it, an owner whose process is
+# down no longer leaves the user waiting for the escalation job.
+OWNER_DEFERENCE_SECONDS = 90
 
 # Agent profiles loaded from agents.yaml (see agents.example.yaml for format).
 # Usernames can be overridden per-agent via env: AGENT_USERNAME_KRONOS=..., etc.
@@ -82,6 +107,12 @@ class RoutingDecision:
     tier: int  # 0=skip, 1=explicit, 2=relevance, 3=peer-reaction
     reason: str = ""
     addressing: AddressingInfo | None = None
+    # Recognised subject and its owner, when ownership is configured. The
+    # transport uses them to register the SLA watch — including on a skip, so a
+    # topic stays watched even when this agent has nothing to say about it.
+    topic: str = ""
+    topic_owner: str = ""
+    owner_sla_minutes: int = 0
 
 
 # Word-boundary alias matching — stops "импульс" substring from firing on
@@ -136,6 +167,21 @@ class GroupRouter:
         # falsely treat the FIRST reaction as cooled-down and never react.
         self._last_peer_reaction: float = float("-inf")
         self._reacted_to_msgs: set[int] = set()
+
+        # Ownership map, read once like the alias index above. An empty map is
+        # the common case for a registry without `owns`, and it makes every
+        # ownership branch below a no-op — including the classification call.
+        from kronos.swarm_config import all_profiles
+
+        self._profiles = all_profiles()
+        self._topic_owners: dict[str, str] = {}
+        for name, prof in self._profiles.items():
+            for topic in prof.owns:
+                # A contested topic has no single owner; swarm_config warned at
+                # load time and routing falls back to plain relevance.
+                self._topic_owners[topic] = "" if topic in self._topic_owners else name
+        self._topic_owners = {topic: owner for topic, owner in self._topic_owners.items() if owner}
+        self._topic_cache: dict[str, tuple[float, str]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -237,15 +283,43 @@ class GroupRouter:
                 addressing=addressing,
             )
 
-        # Tier 2: Topic relevance → respond with delay
-        relevance = await self._check_relevance(text)
-        if relevance >= 7:
+        # Ownership: recognise the subject before spending a relevance call.
+        topic = await self._topic_key(event, text)
+        owner = self._topic_owners.get(topic, "")
+        owner_sla = self._profiles[owner].sla_minutes if owner in self._profiles else 0
+
+        # Tier 2a: the owner answers its own topic — no relevance threshold, and
+        # on the fast lane so it outranks non-owners in arbitration by eta.
+        if owner and owner == self.agent_name:
             return RoutingDecision(
                 True,
-                random.uniform(5, 20),
+                random.uniform(1, 4),
                 2,
-                f"relevance={relevance}",
+                f"owner of '{topic}'",
                 addressing=addressing,
+                topic=topic,
+                topic_owner=owner,
+                owner_sla_minutes=owner_sla,
+            )
+
+        # Tier 2b: relevance as before.
+        relevance = await self._check_relevance(text)
+        if relevance >= 7:
+            delay = random.uniform(5, 20)
+            reason = f"relevance={relevance}"
+            if owner:
+                # Defer to the owner rather than answering over them.
+                delay = OWNER_DEFERENCE_SECONDS
+                reason = f"relevance={relevance}, deferring to owner {owner} of '{topic}'"
+            return RoutingDecision(
+                True,
+                delay,
+                2,
+                reason,
+                addressing=addressing,
+                topic=topic,
+                topic_owner=owner,
+                owner_sla_minutes=owner_sla,
             )
 
         return RoutingDecision(
@@ -254,6 +328,9 @@ class GroupRouter:
             0,
             f"low relevance={relevance}",
             addressing=addressing,
+            topic=topic,
+            topic_owner=owner,
+            owner_sla_minutes=owner_sla,
         )
 
     async def should_still_respond(self, event, client, tier: int) -> bool:
@@ -395,6 +472,67 @@ class GroupRouter:
         except Exception as e:
             log.warning("[GroupRouter] Relevance check failed: %s", e)
             return 5  # neutral — don't respond on error
+
+    # ------------------------------------------------------------------
+    # Ownership: which declared subject is this message about?
+    # ------------------------------------------------------------------
+
+    async def _topic_key(self, event, text: str) -> str:
+        """One of the topics declared in `owns`, or "" when none applies.
+
+        Free when the registry declares no ownership, which keeps the whole
+        feature invisible to swarms that do not use it.
+        """
+        if not self._topic_owners:
+            return ""
+
+        # An event may name its subject directly (the local swarm bus and eval
+        # scenarios do). Trust it when it matches a declared topic — no LLM.
+        declared = str(getattr(event, "topic_label", "") or "").strip().lower()
+        if declared in self._topic_owners:
+            return declared
+
+        return await self._classify_topic(text)
+
+    async def _classify_topic(self, text: str) -> str:
+        """Lite-tier classification of the message into a declared topic."""
+        if not text.strip():
+            return ""
+
+        topics = sorted(self._topic_owners)
+        cache_key = hashlib.sha256("|".join([text[:500], *topics]).encode("utf-8")).hexdigest()
+        cached = self._topic_cache.get(cache_key)
+        now = time.monotonic()
+        if cached and cached[0] > now:
+            return cached[1]
+
+        from langchain_core.messages import HumanMessage
+
+        from kronos.llm import ModelTier, get_model
+
+        prompt = (
+            "Classify the message into exactly one of these topics:\n"
+            f"{', '.join(topics)}\n"
+            "Reply with ONLY the topic label, or NONE if none of them fits.\n\n"
+            f"Message: {text[:500]}"
+        )
+
+        try:
+            model = get_model(ModelTier.LITE)
+            response = await model.ainvoke([HumanMessage(content=prompt)])
+            raw = response.content if isinstance(response.content, str) else str(response.content)
+            answer = raw.strip().strip(".\"'").lower()
+            # The model can invent a label; only a declared one counts.
+            topic = answer if answer in self._topic_owners else ""
+        except Exception as e:
+            # Fail open: a classification glitch must not silence the swarm.
+            log.warning("[GroupRouter] Topic classification failed: %s", e)
+            return ""
+
+        if len(self._topic_cache) > 500:
+            self._topic_cache.clear()
+        self._topic_cache[cache_key] = (now + TOPIC_CACHE_TTL, topic)
+        return topic
 
     # ------------------------------------------------------------------
     # Tier 3: Peer reaction (LLM, lite model)

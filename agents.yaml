@@ -1,9 +1,15 @@
 # Agent profiles — single source of truth for swarm coordination.
 #
-# Each agent needs:
+# Identity:
 #   username: Telegram @username (for cross-agent addressing detection)
 #   aliases:  natural-language names (word-boundary matched in messages)
 #   role:     one-line description used by LLM for topic relevance scoring
+#
+# Organisation (see agents.example.yaml for the full field list):
+#   owns:             subjects this agent answers without a relevance check
+#   escalates_to:     who covers the topic when this agent stays silent
+#   sla_minutes:      how long "silent" is (default 15)
+#   budget_usd_daily: this agent's slice of the swarm budget (0 = swarm cap only)
 #
 # Usernames can be overridden per-agent via env: AGENT_USERNAME_KRONOS=..., etc.
 
@@ -11,28 +17,46 @@ kronos:
   username: kronosagnt
   aliases: ["кронос", "kronos", "стратег"]
   role: "strategic advisor, chief of staff — priorities, planning, multi-model analysis"
+  owns: ["planning", "priorities", "strategy"]
+  escalates_to: nexus
+  sla_minutes: 15
 
 nexus:
   username: nexusagnt
   aliases: ["нексус", "nexus", "аналитик"]
   role: "data analyst — business metrics, SEO, competitive intelligence, market trends"
+  owns: ["metrics", "analytics", "competitors"]
+  escalates_to: kronos
+  sla_minutes: 20
 
 lacuna:
   username: lacunaagnt
   aliases: ["лакуна", "lacuna", "иконоборец"]
   role: "creative director — brand, product meaning, authenticity, naming, creative vision"
+  owns: ["brand", "naming", "positioning"]
+  escalates_to: resonant
+  sla_minutes: 30
 
 resonant:
   username: resonantagnt
   aliases: ["резонант", "resonant", "хранитель"]
   role: "UX advocate — user experience, people, culture, tone of voice, onboarding"
+  owns: ["ux", "onboarding", "tone of voice"]
+  escalates_to: lacuna
+  sla_minutes: 30
 
 keystone:
   username: keystoneagnt
   aliases: ["кистоун", "keystone", "строитель"]
   role: "quality engineer — code architecture, standards, technical debt, performance"
+  owns: ["architecture", "tech debt", "performance"]
+  escalates_to: kronos
+  sla_minutes: 20
 
 impulse:
   username: impulseagnt
   aliases: ["импульс", "impulse", "энерджайзер"]
   role: "action catalyst — momentum, quick wins, ideation, overcoming blockers"
+  owns: ["blockers", "quick wins"]
+  escalates_to: kronos
+  sla_minutes: 15
