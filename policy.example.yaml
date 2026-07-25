@@ -67,6 +67,17 @@ retention:
   audit_jsonl_days: 90
   swarm_messages_days: 30
 
+# What happens to a turn whose process died mid-flight.
+#   report (default) — restore the history and note the interruption; the user's
+#                      question stays unanswered. This is the historical
+#                      behaviour, kept as default so an upgrade changes nothing.
+#   resume           — finish the turn. Safe because answered tool calls are
+#                      memoized per turn and side-effecting tools consult the
+#                      effects ledger, so nothing is sent or charged twice.
+durable:
+  resume_mode: report                 # report | resume
+  max_resume_attempts: 2              # then the turn is failed, not retried forever
+
 pii:
   mask_in_logs: true
   mask_in_cassettes: true

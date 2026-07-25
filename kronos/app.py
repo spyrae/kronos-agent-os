@@ -94,6 +94,19 @@ def _ensure_data_dirs() -> None:
     log.info("Data dirs ready: %s (swarm=%s)", db_dir, settings.swarm_db_path)
 
 
+async def _deliver_resumed_answer(thread_id: str, text: str) -> None:
+    """Publish a resumed answer through the same self-webhook reminders use."""
+    import asyncio
+
+    from kronos.cron.notify import send_webhook
+
+    chat_id, _, topic = thread_id.partition(":")
+    try:
+        await asyncio.to_thread(send_webhook, text, int(chat_id), None, int(topic) if topic else None)
+    except (TypeError, ValueError) as e:
+        log.warning("Cannot deliver resumed answer for thread %s: %s", thread_id, e)
+
+
 def _activate_policy_or_exit() -> None:
     """Load policy.yaml before any capability gate is read.
 
@@ -119,7 +132,12 @@ async def main():
     _ensure_data_dirs()
 
     session_store = SessionStore(settings.db_path, agent_name=settings.agent_name)
-    await session_store.recover_abandoned_turns()
+
+    from kronos.policy import get_policy
+
+    durable = get_policy().durable
+    if durable.resume_mode != "resume":
+        await session_store.recover_abandoned_turns()
 
     async with managed_mcp_tools() as tools:
         agent = KronosAgent(
@@ -127,6 +145,17 @@ async def main():
             session_store=session_store,
         )
         log.info("Agent ready: %d tools, db=%s", len(tools), settings.db_path)
+
+        if durable.resume_mode == "resume":
+            # Resume needs a live agent (and its tools), so it happens here rather
+            # than next to the store. Delivery reuses the reminder path: the
+            # session layer must not learn about transports.
+            finished = await agent.resume_abandoned_turns(
+                deliver=_deliver_resumed_answer,
+                max_attempts=durable.max_resume_attempts,
+            )
+            if finished:
+                log.warning("Finished %d interrupted turn(s) after restart", finished)
 
         # Start cron scheduler
         scheduler = Scheduler()

@@ -6,6 +6,14 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Added
 
+- **Durable execution v2** — an interrupted turn can now be finished instead of
+  only reported. New `external_effects` ledger makes re-execution safe (a
+  message already sent is not re-sent; `side_effect` + optional
+  `idempotency_key` metadata per tool), `durable.resume_mode: resume` opts in,
+  and `max_resume_attempts` stops a crash loop. Claiming decides superseded /
+  failed / resuming in one transaction. New `kaos turns list/show/fork/resume`,
+  a Durable Turns page in the control room, `running_turns` on `/health`, and a
+  weekly `turn-retention` job. Docs: [Runtime](docs/RUNTIME.md).
 - **Governance as code (`policy.yaml`)** — one validated file for capability
   gates, approval rules, budgets, untrusted-output handling, egress, retention
   and PII masking, with `kaos policy report` printing the effective value and

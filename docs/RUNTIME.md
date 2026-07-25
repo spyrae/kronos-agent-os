@@ -123,3 +123,68 @@ Example path:
 
 If the behavior is only instructions and references, make it a skill instead of
 a Python tool.
+
+## Durable Turns
+
+Every interactive turn is journalled: the input, each model/tool message, and the
+tool results, in `data/<agent>/session.db`. That journal is what makes three
+things possible — recovering from a crash, capturing eval scenarios, and forking
+a conversation.
+
+```bash
+kaos turns list --status running   # what is stuck?
+kaos turns show <turn_id>          # journal, tool results, recorded effects
+kaos turns resume <turn_id>        # finish it now
+kaos turns fork <turn_id> --at 3   # branch from a point, original untouched
+```
+
+`/health` reports `running_turns` and the age of the oldest one, so a turn nobody
+picked up is visible to monitoring instead of only to whoever reads SQLite.
+
+### What happens after a crash
+
+Governed by `durable.resume_mode` in `policy.yaml`:
+
+| Mode | Behaviour |
+|---|---|
+| `report` (default) | Restore the history, note the interruption. The question stays unanswered. |
+| `resume` | Re-execute the unanswered part and deliver the answer. |
+
+`resume` is safe because of two guarantees, in this order:
+
+1. **Tool results are memoized per turn** — a call that already answered is not
+   re-run.
+2. **Side-effecting tools consult an effects ledger** (`external_effects`) — a
+   message already sent, an expense already recorded, a service already
+   restarted is skipped and its recorded result returned instead.
+
+That is why the ledger shipped before resume, not after. A tool declares itself
+side-effecting the same way it declares `needs_approval`:
+
+```python
+tool.metadata["side_effect"] = True
+tool.metadata["idempotency_key"] = lambda args: f"chat:{args['chat_id']}:{args['text']}"
+```
+
+The default key includes `turn_id`: inside one turn a repeat is a retry (skip
+it), while the same call in a later turn is the user asking again (do it). A
+custom key narrows that when the natural identity of the effect is smaller than
+"these arguments" — a retry carrying a regenerated request id is still one send.
+
+Three outcomes are decided when interrupted turns are claimed, in a single
+transaction so two processes cannot both take one:
+
+- **superseded** — the thread already has a newer turn; answering the stale
+  question would be noise.
+- **failed** — `max_resume_attempts` exhausted, so a crash loop cannot resurrect
+  itself.
+- **resuming** — handed to the agent to finish.
+
+### Retention
+
+The weekly `turn-retention` job prunes finished turns per
+`retention.turn_journal_days`. Live turns are never pruned: an unfinished turn
+older than the window is a bug worth looking at, not garbage. In practice the
+journal is already gone by then (a finished turn drops it), so what retention
+reclaims is turn rows and their effects — safe to drop together, because the
+idempotency key contains the turn id.

@@ -77,6 +77,15 @@ def _serialize_message(msg: BaseMessage) -> dict:
     return data
 
 
+def _safe_json(raw: str) -> dict:
+    """Parse a journal payload, tolerating a corrupted row."""
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _deserialize_message(data: dict) -> BaseMessage:
     """Deserialize a dict back to a LangChain message."""
     msg_type = data.get("type", "HumanMessage")
@@ -142,6 +151,16 @@ class SessionStore:
                 CREATE INDEX IF NOT EXISTS idx_active_turns_running
                     ON active_turns(status, started_at)
             """)
+            # attempts arrived with durable resume: a turn that keeps dying must
+            # not be retried forever. Backfill on databases created before it.
+            cursor = await db.execute("PRAGMA table_info(active_turns)")
+            turn_columns = {row[1] for row in await cursor.fetchall()}
+            if "attempts" not in turn_columns:
+                try:
+                    await db.execute("ALTER TABLE active_turns ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" not in str(e).lower():
+                        raise
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS turn_journal (
                     turn_id TEXT NOT NULL,
@@ -205,6 +224,19 @@ class SessionStore:
             await db.execute("""
                 CREATE INDEX IF NOT EXISTS idx_pending_approvals_status
                     ON pending_approvals(status, requested_at)
+            """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS external_effects (
+                    idempotency_key TEXT PRIMARY KEY,
+                    turn_id         TEXT NOT NULL,
+                    tool            TEXT NOT NULL,
+                    result          TEXT NOT NULL,
+                    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_external_effects_turn
+                    ON external_effects(turn_id, created_at)
             """)
             await db.commit()
             self._initialized = True
@@ -297,6 +329,316 @@ class SessionStore:
                 (turn_id, tool_call_id, content),
             )
             await db.commit()
+
+    async def list_turns(self, *, status: str = "", thread_id: str = "", limit: int = 20) -> list[dict]:
+        """Recent durable turns, newest first."""
+        clauses, params = [], []
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if thread_id:
+            clauses.append("thread_id = ?")
+            params.append(thread_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                f"""
+                SELECT turn_id, thread_id, status, input_message, attempts, started_at, completed_at, error
+                FROM active_turns {where} ORDER BY rowid DESC LIMIT ?
+                """,
+                tuple(params),
+            )
+            rows = await cursor.fetchall()
+
+        keys = ("turn_id", "thread_id", "status", "input_message", "attempts", "started_at", "completed_at", "error")
+        return [dict(zip(keys, row, strict=False)) for row in rows]
+
+    async def get_turn_detail(self, turn_id: str) -> dict | None:
+        """One turn with its journal, memoized tool results and effects."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                """
+                SELECT turn_id, thread_id, status, input_message, attempts, started_at, completed_at, error
+                FROM active_turns WHERE turn_id = ?
+                """,
+                (turn_id,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            keys = (
+                "turn_id",
+                "thread_id",
+                "status",
+                "input_message",
+                "attempts",
+                "started_at",
+                "completed_at",
+                "error",
+            )
+            turn = dict(zip(keys, row, strict=False))
+
+            journal_cursor = await db.execute(
+                "SELECT seq, message_json, status, created_at FROM turn_journal WHERE turn_id = ? ORDER BY seq",
+                (turn_id,),
+            )
+            turn["journal"] = [
+                {"seq": entry[0], "message": _safe_json(entry[1]), "status": entry[2], "created_at": str(entry[3])}
+                for entry in await journal_cursor.fetchall()
+            ]
+
+            results_cursor = await db.execute(
+                "SELECT tool_call_id, content FROM tool_results WHERE turn_id = ?",
+                (turn_id,),
+            )
+            turn["tool_results"] = [
+                {"tool_call_id": entry[0], "content": entry[1]} for entry in await results_cursor.fetchall()
+            ]
+
+        turn["effects"] = await self.list_external_effects(turn_id)
+        return turn
+
+    async def fork_turn(self, turn_id: str, *, at_seq: int = 0, new_thread_id: str = "") -> dict | None:
+        """Copy a turn's history prefix into a new thread.
+
+        The original is left untouched — the point of a fork is to try a
+        different continuation without destroying the evidence of the first one.
+        """
+        detail = await self.get_turn_detail(turn_id)
+        if not detail:
+            return None
+
+        prefix = detail["journal"] if at_seq <= 0 else [row for row in detail["journal"] if int(row["seq"]) <= at_seq]
+        messages: list[BaseMessage] = [HumanMessage(content=str(detail.get("input_message") or ""))]
+        for row in prefix:
+            try:
+                messages.append(_deserialize_message(row["message"]))
+            except (KeyError, TypeError):
+                continue
+
+        target = new_thread_id or f"{detail['thread_id']}:fork-{at_seq or len(prefix)}"
+        await self.save(target, messages)
+        log.info("Forked turn %s into thread %s (%d message(s))", turn_id, target, len(messages))
+        return {"thread_id": target, "messages": len(messages), "source_turn": turn_id}
+
+    async def running_turn_stats(self) -> dict:
+        """Counts and oldest age for turns in flight — surfaced on /health.
+
+        A turn stuck in 'running' means a process died and nothing picked it up;
+        without this it is invisible until someone reads the database.
+        """
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                """
+                SELECT COUNT(*), MIN(started_at)
+                FROM active_turns WHERE status IN ('running', 'resuming')
+                """
+            )
+            count, oldest = await cursor.fetchone()
+
+        age_seconds = None
+        if oldest:
+            from datetime import UTC, datetime
+
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+                try:
+                    # SQLite CURRENT_TIMESTAMP is UTC but naive, so attach UTC
+                    # rather than comparing against a naive local clock.
+                    started = datetime.strptime(str(oldest), fmt).replace(tzinfo=UTC)
+                    age_seconds = round((datetime.now(UTC) - started).total_seconds(), 1)
+                    break
+                except ValueError:
+                    continue
+        return {"running_turns": int(count or 0), "oldest_running_age_seconds": age_seconds}
+
+    async def prune_turn_history(self, *, older_than_days: int = 30) -> dict:
+        """Delete finished turns and whatever still hangs off them.
+
+        Only finished turns: a running or resuming turn is live state, and an
+        unfinished turn older than the window is a bug to look at, not garbage to
+        sweep.
+
+        In practice the journal and memoized results are already gone —
+        ``finish_turn`` drops them when a turn completes — so the rows this
+        actually reclaims are ``active_turns`` and ``external_effects``. Effects
+        are safe to drop with their turn: the idempotency key contains the
+        turn_id, so a later turn never looks up an older turn's effect.
+        """
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cutoff = f"-{int(older_than_days)} days"
+            cursor = await db.execute(
+                """
+                SELECT turn_id FROM active_turns
+                WHERE status NOT IN ('running', 'resuming')
+                  AND COALESCE(completed_at, started_at) < datetime('now', ?)
+                """,
+                (cutoff,),
+            )
+            turn_ids = [row[0] for row in await cursor.fetchall()]
+            if not turn_ids:
+                return {"turns": 0, "journal": 0, "tool_results": 0, "effects": 0}
+
+            placeholders = ",".join("?" for _ in turn_ids)
+            journal = await db.execute(f"DELETE FROM turn_journal WHERE turn_id IN ({placeholders})", turn_ids)
+            results = await db.execute(f"DELETE FROM tool_results WHERE turn_id IN ({placeholders})", turn_ids)
+            effects = await db.execute(f"DELETE FROM external_effects WHERE turn_id IN ({placeholders})", turn_ids)
+            turns = await db.execute(f"DELETE FROM active_turns WHERE turn_id IN ({placeholders})", turn_ids)
+            await db.commit()
+
+        pruned = {
+            "turns": turns.rowcount,
+            "journal": journal.rowcount,
+            "tool_results": results.rowcount,
+            "effects": effects.rowcount,
+        }
+        log.info("Turn retention: pruned %s", pruned)
+        return pruned
+
+    async def claim_turns_for_resume(self, *, max_attempts: int = 2) -> list[dict]:
+        """Claim interrupted turns for re-execution, newest-first per thread.
+
+        Returns rows the caller should finish. Three outcomes are decided here,
+        under one transaction, so two processes cannot both claim a turn:
+
+        * a turn whose thread already saw a newer turn is marked ``superseded`` —
+          the user asked again, and answering the stale question would be noise;
+        * a turn that has already burned its attempts is failed, so a crash loop
+          cannot resurrect itself forever;
+        * anything else flips to ``resuming`` and is handed back.
+        """
+        claimed: list[dict] = []
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    """
+                    SELECT turn_id, thread_id, input_message, attempts, rowid
+                    FROM active_turns
+                    WHERE status = 'running'
+                    ORDER BY rowid ASC
+                    """
+                )
+                rows = await cursor.fetchall()
+
+                for turn_id, thread_id, input_message, attempts, row_id in rows:
+                    # Ordering by rowid, not started_at: CURRENT_TIMESTAMP has
+                    # second resolution, so two turns in the same second would
+                    # both look "not newer" and a stale one would be resumed.
+                    newer = await db.execute(
+                        """
+                        SELECT 1 FROM active_turns
+                        WHERE thread_id = ? AND rowid > ?
+                        LIMIT 1
+                        """,
+                        (thread_id, row_id),
+                    )
+                    if await newer.fetchone():
+                        await db.execute(
+                            """
+                            UPDATE active_turns
+                            SET status = 'superseded', completed_at = CURRENT_TIMESTAMP,
+                                error = 'superseded by a newer turn in this thread'
+                            WHERE turn_id = ?
+                            """,
+                            (turn_id,),
+                        )
+                        continue
+
+                    if int(attempts or 0) >= max_attempts:
+                        await db.execute(
+                            """
+                            UPDATE active_turns
+                            SET status = 'failed', completed_at = CURRENT_TIMESTAMP,
+                                error = 'gave up after ' || ? || ' resume attempt(s)'
+                            WHERE turn_id = ?
+                            """,
+                            (int(attempts or 0), turn_id),
+                        )
+                        continue
+
+                    await db.execute(
+                        "UPDATE active_turns SET status = 'resuming', attempts = attempts + 1 WHERE turn_id = ?",
+                        (turn_id,),
+                    )
+                    claimed.append(
+                        {
+                            "turn_id": str(turn_id),
+                            "thread_id": str(thread_id),
+                            "input_message": str(input_message or ""),
+                            "attempts": int(attempts or 0) + 1,
+                        }
+                    )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+
+        if claimed:
+            log.warning("Claimed %d interrupted turn(s) for resume", len(claimed))
+            self._record_durable_metric("durable_turns_resumed", len(claimed))
+        return claimed
+
+    async def get_external_effect(self, key: str) -> str | None:
+        """Return the recorded result of a side-effecting call, if it already ran.
+
+        This is what makes re-running a turn safe: a message that was already
+        sent must not be sent twice just because the process died before the
+        journal recorded the answer.
+        """
+        if not key:
+            return None
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                "SELECT result FROM external_effects WHERE idempotency_key = ?",
+                (key,),
+            )
+            row = await cursor.fetchone()
+        return str(row[0]) if row else None
+
+    async def record_external_effect(self, *, key: str, turn_id: str, tool: str, result: str) -> bool:
+        """Record that a side effect happened. Returns False if it already was.
+
+        INSERT OR IGNORE rather than a check-then-write: two concurrent retries of
+        the same call must not both conclude they are first.
+        """
+        if not key:
+            return False
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                """
+                INSERT OR IGNORE INTO external_effects
+                    (idempotency_key, turn_id, tool, result)
+                VALUES (?, ?, ?, ?)
+                """,
+                (key, turn_id, tool, result),
+            )
+            await db.commit()
+            return bool(cursor.rowcount)
+
+    async def list_external_effects(self, turn_id: str) -> list[dict]:
+        """Effects recorded for one turn (dashboard / debugging)."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                """
+                SELECT idempotency_key, tool, result, created_at
+                FROM external_effects WHERE turn_id = ? ORDER BY created_at
+                """,
+                (turn_id,),
+            )
+            rows = await cursor.fetchall()
+        return [
+            {"idempotency_key": row[0], "tool": row[1], "result": row[2], "created_at": str(row[3])} for row in rows
+        ]
 
     def _pending_approval_from_row(self, row) -> dict | None:
         """Convert a pending_approvals row into a JSON-safe dict."""

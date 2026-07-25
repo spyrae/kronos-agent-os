@@ -984,6 +984,121 @@ def run_import_from(
     return 0
 
 
+def _session_store():
+    from kronos.session import SessionStore
+
+    return SessionStore(settings.db_path, agent_name=settings.agent_name)
+
+
+def run_turns_list(*, status: str, thread: str, limit: int) -> int:
+    """List durable turns so an operator can see what is stuck."""
+    import asyncio as _asyncio
+
+    turns = _asyncio.run(_session_store().list_turns(status=status, thread_id=thread, limit=limit))
+    if not turns:
+        print("No durable turns recorded for this agent.")
+        return 0
+
+    print(f"{'turn_id':<38} {'status':<11} {'att':<4} started              input")
+    for turn in turns:
+        preview = str(turn.get("input_message") or "").replace("\n", " ")[:44]
+        print(
+            f"{turn['turn_id']:<38} {str(turn['status']):<11} {str(turn.get('attempts', 0)):<4} "
+            f"{str(turn.get('started_at') or ''):<20} {preview}"
+        )
+    stuck = [turn for turn in turns if turn["status"] in {"running", "resuming"}]
+    if stuck:
+        print(f"\n{len(stuck)} turn(s) in flight. Finish one with: kaos turns resume <turn_id>")
+    return 0
+
+
+def run_turns_show(turn_id: str) -> int:
+    """Show one turn: journal, memoized results, recorded effects."""
+    import asyncio as _asyncio
+
+    detail = _asyncio.run(_session_store().get_turn_detail(turn_id))
+    if not detail:
+        print(f"Turn not found: {turn_id}")
+        return 1
+
+    print(f"turn {detail['turn_id']}  [{detail['status']}]  thread={detail['thread_id']}")
+    print(f"  started: {detail.get('started_at')}   completed: {detail.get('completed_at') or '—'}")
+    print(f"  attempts: {detail.get('attempts', 0)}")
+    if detail.get("error"):
+        print(f"  error: {detail['error']}")
+    print(f"  input: {str(detail.get('input_message') or '')[:200]}")
+
+    print("\n  journal:")
+    for row in detail["journal"]:
+        message = row["message"] or {}
+        kind = str(message.get("type") or "?")
+        calls = [str(call.get("name", "")) for call in message.get("tool_calls") or []]
+        summary = ", ".join(calls) if calls else str(message.get("content") or "")[:80].replace("\n", " ")
+        print(f"    [{row['seq']:>3}] {kind:<14} {summary}")
+
+    if detail["tool_results"]:
+        print("\n  memoized tool results:")
+        for row in detail["tool_results"]:
+            print(f"    {row['tool_call_id']}: {str(row['content'])[:80]}")
+    if detail["effects"]:
+        print("\n  recorded external effects (will not repeat on resume):")
+        for row in detail["effects"]:
+            print(f"    {row['tool']}: {str(row['result'])[:60]}")
+    return 0
+
+
+def run_turns_fork(turn_id: str, *, at_seq: int, thread: str) -> int:
+    """Fork a turn's prefix into a new thread, leaving the original intact."""
+    import asyncio as _asyncio
+
+    result = _asyncio.run(_session_store().fork_turn(turn_id, at_seq=at_seq, new_thread_id=thread))
+    if not result:
+        print(f"Turn not found: {turn_id}")
+        return 1
+    print(f"Forked {result['source_turn']} → thread '{result['thread_id']}' ({result['messages']} message(s))")
+    print("The original turn is untouched. Continue the fork with: kaos chat")
+    return 0
+
+
+def run_turns_resume(turn_id: str) -> int:
+    """Finish one interrupted turn by hand."""
+    import asyncio as _asyncio
+
+    if not _runtime_llm_configured():
+        _print_missing_runtime_llm()
+        return 1
+
+    async def _resume() -> int:
+        from kronos.graph import KronosAgent
+
+        store = _session_store()
+        detail = await store.get_turn_detail(turn_id)
+        if not detail:
+            print(f"Turn not found: {turn_id}")
+            return 1
+        if detail["status"] not in {"running", "resuming"}:
+            print(f"Turn {turn_id} is '{detail['status']}' — only in-flight turns can be resumed.")
+            return 1
+
+        agent = KronosAgent(session_store=store)
+        answer = await agent.resume_interrupted_turn(
+            {
+                "turn_id": turn_id,
+                "thread_id": detail["thread_id"],
+                "input_message": detail.get("input_message", ""),
+                "attempts": detail.get("attempts", 0),
+            }
+        )
+        if not answer:
+            print("Resume produced no answer — see the log; the turn was marked failed.")
+            return 1
+        print(answer)
+        return 0
+
+    _configure_logging()
+    return _asyncio.run(_resume())
+
+
 def run_policy_report(as_json: bool) -> int:
     """Print the effective governance posture and where each value came from."""
     from kronos.policy import PolicyError, effective_values, load_policy
@@ -1351,6 +1466,21 @@ def build_parser() -> argparse.ArgumentParser:
     import_from.add_argument("--out", "-o", default="", help="keep the intermediate bundle at this path")
     import_from.add_argument("--convert-only", action="store_true", help="write the bundle without importing it")
 
+    turns = sub.add_parser("turns", help="inspect, fork and resume durable turns")
+    turns_sub = turns.add_subparsers(dest="turns_command")
+    turns_list = turns_sub.add_parser("list", help="list recent durable turns")
+    turns_list.add_argument("--status", default="", help="filter: running|resuming|completed|failed|superseded")
+    turns_list.add_argument("--thread", default="", help="filter by thread id")
+    turns_list.add_argument("--limit", type=int, default=20, help="how many to show")
+    turns_show = turns_sub.add_parser("show", help="show one turn's journal and effects")
+    turns_show.add_argument("turn_id")
+    turns_fork = turns_sub.add_parser("fork", help="copy a turn's prefix into a new thread")
+    turns_fork.add_argument("turn_id")
+    turns_fork.add_argument("--at", dest="at_seq", type=int, default=0, help="journal seq to cut at (0 = all)")
+    turns_fork.add_argument("--thread", default="", help="target thread id")
+    turns_resume = turns_sub.add_parser("resume", help="finish an interrupted turn now")
+    turns_resume.add_argument("turn_id")
+
     policy_cmd = sub.add_parser("policy", help="inspect the governance policy")
     policy_sub = policy_cmd.add_subparsers(dest="policy_command")
     policy_report = policy_sub.add_parser("report", help="print the effective policy and value sources")
@@ -1489,6 +1619,17 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "import":
         return run_import(args.path, merge=args.merge, dry_run=args.dry_run, rebind_chat=args.rebind_chat)
+    if args.command == "turns":
+        if args.turns_command == "list":
+            return run_turns_list(status=args.status, thread=args.thread, limit=args.limit)
+        if args.turns_command == "show":
+            return run_turns_show(args.turn_id)
+        if args.turns_command == "fork":
+            return run_turns_fork(args.turn_id, at_seq=args.at_seq, thread=args.thread)
+        if args.turns_command == "resume":
+            return run_turns_resume(args.turn_id)
+        parser.parse_args(["turns", "--help"])
+        return 0
     if args.command == "policy":
         if args.policy_command == "report":
             return run_policy_report(args.as_json)

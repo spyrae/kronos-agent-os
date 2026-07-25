@@ -6,6 +6,7 @@ import logging
 from langchain_core.tools import tool
 
 from kronos.config import settings
+from kronos.security.effects import mark_side_effect
 from kronos.tools.gateway import get_gateway
 
 log = logging.getLogger("kronos.tools.gateway_tools")
@@ -99,3 +100,8 @@ def get_gateway_tools() -> list:
     if not settings.enable_mcp_gateway_management:
         return [mcp_list_servers]
     return [mcp_add_server, mcp_remove_server, mcp_list_servers, mcp_reload]
+
+
+# Re-running a turn must not repeat these: a duplicate reminder, handoff or MCP
+# mutation is a visible bug, not a harmless retry.
+mark_side_effect([mcp_add_server, mcp_remove_server], reason="mcp mutation")

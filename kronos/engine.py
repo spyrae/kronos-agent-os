@@ -42,6 +42,8 @@ ToolCacheGetCallback = Callable[[str], Any]
 ToolCacheSaveCallback = Callable[[str, str], Any]
 ToolApprovalPredicate = Callable[[BaseTool, dict], Any]
 ToolApprovalRequestCallback = Callable[[BaseTool, dict], Any]
+EffectGetCallback = Callable[[str], Any]
+EffectRecordCallback = Callable[[str, str, str], Any]
 
 
 class SubAgentApprovalPause(Exception):  # noqa: N818 - control-flow signal, not an error
@@ -340,6 +342,10 @@ async def execute_tool(
     tool: BaseTool,
     tool_call: dict,
     error_handler: Callable[[Exception], str] = classify_tool_error,
+    *,
+    get_external_effect: EffectGetCallback | None = None,
+    record_external_effect: EffectRecordCallback | None = None,
+    turn_id: str = "",
 ) -> ToolMessage:
     """Execute a single tool call, returning a ToolMessage.
 
@@ -367,6 +373,21 @@ async def execute_tool(
         raise CassetteMissError(
             f"no cassette for external tool '{tool.name}' with these args. Record it first: KAOS_CASSETTE_MODE=record."
         )
+
+    effect_key = ""
+    if tool_has_side_effect(tool) and (get_external_effect or record_external_effect):
+        effect_key = side_effect_key(tool, args, turn_id)
+        if get_external_effect:
+            try:
+                previous = await _maybe_await(get_external_effect(effect_key))
+            except Exception as e:
+                log.warning("Effect lookup failed for %s: %s", tool.name, e)
+                previous = None
+            if previous is not None:
+                # This effect already happened. Re-running the turn must not send
+                # the message, charge the card or restart the service twice.
+                log.info("Skipping repeated side effect: %s", tool.name)
+                return _build_tool_message(str(previous), str(previous), tool_call_id)
 
     try:
         if hasattr(tool, "ainvoke"):
@@ -403,6 +424,14 @@ async def execute_tool(
         recorded_content, is_error = content, True
         log.warning("Tool error %s: %s", tool.name, str(e)[:200])
 
+    if effect_key and record_external_effect and not is_error:
+        # Only successful effects are recorded: a failed send did not happen, so a
+        # retry should be allowed to try again.
+        try:
+            await _maybe_await(record_external_effect(effect_key, tool.name, recorded_content))
+        except Exception as e:
+            log.warning("Could not record side effect for %s: %s", tool.name, e)
+
     if cassettes.recording():
         # Record the pre-wrap content: the untrusted framing is re-applied on
         # replay, so a cassette stays valid if that framing later changes.
@@ -415,6 +444,45 @@ async def execute_tool(
         )
 
     return _build_tool_message(content, raw_content, tool_call_id)
+
+
+SIDE_EFFECT_METADATA_KEY = "side_effect"
+IDEMPOTENCY_KEY_METADATA = "idempotency_key"
+
+
+def tool_has_side_effect(tool: BaseTool) -> bool:
+    """Whether calling this tool changes something outside the process."""
+    metadata = getattr(tool, "metadata", None) or {}
+    declared = metadata.get(SIDE_EFFECT_METADATA_KEY)
+    if declared is None:
+        declared = getattr(tool, SIDE_EFFECT_METADATA_KEY, None)
+    return bool(declared)
+
+
+def side_effect_key(tool: BaseTool, args: dict, turn_id: str = "") -> str:
+    """Idempotency key for one side-effecting call.
+
+    A tool may declare its own key function via
+    ``metadata['idempotency_key'] = lambda args: ...`` when the natural identity
+    of the effect is narrower than "these arguments" — e.g. a message keyed by
+    chat + text, so a retry with a regenerated request id is still recognised.
+
+    The default includes turn_id: within a turn a repeat is a retry (skip it),
+    while the same call in a later turn is the user asking again (do it).
+    """
+    metadata = getattr(tool, "metadata", None) or {}
+    custom = metadata.get(IDEMPOTENCY_KEY_METADATA) or getattr(tool, IDEMPOTENCY_KEY_METADATA, None)
+    if callable(custom):
+        try:
+            declared = custom(args)
+            if declared:
+                return f"{tool.name}:{declared}"
+        except Exception as e:
+            log.warning("idempotency_key callable failed for %s: %s", tool.name, e)
+
+    from kronos.cassettes.store import tool_key
+
+    return f"{tool.name}:{turn_id}:{tool_key(tool_name=tool.name, args=args)}"
 
 
 def _build_tool_message(content: str, raw_content: str, tool_call_id: str) -> ToolMessage:
@@ -473,6 +541,9 @@ async def react_loop(
     save_tool_result: ToolCacheSaveCallback | None = None,
     needs_tool_approval: ToolApprovalPredicate | None = None,
     request_tool_approval: ToolApprovalRequestCallback | None = None,
+    get_external_effect: EffectGetCallback | None = None,
+    record_external_effect: EffectRecordCallback | None = None,
+    turn_id: str = "",
 ) -> AgentResult:
     """Run the ReAct loop: LLM → tool_calls → execute → LLM → ...
 
@@ -706,7 +777,14 @@ async def react_loop(
                             }
                         )
                         try:
-                            tm = await execute_tool(tool, tc, error_handler)
+                            tm = await execute_tool(
+                                tool,
+                                tc,
+                                error_handler,
+                                get_external_effect=get_external_effect,
+                                record_external_effect=record_external_effect,
+                                turn_id=turn_id,
+                            )
                         except SubAgentApprovalPause as pause:
                             # A delegated sub-agent paused for approval: bubble it
                             # up as a top-level pause. The delegate_to_X call (tc)

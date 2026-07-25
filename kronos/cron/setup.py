@@ -54,6 +54,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.sleep_compute import run_sleep_compute
     from kronos.cron.source_quality_audit import run_source_quality_audit
     from kronos.cron.swarm_retention import run_swarm_retention
+    from kronos.cron.turn_retention import run_turn_retention
     from kronos.cron.user_model import run_user_model
 
     me = settings.agent_name
@@ -146,6 +147,10 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # Swarm Retention — weekly Sunday 03:00 UTC. Prunes swarm_messages
     # older than MESSAGE_RETENTION_DAYS (90d). Safe on all 6 agents.
     scheduler.add_weekly("swarm-retention", run_swarm_retention, weekday=6, hour_utc=3)
+
+    # Turn Retention — weekly Sunday 03:30 UTC. Prunes finished durable turns and
+    # their journal/results/effects per policy.retention.turn_journal_days.
+    scheduler.add_weekly("turn-retention", run_turn_retention, weekday=6, hour_utc=5)
 
     # ── Agent-exclusive jobs (only registered on the owning agent) ──────
     nexus_jobs_registered = 0
