@@ -85,21 +85,42 @@ def replay_model(*, label: str) -> CassetteChatModel:
     return CassetteChatModel(None, label=label, mode=MODE_REPLAY, store=get_store())
 
 
-def read_tool_result(tool_name: str, args: Any) -> str | None:
-    """Recorded output for a tool call, or None when there is no cassette."""
+def read_tool_call(tool_name: str, args: Any) -> dict | None:
+    """Recorded result for a tool call, or None when there is no cassette.
+
+    Returns both the model-facing content (possibly compacted) and the raw
+    content kept for the audit journal, because a replayed turn must present the
+    model with exactly what the recorded turn did.
+    """
     payload = get_store().read(KIND_TOOL, tool_key(tool_name=tool_name, args=args), group=_tool_group(tool_name))
     if payload is None:
         return None
     content = payload.get("content")
-    return content if isinstance(content, str) else None
+    if not isinstance(content, str):
+        return None
+    raw = payload.get("raw_content")
+    return {
+        "content": content,
+        "raw_content": raw if isinstance(raw, str) else content,
+        "error": bool(payload.get("error")),
+    }
 
 
-def write_tool_result(tool_name: str, args: Any, content: str) -> None:
-    """Record a tool result so replay never has to reach the outside world."""
+def write_tool_call(tool_name: str, args: Any, *, content: str, raw_content: str = "", error: bool = False) -> None:
+    """Record a tool result so replay never has to reach the outside world.
+
+    Errors and timeouts are recorded too: a deterministic failure is as much a
+    behaviour worth pinning as a deterministic success.
+    """
     get_store().write(
         KIND_TOOL,
         tool_key(tool_name=tool_name, args=args),
-        {"tool": tool_name, "content": content},
+        {
+            "tool": tool_name,
+            "content": content,
+            "raw_content": raw_content or content,
+            "error": error,
+        },
         group=_tool_group(tool_name),
     )
 
@@ -129,12 +150,12 @@ __all__ = [
     "get_store",
     "llm_key",
     "mode",
-    "read_tool_result",
+    "read_tool_call",
     "recording",
     "replay_model",
     "replaying",
     "serialize_ai_message",
     "tool_key",
     "wrap_model",
-    "write_tool_result",
+    "write_tool_call",
 ]

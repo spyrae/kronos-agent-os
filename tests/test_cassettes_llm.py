@@ -187,11 +187,14 @@ async def test_recorded_cassette_holds_no_secrets(cassette_env, monkeypatch):
 def test_tool_cassette_round_trip(cassette_env, monkeypatch):
     monkeypatch.setenv(cassettes.ENV_MODE, cassettes.MODE_RECORD)
 
-    assert cassettes.read_tool_result("web_search", {"q": "kaos"}) is None
-    cassettes.write_tool_result("web_search", {"q": "kaos"}, "три результата")
+    assert cassettes.read_tool_call("web_search", {"q": "kaos"}) is None
+    cassettes.write_tool_call("web_search", {"q": "kaos"}, content="три результата", raw_content="полный текст")
 
-    assert cassettes.read_tool_result("web_search", {"q": "kaos"}) == "три результата"
-    assert cassettes.read_tool_result("web_search", {"q": "other"}) is None
+    stored = cassettes.read_tool_call("web_search", {"q": "kaos"})
+    assert stored["content"] == "три результата"
+    assert stored["raw_content"] == "полный текст"
+    assert stored["error"] is False
+    assert cassettes.read_tool_call("web_search", {"q": "other"}) is None
     # Stored per tool name, so a cassette directory stays readable.
     assert (cassette_env / cassettes.KIND_TOOL / "web_search").is_dir()
 

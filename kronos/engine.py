@@ -21,6 +21,8 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
+from kronos import cassettes
+from kronos.cassettes import CassetteMissError
 from kronos.config import settings
 from kronos.security.loop_detector import LoopDetector, LoopLevel, get_nudge_message
 from kronos.security.sanitize import wrap_untrusted
@@ -335,6 +337,24 @@ async def execute_tool(
     """
     tool_call_id = tool_call.get("id", "")
     args = tool_call.get("args", {})
+    untrusted = _tool_output_is_untrusted(tool)
+
+    replayed = cassettes.read_tool_call(tool.name, args) if cassettes.replaying() else None
+    if replayed is not None:
+        content = replayed["content"]
+        if untrusted:
+            content = wrap_untrusted(content, label=f"tool:{tool.name}")
+        return _build_tool_message(content, replayed["raw_content"], tool_call_id)
+
+    if cassettes.replaying() and untrusted:
+        # Untrusted output means the tool reaches outside the process. Replaying a
+        # turn by actually hitting the network would make the run non-deterministic
+        # and possibly costly, so a missing cassette is a hard error. Local tools
+        # (memory, skills, files) still run for real — they are part of the
+        # behaviour under test, not an external dependency.
+        raise CassetteMissError(
+            f"no cassette for external tool '{tool.name}' with these args. Record it first: KAOS_CASSETTE_MODE=record."
+        )
 
     try:
         if hasattr(tool, "ainvoke"):
@@ -346,7 +366,8 @@ async def execute_tool(
             result = tool.invoke(args)
 
         content, raw_content = await _tool_model_output(tool, result)
-        if _tool_output_is_untrusted(tool):
+        recorded_content, is_error = content, False
+        if untrusted:
             # Attacker-controllable content — frame it as data so an injected
             # instruction inside it is not executed. raw_content (kept for the
             # audit journal) stays the unwrapped original.
@@ -359,12 +380,30 @@ async def execute_tool(
     except TimeoutError:
         content = f"[ERROR] Tool '{tool.name}' timed out after {TOOL_TIMEOUT_SECONDS}s"
         raw_content = content
+        recorded_content, is_error = content, True
         log.error("Tool timeout: %s", tool.name)
     except Exception as e:
         content = error_handler(e)
         raw_content = content
+        recorded_content, is_error = content, True
         log.warning("Tool error %s: %s", tool.name, str(e)[:200])
 
+    if cassettes.recording():
+        # Record the pre-wrap content: the untrusted framing is re-applied on
+        # replay, so a cassette stays valid if that framing later changes.
+        cassettes.write_tool_call(
+            tool.name,
+            args,
+            content=recorded_content,
+            raw_content=raw_content,
+            error=is_error,
+        )
+
+    return _build_tool_message(content, raw_content, tool_call_id)
+
+
+def _build_tool_message(content: str, raw_content: str, tool_call_id: str) -> ToolMessage:
+    """Wrap tool output, keeping the full raw text when the model sees less."""
     additional_kwargs = {}
     if raw_content != content:
         additional_kwargs[RAW_TOOL_CONTENT_KEY] = raw_content
