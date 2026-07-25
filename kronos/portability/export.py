@@ -14,13 +14,13 @@ database that did not already exist and never blocks a live writer.
 
 import json
 import logging
-import zipfile
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from kronos.config import settings
+from kronos.portability.build import write_jsonl, write_zip
 from kronos.portability.dbread import read_rows
 from kronos.portability.manifest import (
     SECTION_FACTS,
@@ -52,10 +52,6 @@ _ALLOWED_SUFFIXES = (".md", ".txt", ".json", ".yaml", ".yml", ".csv")
 _MAX_COPY_FILE_BYTES = 5 * 1024 * 1024
 _LARGE_BUNDLE_WARN_BYTES = 50 * 1024 * 1024
 
-# A fixed timestamp keeps the archive byte-identical across runs; the real
-# creation time lives in the manifest, which is the one place time belongs.
-_ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
-
 
 @dataclass
 class ExportReport:
@@ -80,17 +76,6 @@ def _is_exportable(path: Path) -> bool:
     if name.endswith(_BLOCKED_SUFFIXES):
         return False
     return path.suffix.lower() in _ALLOWED_SUFFIXES
-
-
-def _write_jsonl(path: Path, rows: Iterable[dict]) -> int:
-    """Write rows as canonical JSONL. Returns the number of rows written."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    written = 0
-    with open(path, "w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
-            written += 1
-    return written
 
 
 def _copy_text_file(src: Path, dest: Path, *, warnings: list[str]) -> bool:
@@ -170,7 +155,7 @@ def _export_facts(root: Path, *, warnings: list[str]) -> int:
                 fact["relevance"] = row["relevance"]
             yield fact
 
-    return _write_jsonl(root / "memory" / "facts.jsonl", _payload())
+    return write_jsonl(root / "memory" / "facts.jsonl", _payload())
 
 
 def _export_graph(root: Path) -> tuple[int, int]:
@@ -204,8 +189,8 @@ def _export_graph(root: Path) -> tuple[int, int]:
         for row in relations
     ]
 
-    written_entities = _write_jsonl(root / "memory" / "graph.entities.jsonl", entity_rows)
-    written_relations = _write_jsonl(root / "memory" / "graph.relations.jsonl", relation_rows)
+    written_entities = write_jsonl(root / "memory" / "graph.entities.jsonl", entity_rows)
+    written_relations = write_jsonl(root / "memory" / "graph.relations.jsonl", relation_rows)
     return written_entities, written_relations
 
 
@@ -231,7 +216,7 @@ def _export_shared_facts(root: Path) -> int:
     payload = [
         {"user_id": row["user_id"], "fact": redact_text(row["fact"]), "created_at": row["created_at"]} for row in rows
     ]
-    return _write_jsonl(root / "memory" / "shared_facts.jsonl", payload)
+    return write_jsonl(root / "memory" / "shared_facts.jsonl", payload)
 
 
 def _export_schedule(root: Path, *, include_transport_ids: bool) -> int:
@@ -271,7 +256,7 @@ def _export_schedule(root: Path, *, include_transport_ids: bool) -> int:
             task |= {"chat_id": None, "topic_id": None, "thread_id": None, "needs_rebind": True}
         payload.append(task)
 
-    return _write_jsonl(root / "schedule" / "tasks.jsonl", payload)
+    return write_jsonl(root / "schedule" / "tasks.jsonl", payload)
 
 
 def _export_notes(workspace: Workspace, root: Path, *, warnings: list[str]) -> int:
@@ -313,19 +298,7 @@ def _export_sessions(root: Path) -> int:
             }
         )
 
-    return _write_jsonl(root / "sessions" / "sessions.jsonl", payload)
-
-
-def _write_zip(source_dir: Path, out_path: Path) -> None:
-    """Zip a staged bundle deterministically (sorted entries, fixed mtime)."""
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    files = sorted(p for p in source_dir.rglob("*") if p.is_file())
-    with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in files:
-            info = zipfile.ZipInfo(path.relative_to(source_dir).as_posix(), date_time=_ZIP_TIMESTAMP)
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = 0o644 << 16
-            archive.writestr(info, path.read_bytes())
+    return write_jsonl(root / "sessions" / "sessions.jsonl", payload)
 
 
 def export_bundle(
@@ -380,7 +353,7 @@ def export_bundle(
             created_at=created_at,
         )
         write_manifest(root, manifest)
-        _write_zip(root, target)
+        write_zip(root, target)
 
     size = target.stat().st_size
     if size > _LARGE_BUNDLE_WARN_BYTES:
