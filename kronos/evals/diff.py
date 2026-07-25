@@ -229,9 +229,14 @@ def run_suite_at_ref(ref: str, *, suite_dir: Path, repo_root: Path, python: str 
             env=_child_env(worktree),
         )
         if not output.exists():
-            raise DiffError(
-                f"running the suite at {ref} produced no report: {(result.stderr or result.stdout).strip()[:400]}"
-            )
+            stderr = (result.stderr or result.stdout).strip()
+            if "invalid choice: 'eval'" in stderr:
+                # Comparing against a revision from before this feature existed.
+                raise DiffError(
+                    f"revision {ref} predates `kaos eval` and cannot run the suite — "
+                    "save a report from a newer revision and pass it with --base-json"
+                )
+            raise DiffError(f"running the suite at {ref} produced no report: {stderr[:400]}")
         return json.loads(output.read_text(encoding="utf-8"))
     finally:
         try:

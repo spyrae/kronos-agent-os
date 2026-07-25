@@ -6,6 +6,20 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Added
 
+- **Agent CI: cassettes, golden scenarios, behaviour diff** — `kaos eval
+  capture/run/diff/turns`. Cassettes (`KAOS_CASSETTE_MODE=off|record|replay`)
+  give byte-stable replay of provider and tool calls, wired into
+  `_get_model_from_chain` and `execute_tool`; a replay miss is a hard error, and
+  a tool marked `untrusted_output` must have a cassette (local tools still run).
+  Scenarios capture the model turns of a real turn from the durable journal and
+  replay them against a scripted model, so tool wiring, call order, approval
+  gating and budgets stay checkable across a prompt change. `kaos eval diff`
+  compares two revisions structurally (new failures, tool path, gating, turns,
+  material answer-size change) by running the base revision in a temporary git
+  worktree. New CI job `evals` (`pytest -m eval` + `kaos eval run`, no secrets)
+  posts the diff into the PR summary; `make evals` / `make evals-diff` locally.
+  Bundled suite: six public-safe scenarios covering the policy surface.
+- New docs: [Agent CI](docs/EVALS.md).
 - **Agent portability (`.kaos` bundles)** — `kaos export` / `kaos import`
   move an agent's persona, skills, facts, knowledge graph, shared facts and
   pending schedule between installations. Bundles carry a `manifest.json`

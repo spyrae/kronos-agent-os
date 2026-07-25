@@ -457,6 +457,18 @@ def run_doctor() -> int:
         f"bundle schema v{BUNDLE_SCHEMA_VERSION}; importers: {', '.join(_importers())}",
     )
 
+    from kronos import cassettes
+    from kronos.evals.scenario import discover as _discover_scenarios
+
+    suite_dir = _eval_suite_path("")
+    scenario_count = len(_discover_scenarios(suite_dir))
+    cassette_mode = cassettes.mode()
+    ci_detail = f"{scenario_count} golden scenario(s); cassette mode={cassette_mode}"
+    if scenario_count:
+        ok("Agent CI", ci_detail)
+    else:
+        warn("Agent CI", f"{ci_detail}; capture one with 'kaos eval capture --turn <id>'")
+
     print("KAOS doctor\n")
     failed = 0
     for status, name, detail in checks:
@@ -940,6 +952,117 @@ def run_import_from(
     return 0
 
 
+DEFAULT_EVAL_SUITE = "tests/evals/suites/golden"
+
+
+def _eval_suite_path(suite: str) -> Path:
+    """Resolve a suite path, defaulting to the bundled golden suite."""
+    if suite:
+        return Path(suite)
+    return _repo_root() / DEFAULT_EVAL_SUITE
+
+
+def run_eval_run(suite: str, json_path: str) -> int:
+    """Replay a scenario suite and report pass/fail."""
+    import asyncio as _asyncio
+
+    from kronos.evals.runner import run_suite
+
+    suite_dir = _eval_suite_path(suite)
+    if not suite_dir.exists():
+        print(f"No scenario suite at {suite_dir}. Capture one with: kaos eval capture --turn <id>")
+        return 1
+
+    result = _asyncio.run(run_suite(suite_dir))
+    print(result.render())
+    if json_path:
+        target = Path(json_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(result.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"\nReport: {target}")
+    if not result.results:
+        print("\nNo scenarios found — nothing was verified.")
+        return 1
+    return 0 if result.ok else 1
+
+
+def run_eval_capture(
+    *,
+    turn: str,
+    thread: str,
+    last: int,
+    suite: str,
+    name: str,
+    allow_pii: bool,
+) -> int:
+    """Capture golden scenarios from the durable turn journal."""
+    from kronos.evals import ScenarioError, capture_thread, capture_turn
+
+    suite_dir = _eval_suite_path(suite)
+    try:
+        if turn:
+            scenario = capture_turn(turn, suite_dir=suite_dir, name=name, allow_pii=allow_pii)
+            print(f"Captured '{scenario.name}' → {scenario.path.parent if scenario.path else suite_dir}")
+            print(f"  model turns: {len(scenario.script)}, tools: {', '.join(scenario.tool_names) or 'none'}")
+            print("\nExpectations are a DRAFT from the observed run — review, then set draft: false.")
+            return 0
+        report = capture_thread(thread, suite_dir=suite_dir, last=last, allow_pii=allow_pii)
+    except ScenarioError as e:
+        print(f"Capture failed: {e}")
+        return 1
+
+    print(report.render() or "Nothing captured.")
+    return 0 if report.scenarios else 1
+
+
+def run_eval_list_turns(thread: str, limit: int) -> int:
+    """List recent durable turns so one can be captured."""
+    from kronos.evals import list_turns
+
+    turns = list_turns(thread_id=thread, limit=limit)
+    if not turns:
+        print("No durable turns found for this agent.")
+        return 1
+    for turn in turns:
+        preview = str(turn.get("input_message") or "").replace("\n", " ")[:60]
+        print(f"{turn['turn_id']}  {turn.get('status', ''):<10} {turn.get('started_at', '')}  {preview}")
+    print(f"\nCapture one with: kaos eval capture --turn {turns[0]['turn_id']}")
+    return 0
+
+
+def run_eval_diff(*, base: str, head: str, suite: str, json_path: str, base_json: str) -> int:
+    """Compare suite behaviour between two revisions."""
+    import asyncio as _asyncio
+
+    from kronos.evals.diff import DiffError, diff_reports, run_suite_at_ref
+    from kronos.evals.runner import run_suite
+
+    suite_dir = _eval_suite_path(suite)
+    if not suite_dir.exists():
+        print(f"No scenario suite at {suite_dir}.")
+        return 1
+
+    head_report = _asyncio.run(run_suite(suite_dir)).to_dict()
+    try:
+        if base_json:
+            base_report = json.loads(Path(base_json).read_text(encoding="utf-8"))
+        else:
+            base_report = run_suite_at_ref(base, suite_dir=suite_dir, repo_root=_repo_root())
+    except (DiffError, OSError, json.JSONDecodeError) as e:
+        print(f"Diff failed: {e}")
+        return 1
+
+    report = diff_reports(base_report, head_report, base_ref=base_json or base, head_ref=head)
+    print(report.render_markdown())
+    if json_path:
+        target = Path(json_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(report.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"\nReport: {target}")
+    # A behaviour change is information, not a failure; only new failures gate.
+    return 1 if report.regressions else 0
+
+
 async def _run_signals_dry_run(
     category: str,
     *,
@@ -1112,6 +1235,40 @@ def build_parser() -> argparse.ArgumentParser:
     import_from.add_argument("--out", "-o", default="", help="keep the intermediate bundle at this path")
     import_from.add_argument("--convert-only", action="store_true", help="write the bundle without importing it")
 
+    evals = sub.add_parser("eval", help="golden scenarios: capture, replay, diff")
+    evals_sub = evals.add_subparsers(dest="eval_command")
+
+    eval_run = evals_sub.add_parser("run", help="replay a scenario suite (no keys, no network)")
+    eval_run.add_argument("--suite", default="", help=f"suite directory (default: {DEFAULT_EVAL_SUITE})")
+    eval_run.add_argument("--json", dest="json_path", default="", help="write a machine-readable report here")
+
+    eval_capture = evals_sub.add_parser("capture", help="capture scenarios from the durable turn journal")
+    eval_capture.add_argument("--turn", default="", help="turn id to capture")
+    eval_capture.add_argument("--thread", default="", help="capture the most recent turns of this thread")
+    eval_capture.add_argument("--last", type=int, default=5, help="how many turns when using --thread")
+    eval_capture.add_argument("--suite", default="", help="suite directory to write into")
+    eval_capture.add_argument("--name", default="", help="scenario name (default: slug of the input)")
+    eval_capture.add_argument(
+        "--allow-pii",
+        action="store_true",
+        help="local-only: keep content that still looks personal after masking",
+    )
+
+    eval_turns = evals_sub.add_parser("turns", help="list recent durable turns")
+    eval_turns.add_argument("--thread", default="", help="filter by thread id")
+    eval_turns.add_argument("--limit", type=int, default=20, help="how many turns to list")
+
+    eval_diff = evals_sub.add_parser("diff", help="compare suite behaviour against another revision")
+    eval_diff.add_argument("--base", default="origin/main", help="git ref to compare against")
+    eval_diff.add_argument("--head", default="HEAD", help="label for the current tree in the report")
+    eval_diff.add_argument("--suite", default="", help="suite directory")
+    eval_diff.add_argument("--json", dest="json_path", default="", help="write the diff report here")
+    eval_diff.add_argument(
+        "--base-json",
+        default="",
+        help="compare against a saved report instead of running the base revision",
+    )
+
     return parser
 
 
@@ -1206,6 +1363,33 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "import":
         return run_import(args.path, merge=args.merge, dry_run=args.dry_run, rebind_chat=args.rebind_chat)
+    if args.command == "eval":
+        if args.eval_command == "run":
+            return run_eval_run(args.suite, args.json_path)
+        if args.eval_command == "capture":
+            if not (args.turn or args.thread):
+                print("Pass --turn <id> or --thread <id>. List candidates with: kaos eval turns")
+                return 1
+            return run_eval_capture(
+                turn=args.turn,
+                thread=args.thread,
+                last=args.last,
+                suite=args.suite,
+                name=args.name,
+                allow_pii=args.allow_pii,
+            )
+        if args.eval_command == "turns":
+            return run_eval_list_turns(args.thread, args.limit)
+        if args.eval_command == "diff":
+            return run_eval_diff(
+                base=args.base,
+                head=args.head,
+                suite=args.suite,
+                json_path=args.json_path,
+                base_json=args.base_json,
+            )
+        parser.parse_args(["eval", "--help"])
+        return 0
     if args.command == "import-from":
         return run_import_from(
             args.tool,

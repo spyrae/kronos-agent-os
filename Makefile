@@ -1,4 +1,4 @@
-.PHONY: setup run test test-all lint format deploy clean
+.PHONY: setup run test test-all evals evals-diff lint format deploy clean
 
 # Setup development environment
 setup:
@@ -17,6 +17,15 @@ test:
 # Run all tests including integration (requires API keys)
 test-all:
 	pytest -v
+
+# Replay the golden scenario suite (deterministic, no keys)
+evals:
+	pytest -m eval -v
+	python -m kronos.cli eval run
+
+# Compare behaviour against the base branch
+evals-diff:
+	python -m kronos.cli eval diff --base origin/main
 
 # Lint
 lint:

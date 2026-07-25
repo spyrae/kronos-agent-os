@@ -49,6 +49,38 @@ jobs:
       - run: kaos connect telegram
       - run: pytest -m "not integration" -v
 
+  evals:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so `kaos eval diff` can check out the base revision.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      # Deterministic behaviour gate: no provider keys, no network.
+      - run: pytest -m eval -v
+      - run: kaos eval run --json evals.json
+      - name: Behaviour diff vs base
+        if: github.event_name == 'pull_request'
+        run: |
+          kaos eval diff --base "origin/${{ github.base_ref }}" --json eval-diff.json \
+            > eval-diff.md || DIFF_FAILED=1
+          cat eval-diff.md >> "$GITHUB_STEP_SUMMARY"
+          exit "${DIFF_FAILED:-0}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-reports
+          path: |
+            evals.json
+            eval-diff.json
+          if-no-files-found: ignore
+
   quality-report:
     runs-on: ubuntu-latest
     needs: [lint, test]

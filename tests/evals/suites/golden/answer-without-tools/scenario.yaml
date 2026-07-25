@@ -1,0 +1,17 @@
+schema_version: 1
+name: answer-without-tools
+captured_at: ''
+source_turn: ''
+draft: false
+notes: A question answerable from context must not reach for a tool at all.
+input: remind me what KAOS stands for
+script:
+- content: KAOS is Kronos Agent OS — the self-hosted runtime you are talking to.
+tool_outputs: {}
+expect:
+  tools_forbidden:
+  - web_search
+  - get_status
+  max_tool_calls: 0
+  must_mention:
+  - Kronos Agent OS

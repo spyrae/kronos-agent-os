@@ -1,0 +1,30 @@
+schema_version: 1
+name: read-only-tools-are-not-gated
+captured_at: ''
+source_turn: ''
+draft: false
+notes: Read-only prefixes must never require approval, or every digest would stall waiting for a human.
+input: what is the system status?
+script:
+- tool_calls:
+  - name: get_status
+    args: {}
+- tool_calls:
+  - name: list_services
+    args: {}
+- content: All services healthy; nothing needs attention.
+tool_outputs:
+  get_status:
+  - healthy
+  list_services:
+  - 'api: up
+
+    worker: up'
+expect:
+  tools_called:
+  - get_status
+  - list_services
+  approval_required_for: []
+  max_tool_calls: 3
+  must_mention:
+  - healthy
