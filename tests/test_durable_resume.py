@@ -49,13 +49,25 @@ class ScriptedModel:
         return asyncio.get_event_loop().run_until_complete(self.ainvoke(messages))
 
 
-def _use_scripted_model(monkeypatch, agent, responses):
-    """Point graph at a scripted model and keep the prompt/supervisor out of it."""
+def _agent_with_scripted_model(monkeypatch, store, responses, *, tools=None):
+    """Build an agent that never needs a provider key.
+
+    The supervisor is built inside KronosAgent.__init__ and constructs a model,
+    so patching after construction is too late — that is what made these tests
+    pass locally (where .env has a key) and fail in CI.
+    """
     import kronos.graph as graph_module
+    from kronos.graph import KronosAgent
 
     monkeypatch.setattr(graph_module, "get_model", lambda tier: ScriptedModel(responses))
+    agent = KronosAgent(
+        tools=tools or [],
+        enable_memory=False,
+        enable_supervisor=False,
+        session_store=store,
+    )
     monkeypatch.setattr(agent, "_get_system_prompt", lambda: "system")
-    monkeypatch.setattr(agent, "_supervisor", None)
+    return agent
 
 
 @pytest.fixture
@@ -135,14 +147,11 @@ async def test_superseded_turn_is_not_resumed(store):
 
 @pytest.mark.asyncio
 async def test_resume_finishes_the_turn_and_delivers(store, monkeypatch):
-    from kronos.graph import KronosAgent
-
     turn_id = await _interrupted_turn(store)
     sender = Sender()
     mark_side_effect([sender])
 
-    agent = KronosAgent(tools=[sender], enable_memory=False, session_store=store)
-    _use_scripted_model(monkeypatch, agent, [AIMessage(content="Отчёт отправлен.")])
+    agent = _agent_with_scripted_model(monkeypatch, store, [AIMessage(content="Отчёт отправлен.")], tools=[sender])
 
     delivered: list[tuple[str, str]] = []
 
@@ -163,7 +172,6 @@ async def test_resume_finishes_the_turn_and_delivers(store, monkeypatch):
 async def test_resume_does_not_repeat_a_recorded_side_effect(store, monkeypatch):
     """The whole reason the ledger landed first."""
     from kronos.engine import side_effect_key
-    from kronos.graph import KronosAgent
 
     turn_id = await _interrupted_turn(store)
     sender = Sender()
@@ -173,8 +181,7 @@ async def test_resume_does_not_repeat_a_recorded_side_effect(store, monkeypatch)
     key = side_effect_key(sender, {"text": "отчёт"}, turn_id)
     await store.record_external_effect(key=key, turn_id=turn_id, tool=sender.name, result="sent #1")
 
-    agent = KronosAgent(tools=[sender], enable_memory=False, session_store=store)
-    _use_scripted_model(monkeypatch, agent, [AIMessage(content="Готово.")])
+    agent = _agent_with_scripted_model(monkeypatch, store, [AIMessage(content="Готово.")], tools=[sender])
 
     await agent.resume_abandoned_turns()
 
@@ -197,11 +204,8 @@ async def test_report_mode_keeps_the_old_behaviour(store):
 
 @pytest.mark.asyncio
 async def test_delivery_failure_still_completes_the_turn(store, monkeypatch):
-    from kronos.graph import KronosAgent
-
     await _interrupted_turn(store)
-    agent = KronosAgent(tools=[], enable_memory=False, session_store=store)
-    _use_scripted_model(monkeypatch, agent, [AIMessage(content="Ответ.")])
+    agent = _agent_with_scripted_model(monkeypatch, store, [AIMessage(content="Ответ.")])
 
     async def broken_deliver(thread_id, text):
         raise RuntimeError("telegram down")
