@@ -15,6 +15,7 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from kronos.config import settings
+from kronos.security.untrusted import mark_untrusted
 from kronos.tools.mcp_servers import build_mcp_config
 
 log = logging.getLogger("kronos.tools.gateway")
@@ -117,6 +118,11 @@ class MCPGateway:
 
         client = MultiServerMCPClient(combined)
         self._tools = await client.get_tools()
+
+        # An MCP tool runs in another process and returns whatever that process
+        # (or the site/API behind it) says. All of it is attacker-controllable, so
+        # the whole surface is marked untrusted rather than enumerated per server.
+        mark_untrusted(self._tools, reason="mcp")
 
         log.info("Loaded %d tools from %d servers", len(self._tools), len(combined))
         return self._tools

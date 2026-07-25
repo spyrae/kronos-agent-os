@@ -26,6 +26,7 @@ from kronos.cassettes import CassetteMissError
 from kronos.config import settings
 from kronos.security.loop_detector import LoopDetector, LoopLevel, get_nudge_message
 from kronos.security.sanitize import wrap_untrusted
+from kronos.security.untrusted import tool_output_is_untrusted
 from kronos.tools.error_handler import classify_tool_error
 
 log = logging.getLogger("kronos.engine")
@@ -281,21 +282,6 @@ def _default_should_compact_tool_output(tool: BaseTool) -> bool:
     return any(marker in name for marker in DEFAULT_COMPACT_OUTPUT_NAME_MARKERS)
 
 
-def _tool_output_is_untrusted(tool: BaseTool) -> bool:
-    """Whether a tool returns attacker-controllable external content.
-
-    Such output (web pages, fetched documents, third-party API bodies) must be
-    handed to the model as DATA, not trusted text, so an instruction injected
-    into it is not obeyed. Opt in per tool via ``metadata['untrusted_output']``
-    or an ``untrusted_output`` attribute — the same pattern as ``needs_approval``.
-    """
-    metadata = getattr(tool, "metadata", None) or {}
-    flag = metadata.get("untrusted_output")
-    if flag is None:
-        flag = getattr(tool, "untrusted_output", None)
-    return bool(flag)
-
-
 async def _maybe_await(value: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
@@ -337,7 +323,7 @@ async def execute_tool(
     """
     tool_call_id = tool_call.get("id", "")
     args = tool_call.get("args", {})
-    untrusted = _tool_output_is_untrusted(tool)
+    untrusted = tool_output_is_untrusted(tool)
 
     replayed = cassettes.read_tool_call(tool.name, args) if cassettes.replaying() else None
     if replayed is not None:

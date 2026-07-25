@@ -22,6 +22,7 @@ from langchain_core.tools import tool
 from kronos.cron.expenses.gmail import archiving_enabled, get_gmail_client
 from kronos.cron.expenses.ledger import get_ledger
 from kronos.cron.expenses.processor import _is_split_source
+from kronos.security.untrusted import mark_untrusted
 from kronos.tools.expense import VALID_CATEGORIES, add_expense
 
 log = logging.getLogger("kronos.tools.expense_pending")
@@ -141,3 +142,8 @@ def skip_pending_expense(pending_id: int) -> str:
     if row["message_id"]:
         ledger.record(message_id=row["message_id"], source=row["source"], status="skipped")
     return f"⏭ Трата #{pending_id} пропущена (не расход)."
+
+
+# Pending rows are built from parsed email — merchant names and descriptions come
+# from whoever sent the receipt, so the listing is external content.
+mark_untrusted([list_pending_expenses], reason="email-derived expenses")

@@ -9,6 +9,7 @@ import logging
 
 from langchain_core.tools import BaseTool, tool
 
+from kronos.security.untrusted import mark_untrusted
 from kronos.tools.browser import engine
 
 log = logging.getLogger("kronos.tools.browser")
@@ -88,10 +89,9 @@ _BROWSER_TOOLS: list[BaseTool] = [
 ]
 
 # Everything a browser returns is derived from an attacker-controllable web
-# page, so flag the output as untrusted. The engine wraps such results as data
-# before the model sees them (see engine._tool_output_is_untrusted).
-for _t in _BROWSER_TOOLS:
-    _t.metadata = {**(_t.metadata or {}), "untrusted_output": True}
+# page, so flag the output as untrusted. The engine frames such results as data
+# before the model sees them.
+mark_untrusted(_BROWSER_TOOLS, reason="browser")
 
 
 def get_browser_tools() -> list[BaseTool]:
