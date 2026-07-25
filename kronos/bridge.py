@@ -824,12 +824,23 @@ async def _handle_health(request: web.Request) -> web.Response:
     # are reported for visibility but don't fail health on their own (the
     # fallback chain still has other providers).
     healthy = connected
+    # A turn stuck in 'running' means a process died and nothing picked it up.
+    # Without this it stays invisible until someone reads the database.
+    turn_stats = {"running_turns": 0, "oldest_running_age_seconds": None}
+    try:
+        from kronos.session import SessionStore
+
+        turn_stats = await SessionStore(settings.db_path, agent_name=settings.agent_name).running_turn_stats()
+    except Exception as e:
+        log.debug("Could not read running-turn stats: %s", e)
+
     body = {
         "status": "ok" if healthy else "degraded",
         "agent": settings.agent_name,
         "telegram_connected": connected,
         "last_event_age_seconds": last_event_age,
         "providers_in_cooldown": cooldowns,
+        **turn_stats,
     }
     return web.json_response(body, status=200 if healthy else 503)
 
