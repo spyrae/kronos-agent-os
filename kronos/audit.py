@@ -6,10 +6,12 @@ Logs to JSONL files:
 - tool_calls.jsonl: durable tool-call trail
 """
 
+import hashlib
 import json
 import logging
 import math
 import re
+import threading
 import time
 from contextvars import ContextVar, Token
 from pathlib import Path
@@ -39,6 +41,131 @@ _SECRET_PATTERNS = (
     (re.compile(r"(api[_-]?key=)[^&\s]+", re.IGNORECASE), r"\1***REDACTED***"),
     (re.compile(r"(token=)[^&\s]+", re.IGNORECASE), r"\1***REDACTED***"),
 )
+
+
+# --- tamper-evident chaining -------------------------------------------------
+#
+# Each entry carries prev_hash (the previous entry's hash) and entry_hash, so a
+# deleted or edited line breaks the chain and `kaos audit verify` says where.
+# This does not prevent tampering — a local attacker can rewrite the whole file —
+# it makes silent tampering detectable, which is what an audit trail is for.
+GENESIS_HASH = "genesis"
+CHAINED_LOGS = ("tool_calls.jsonl", "audit.jsonl")
+
+_chain_tips: dict[str, str] = {}
+_chain_lock = threading.Lock()
+
+
+def entry_hash(entry: dict) -> str:
+    """Hash of one entry, excluding its own hash field."""
+    payload = {key: value for key, value in entry.items() if key != "entry_hash"}
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _last_hash_in_file(path: Path) -> str:
+    """Read the tip of an existing chain, or GENESIS_HASH for a new file."""
+    if not path.exists():
+        return GENESIS_HASH
+    tip = GENESIS_HASH
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                tip = str(row.get("entry_hash") or tip)
+    except OSError as e:
+        log.warning("Cannot read chain tip from %s: %s", path, e)
+    return tip
+
+
+def append_chained(path: Path, entry: dict) -> dict:
+    """Append an entry to a hash-chained JSONL log. Returns the written entry.
+
+    The lock covers read-modify-write of the in-memory tip: several async tasks
+    log concurrently in one process, and two entries claiming the same prev_hash
+    would look like tampering to the verifier.
+    """
+    with _chain_lock:
+        tip = _chain_tips.get(str(path))
+        if tip is None:
+            tip = _last_hash_in_file(path)
+        entry["prev_hash"] = tip
+        entry["entry_hash"] = entry_hash(entry)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+        _chain_tips[str(path)] = entry["entry_hash"]
+    return entry
+
+
+def verify_chain(path: Path) -> tuple[bool, str]:
+    """Verify a chained log. Returns (ok, detail) naming the first bad line.
+
+    Entries written before chaining existed have no hash. A leading run of them
+    is history, not tampering, so it is skipped and counted — otherwise every
+    existing installation would report a broken chain the moment it upgraded. An
+    unchained entry appearing *after* a chained one is a different matter: that
+    is a line someone inserted, and it fails.
+    """
+    if not path.exists():
+        return True, f"{path.name}: no log yet"
+
+    expected_prev = GENESIS_HASH
+    checked = 0
+    legacy = 0
+    started = False
+
+    with open(path, encoding="utf-8") as handle:
+        for number, line in enumerate(handle, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                return False, f"{path.name}:{number}: not valid JSON"
+
+            if "entry_hash" not in row:
+                if started:
+                    return False, f"{path.name}:{number}: unchained entry inserted after chaining began"
+                legacy += 1
+                continue
+
+            if not started:
+                # First chained entry: it links to genesis on a fresh log, or to
+                # nothing verifiable when it follows legacy entries.
+                started = True
+                expected_prev = row.get("prev_hash", GENESIS_HASH) if legacy else GENESIS_HASH
+
+            if row.get("prev_hash") != expected_prev:
+                return False, f"{path.name}:{number}: broken link (entry removed or reordered)"
+            if entry_hash(row) != row["entry_hash"]:
+                return False, f"{path.name}:{number}: content was modified"
+
+            expected_prev = row["entry_hash"]
+            checked += 1
+
+    detail = f"{path.name}: {checked} entries verified"
+    if legacy:
+        detail += f", {legacy} pre-chain entries skipped"
+    return True, detail
+
+
+def verify_audit_logs(audit_dir: Path | None = None) -> list[tuple[str, bool, str]]:
+    """Verify every chained log in a directory. Returns (name, ok, detail) rows."""
+    directory = audit_dir or _get_audit_dir()
+    return [(name, *verify_chain(directory / name)) for name in CHAINED_LOGS]
+
+
+def reset_chain_cache() -> None:
+    """Forget cached chain tips (tests, or after moving the audit directory)."""
+    with _chain_lock:
+        _chain_tips.clear()
 
 
 def _get_audit_dir() -> Path:
@@ -193,9 +320,7 @@ def log_tool_event(event: str, payload: dict[str, Any]) -> None:
             "output_tokens": payload.get("output_tokens"),
         }
 
-        audit_dir = _get_audit_dir()
-        with open(audit_dir / "tool_calls.jsonl", "a") as f:
-            f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+        append_chained(_get_audit_dir() / "tool_calls.jsonl", entry)
     except Exception as e:
         log.debug("Tool audit logging failed: %s", e)
 
@@ -239,8 +364,7 @@ def log_request(
             "output_preview": mask_pii(output_text)[:100],
         }
 
-        with open(audit_dir / "audit.jsonl", "a") as f:
-            f.write(json.dumps(audit_entry, ensure_ascii=False) + "\n")
+        append_chained(audit_dir / "audit.jsonl", audit_entry)
 
         # Cost log (compact, for aggregation)
         cost_entry = {

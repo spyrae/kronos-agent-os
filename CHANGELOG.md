@@ -6,6 +6,29 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Added
 
+- **Governance as code (`policy.yaml`)** — one validated file for capability
+  gates, approval rules, budgets, untrusted-output handling, egress, retention
+  and PII masking, with `kaos policy report` printing the effective value and
+  its source (env > policy > default). An invalid policy stops startup instead
+  of reverting to permissive defaults; absent the file nothing changes. See
+  [ADR-0001](docs/decisions/ADR-0001-governance-as-code.md).
+- **Untrusted content, closed properly** — every external tool surface is now
+  marked untrusted (all MCP tools including after `mcp_reload`, public Telegram
+  channels, email-derived expense listings, ingested PDF/DOCX text), not just
+  browser tools. Injection attempts inside that content are detected, audited
+  and counted, with `log` / `strip` / `block` reactions. Detection patterns
+  cover Russian as well as English — the agent's primary language was
+  previously unguarded. Corpus: `tests/fixtures/injections.txt` (30 entries).
+- **Egress allowlist** — `egress.mode: allowlist` restricts reachable hosts for
+  browser navigation and skill imports, and `allowed_commands` restricts stdio
+  MCP server commands. `dry_run: true` logs what would be blocked so a rollout
+  can be observed before enforcement. localhost and private ranges stay
+  reachable; demo mode forces enforcement.
+- **Tamper-evident audit** — `tool_calls.jsonl` and `audit.jsonl` are
+  hash-chained (`prev_hash` / `entry_hash`); `kaos audit verify` reports the
+  first edited, removed or reordered line. Pre-chain entries from an older
+  install are skipped and counted rather than reported as tampering.
+- New docs: [Governance](docs/GOVERNANCE.md).
 - **Agent CI: cassettes, golden scenarios, behaviour diff** — `kaos eval
   capture/run/diff/turns`. Cassettes (`KAOS_CASSETTE_MODE=off|record|replay`)
   give byte-stable replay of provider and tool calls, wired into

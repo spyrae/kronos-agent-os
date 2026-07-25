@@ -462,6 +462,33 @@ def run_doctor() -> int:
         f"bundle schema v{BUNDLE_SCHEMA_VERSION}; importers: {', '.join(_importers())}",
     )
 
+    from kronos.policy import PolicyError, load_policy
+
+    try:
+        _policy = load_policy()
+        if _policy.loaded_from_file:
+            ok("Governance policy", f"{_policy.source_path}; run 'kaos policy report' for effective values")
+        else:
+            warn("Governance policy", "no policy.yaml; using code defaults (copy policy.example.yaml to declare one)")
+        _egress = _policy.egress
+        if _egress.mode == "allowlist" and not _egress.dry_run:
+            ok("Egress", f"allowlist enforced, {len(_egress.domains)} domain(s)")
+        elif _egress.mode == "allowlist":
+            warn("Egress", f"allowlist in dry-run: {len(_egress.domains)} domain(s) listed, nothing blocked yet")
+        else:
+            warn("Egress", "open: any host reachable (set egress.mode=allowlist to restrict)")
+    except PolicyError as e:
+        fail("Governance policy", str(e).splitlines()[0])
+
+    from kronos.audit import verify_audit_logs
+
+    _chain = verify_audit_logs()
+    _broken = [name for name, chain_ok, _ in _chain if not chain_ok]
+    if _broken:
+        warn("Audit chain", f"integrity check failed for {', '.join(_broken)}; run 'kaos audit verify'")
+    else:
+        ok("Audit chain", "hash chain intact")
+
     from kronos import cassettes
     from kronos.evals.scenario import discover as _discover_scenarios
 
@@ -957,6 +984,84 @@ def run_import_from(
     return 0
 
 
+def run_policy_report(as_json: bool) -> int:
+    """Print the effective governance posture and where each value came from."""
+    from kronos.policy import PolicyError, effective_values, load_policy
+
+    try:
+        policy = load_policy()
+    except PolicyError as e:
+        print(f"Policy error: {e}")
+        return 1
+
+    rows = effective_values(policy)
+    if as_json:
+        print(
+            json.dumps(
+                {"source_path": policy.source_path, "settings": rows, "policy": policy.model_dump(mode="json")},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+
+    origin = policy.source_path or "(no policy file — code defaults)"
+    print(f"Effective policy: {origin}\n")
+    print(f"{'setting':<38} {'value':<10} source   policy key")
+    print("-" * 92)
+    for row in rows:
+        print(f"{row['setting']:<38} {str(row['value']):<10} {row['source']:<8} {row['policy_key']}")
+
+    budgets = policy.budgets
+    egress = policy.egress
+    print(
+        "\nBudgets:",
+        f"daily ${budgets.daily_usd}",
+        f"session ${budgets.session_usd}",
+        f"degrade at {int(budgets.degrade_at_fraction * 100)}%",
+    )
+    if budgets.per_agent_daily_usd:
+        print(
+            "  per agent:", ", ".join(f"{name} ${limit}" for name, limit in sorted(budgets.per_agent_daily_usd.items()))
+        )
+    mode = f"{egress.mode}{' (dry-run)' if egress.dry_run and egress.mode == 'allowlist' else ''}"
+    print("Egress:", mode, f"| domains: {', '.join(egress.domains) or 'none listed'}")
+    if egress.allowed_commands:
+        print("  MCP commands:", ", ".join(egress.allowed_commands))
+    print(
+        "Retention:",
+        f"turn journal {policy.retention.turn_journal_days}d,",
+        f"audit {policy.retention.audit_jsonl_days}d,",
+        f"swarm messages {policy.retention.swarm_messages_days}d",
+    )
+    print(
+        "Untrusted output:",
+        f"external default={policy.untrusted_output.default_for_external},",
+        f"on injection={policy.untrusted_output.on_injection}",
+    )
+    if not policy.loaded_from_file:
+        print("\nNo policy.yaml found. Copy policy.example.yaml to declare a posture explicitly.")
+    return 0
+
+
+def run_audit_verify(as_json: bool) -> int:
+    """Verify the hash chain of the audit logs."""
+    from kronos.audit import verify_audit_logs
+
+    results = verify_audit_logs()
+    if as_json:
+        print(json.dumps([{"log": name, "ok": ok, "detail": detail} for name, ok, detail in results], indent=2))
+    else:
+        for name, ok, detail in results:
+            print(f"[{'OK' if ok else 'FAIL'}] {detail}")
+
+    broken = [name for name, ok, _ in results if not ok]
+    if broken:
+        print(f"\nChain broken in: {', '.join(broken)}. Entries were edited, removed or reordered.")
+        return 1
+    return 0
+
+
 DEFAULT_EVAL_SUITE = "tests/evals/suites/golden"
 
 
@@ -1246,6 +1351,16 @@ def build_parser() -> argparse.ArgumentParser:
     import_from.add_argument("--out", "-o", default="", help="keep the intermediate bundle at this path")
     import_from.add_argument("--convert-only", action="store_true", help="write the bundle without importing it")
 
+    policy_cmd = sub.add_parser("policy", help="inspect the governance policy")
+    policy_sub = policy_cmd.add_subparsers(dest="policy_command")
+    policy_report = policy_sub.add_parser("report", help="print the effective policy and value sources")
+    policy_report.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+
+    audit_cmd = sub.add_parser("audit", help="audit trail integrity")
+    audit_sub = audit_cmd.add_subparsers(dest="audit_command")
+    audit_verify = audit_sub.add_parser("verify", help="verify the audit log hash chain")
+    audit_verify.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+
     evals = sub.add_parser("eval", help="golden scenarios: capture, replay, diff")
     evals_sub = evals.add_subparsers(dest="eval_command")
 
@@ -1374,6 +1489,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "import":
         return run_import(args.path, merge=args.merge, dry_run=args.dry_run, rebind_chat=args.rebind_chat)
+    if args.command == "policy":
+        if args.policy_command == "report":
+            return run_policy_report(args.as_json)
+        parser.parse_args(["policy", "--help"])
+        return 0
+    if args.command == "audit":
+        if args.audit_command == "verify":
+            return run_audit_verify(args.as_json)
+        parser.parse_args(["audit", "--help"])
+        return 0
     if args.command == "eval":
         if args.eval_command == "run":
             return run_eval_run(args.suite, args.json_path)
