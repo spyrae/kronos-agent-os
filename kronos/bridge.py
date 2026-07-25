@@ -1181,13 +1181,17 @@ async def run_bridge(agent: KronosAgent) -> None:
                     swarm.incr_metric("duplicate_replies_avoided")
                     return
 
-                # Atomic arbitration across all agents.
+                # Atomic arbitration across all agents. The cap is this agent's
+                # own tolerance (agents.yaml max_implicit_replies): it decides
+                # when *I* stand down, so a talkative generalist can be told to
+                # yield sooner without touching anyone else's routing.
                 outcome = swarm.can_send_claim(
                     chat_id=event.chat_id,
                     topic_id=topic_id_inbound,
                     root_msg_id=root_msg_id,
                     agent_name=settings.agent_name,
                     tier=decision.tier,
+                    max_implicit_replies=_group_router.max_implicit_replies,
                 )
                 if not outcome.won:
                     log.info("[Swarm] %s stands down: %s", settings.agent_name, outcome.reason)

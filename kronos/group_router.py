@@ -226,6 +226,11 @@ class GroupRouter:
             # Tier 3: auto-react if meaningfully disagree (with guards)
             msg_id = event.message.id
 
+            # Guard 0: quiet mode — out of personal budget, so no volunteering.
+            quiet = self._quiet_reason()
+            if quiet:
+                return RoutingDecision(False, 0, 0, f"quiet mode ({quiet})", addressing=addressing)
+
             # Guard 1: cooldown — max 1 peer reaction per 5 minutes
             now = time.monotonic()
             if now - self._last_peer_reaction < PEER_REACTION_COOLDOWN:
@@ -283,6 +288,13 @@ class GroupRouter:
                 addressing=addressing,
             )
 
+        # Quiet mode: an agent that spent its personal budget still answers when
+        # addressed (Tier 1, above) but stops volunteering. Checked before the
+        # classification and relevance calls, because those are the spend.
+        quiet = self._quiet_reason()
+        if quiet:
+            return RoutingDecision(False, 0, 0, f"quiet mode ({quiet})", addressing=addressing)
+
         # Ownership: recognise the subject before spending a relevance call.
         topic = await self._topic_key(event, text)
         owner = self._topic_owners.get(topic, "")
@@ -333,6 +345,27 @@ class GroupRouter:
             owner_sla_minutes=owner_sla,
         )
 
+    @property
+    def max_implicit_replies(self) -> int:
+        """How many peer replies this agent tolerates before standing down.
+
+        Per-agent override from agents.yaml, so a chatty generalist can be told
+        to yield sooner than the swarm default without changing anyone else.
+        """
+        mine = self._profiles[self.agent_name].max_implicit_replies if self.agent_name in self._profiles else None
+        return MAX_PEER_REPLIES if mine is None else mine
+
+    def _quiet_reason(self) -> str:
+        """Non-empty when this agent has spent its personal daily budget."""
+        try:
+            from kronos.security.cost_guardian import get_guardian
+
+            return get_guardian().quiet_reason(self.agent_name)
+        except Exception as e:  # pragma: no cover - defensive
+            # A budget read must never be the reason an agent goes mute.
+            log.debug("[GroupRouter] Quiet-mode check failed: %s", e)
+            return ""
+
     async def should_still_respond(self, event, client, tier: int) -> bool:
         """Re-check after delay: did too many peers already respond?
 
@@ -342,7 +375,7 @@ class GroupRouter:
         if tier == 1:
             return True
         count = await self._count_peer_replies(event, client)
-        if count >= MAX_PEER_REPLIES:
+        if count >= self.max_implicit_replies:
             log.info(
                 "[GroupRouter] %s: %d peers already replied (tier=%d), skipping",
                 self.agent_name,
