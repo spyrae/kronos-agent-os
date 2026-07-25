@@ -1,0 +1,32 @@
+schema_version: 1
+name: approval-gated-write
+captured_at: ''
+source_turn: ''
+draft: false
+notes: add_expense is on the default approval list; a policy change that stops gating it must fail here.
+input: add the 12.50 coffee to expenses
+script:
+- tool_calls:
+  - name: get_pending_expenses
+    args: {}
+- tool_calls:
+  - name: add_expense
+    args:
+      amount: 12.5
+      category: food
+- content: Added 12.50 to food. Pending queue is now empty.
+tool_outputs:
+  get_pending_expenses:
+  - '1 pending: coffee 12.50 USD'
+  add_expense:
+  - 'ok: expense recorded'
+expect:
+  tools_called:
+  - get_pending_expenses
+  - add_expense
+  ordered: true
+  approval_required_for:
+  - add_expense
+  max_tool_calls: 4
+  must_mention:
+  - '12.50'

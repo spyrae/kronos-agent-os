@@ -146,6 +146,8 @@ kaos demo-seed --reset # seed public-safe dashboard demo data
 kaos export --out a.kaos # export this agent as a portable bundle
 kaos import a.kaos --dry-run # preview importing a bundle
 kaos import-from auto <path> # bring history from ChatGPT/Claude/Obsidian/Telegram/Letta
+kaos eval run         # replay golden scenarios (no keys, no network)
+kaos eval diff --base origin/main # what did my change move?
 kaos connect telegram # guided Telegram setup check
 kaos templates list  # list bundled agent templates
 kaos skills packs    # list bundled skill packs
@@ -245,6 +247,23 @@ never included, and imported skills arrive as drafts for review. Importers exist
 for ChatGPT, Claude projects, Obsidian vaults, Telegram exports, and Letta agent
 files. See [Portability](docs/PORTABILITY.md).
 
+## Behaviour You Can Check
+
+An agent that changes behaviour quietly is worse than one that fails loudly, so
+KAOS ships its own CI for agent behaviour.
+
+```bash
+kaos eval turns                    # what has this agent actually done?
+kaos eval capture --turn <id>      # turn a real turn into a golden scenario
+kaos eval run                      # replay the suite: no keys, no network
+kaos eval diff --base origin/main  # tools, turns, gating: what moved?
+```
+
+Scenarios replay the model turns a real run produced, so tool wiring, call order,
+approval gating and budgets stay verifiable even when the prompt changes.
+Cassettes cover the other half — byte-stable replay of provider and tool calls.
+See [Agent CI](docs/EVALS.md).
+
 ## Sub-Agents And Swarm Mode
 
 KAOS Swarm Mode is the optional multi-agent coordination layer inside the broader Agent OS.
@@ -291,6 +310,7 @@ See [docs/SECURITY.md](docs/SECURITY.md) and [SECURITY.md](SECURITY.md).
 - [Dashboard](docs/DASHBOARD.md)
 - [Memory](docs/MEMORY.md)
 - [Portability](docs/PORTABILITY.md)
+- [Agent CI](docs/EVALS.md)
 - [Skills](docs/SKILLS.md)
 - [Cron Jobs](docs/CRON-JOBS.md)
 - [Deployment](docs/DEPLOYMENT.md)

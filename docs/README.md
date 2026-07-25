@@ -18,6 +18,7 @@ Start here if you want to understand or contribute to Kronos Agent OS.
 | [Runtime](RUNTIME.md) | CLI, connectors, sessions, and execution lifecycle |
 | [Memory](MEMORY.md) | Session memory, hybrid recall, knowledge graph, sleep compute |
 | [Portability](PORTABILITY.md) | `.kaos` bundles: export, import, and bringing history from other tools |
+| [Agent CI](EVALS.md) | Cassettes, golden scenarios, behaviour diff, and the deploy gate |
 | [Skills](SKILLS.md) | Workspace-local reusable procedures |
 | [MCP & Tools](MCP.md) | Static MCP, tool gateway, dynamic tool gates |
 | [Automations](AUTOMATIONS.md) | Scheduler, jobs, notifications, audit trail |

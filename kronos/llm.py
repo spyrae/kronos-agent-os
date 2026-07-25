@@ -401,7 +401,19 @@ def get_orchestrator_model() -> BaseChatModel:
 
 
 def _get_model_from_chain(chain: list[str], label: str) -> BaseChatModel:
-    """Get a fallback-capable chat model from an explicit provider chain."""
+    """Get a fallback-capable chat model from an explicit provider chain.
+
+    This is the single place every tier resolves through, so cassette record and
+    replay hook in here — including the single-provider shortcut, which returns a
+    raw provider model rather than a FallbackChatModel.
+    """
+    from kronos import cassettes
+
+    if cassettes.replaying():
+        # Replay needs neither keys nor providers: that is what makes eval runs
+        # work in CI with no secrets configured.
+        return cassettes.replay_model(label=label)  # type: ignore[return-value]
+
     configured = [provider for provider in chain if _has_key(provider)]
     if not configured:
         configured_text = ", ".join(chain) or "(empty chain)"
@@ -409,12 +421,17 @@ def _get_model_from_chain(chain: list[str], label: str) -> BaseChatModel:
     if len(configured) == 1:
         model = _state.get_or_create(configured[0])
         if model:
-            return model
-    return FallbackChatModel(configured, label)  # type: ignore[return-value]
+            return cassettes.wrap_model(model, label=label)
+    return cassettes.wrap_model(FallbackChatModel(configured, label), label=label)  # type: ignore[return-value]
 
 
 def get_fallback_model() -> BaseChatModel:
     """Get a fallback model using the union of configured chains."""
+    from kronos import cassettes
+
+    if cassettes.replaying():
+        return cassettes.replay_model(label="fallback")  # type: ignore[return-value]
+
     seen: set[str] = set()
     for tier in (ModelTier.LITE, ModelTier.STANDARD):
         for provider in provider_chain(tier):
@@ -427,7 +444,7 @@ def get_fallback_model() -> BaseChatModel:
                 continue
             model = _state.get_or_create(provider)
             if model:
-                return model
+                return cassettes.wrap_model(model, label="fallback")
 
     raise RuntimeError("No fallback LLM providers configured")
 

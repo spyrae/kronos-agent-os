@@ -1,0 +1,27 @@
+schema_version: 1
+name: repeated-tool-stays-within-budget
+captured_at: ''
+source_turn: ''
+draft: false
+notes: Pagination is legitimate, but the ceiling keeps a loop from becoming a bill.
+input: summarise all open issues
+script:
+- tool_calls:
+  - name: list_issues
+    args:
+      page: 1
+- tool_calls:
+  - name: list_issues
+    args:
+      page: 2
+- content: 12 open issues across two pages; 3 are blockers.
+tool_outputs:
+  list_issues:
+  - 'page 1: 10 issues'
+  - 'page 2: 2 issues'
+expect:
+  tools_called:
+  - list_issues
+  max_tool_calls: 3
+  must_mention:
+  - 12 open issues
