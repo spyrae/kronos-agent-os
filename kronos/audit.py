@@ -29,7 +29,10 @@ COST_TABLE = {
 
 _audit_dir: Path | None = None
 _tool_audit_context: ContextVar[dict[str, str]] = ContextVar("tool_audit_context", default={})
-_SECRET_FIELD_NAMES = {"token", "secret", "password", "api_key", "apikey", "key", "hash", "authorization"}
+# Field names whose values are secrets regardless of content. Public because
+# every path that persists agent data (audit log, exported bundles) must redact
+# the same set — a second copy of this list would drift.
+SECRET_FIELD_NAMES = frozenset({"token", "secret", "password", "api_key", "apikey", "key", "hash", "authorization"})
 _SECRET_PATTERNS = (
     (re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]{12,}"), "Bearer ***REDACTED***"),
     (re.compile(r"sk-[A-Za-z0-9_-]{12,}"), "sk-***REDACTED***"),
@@ -71,11 +74,21 @@ def get_tool_audit_context() -> dict[str, str]:
     return dict(_tool_audit_context.get())
 
 
-def _redact_string(value: str, *, max_len: int = 500) -> str:
-    redacted = value
+def redact_secrets(text: str) -> str:
+    """Replace secret-like substrings (bearer tokens, sk- keys, key= params).
+
+    Unlike ``_redact_string`` this neither masks PII nor truncates, so callers
+    that must preserve full content (exported bundles) can still strip
+    credentials.
+    """
+    redacted = text
     for pattern, replacement in _SECRET_PATTERNS:
         redacted = pattern.sub(replacement, redacted)
-    redacted = mask_pii(redacted)
+    return redacted
+
+
+def _redact_string(value: str, *, max_len: int = 500) -> str:
+    redacted = mask_pii(redact_secrets(value))
     if len(redacted) > max_len:
         return f"{redacted[: max_len - 3]}..."
     return redacted
@@ -84,7 +97,7 @@ def _redact_string(value: str, *, max_len: int = 500) -> str:
 def redact_tool_payload(value: Any, key: str = "") -> Any:
     """Redact secret-like fields before tool args/results reach storage or UI."""
     key_name = key.lower().replace("-", "_")
-    if key_name in _SECRET_FIELD_NAMES or key_name.endswith(("_token", "_secret", "_password", "_api_key", "_key")):
+    if key_name in SECRET_FIELD_NAMES or key_name.endswith(("_token", "_secret", "_password", "_api_key", "_key")):
         return "***REDACTED***"
     if isinstance(value, dict):
         return {str(k): redact_tool_payload(v, str(k)) for k, v in value.items()}

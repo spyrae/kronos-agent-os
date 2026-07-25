@@ -143,6 +143,9 @@ kaos chat --no-memory # local chat without long-term memory
 kaos chat --tools    # local CLI chat with configured static MCP tools
 kaos dashboard       # start the local dashboard API/UI
 kaos demo-seed --reset # seed public-safe dashboard demo data
+kaos export --out a.kaos # export this agent as a portable bundle
+kaos import a.kaos --dry-run # preview importing a bundle
+kaos import-from auto <path> # bring history from ChatGPT/Claude/Obsidian/Telegram/Letta
 kaos connect telegram # guided Telegram setup check
 kaos templates list  # list bundled agent templates
 kaos skills packs    # list bundled skill packs
@@ -226,6 +229,22 @@ templates/
 docs/                  # docs index, runtime, memory, skills, MCP, automations, coordination
 ```
 
+## Bring Your History
+
+An agent is a persona, a set of skills, and a memory of you — so KAOS makes that
+portable instead of locking it in.
+
+```bash
+kaos export --out my-agent.kaos            # move or back up an agent
+kaos import my-agent.kaos --dry-run        # see exactly what would change
+kaos import-from auto ~/chatgpt-export     # start from history you already have
+```
+
+Bundles are content-hashed and deterministic, secrets and Telegram sessions are
+never included, and imported skills arrive as drafts for review. Importers exist
+for ChatGPT, Claude projects, Obsidian vaults, Telegram exports, and Letta agent
+files. See [Portability](docs/PORTABILITY.md).
+
 ## Sub-Agents And Swarm Mode
 
 KAOS Swarm Mode is the optional multi-agent coordination layer inside the broader Agent OS.
@@ -271,6 +290,7 @@ See [docs/SECURITY.md](docs/SECURITY.md) and [SECURITY.md](SECURITY.md).
 - [Security](docs/SECURITY.md)
 - [Dashboard](docs/DASHBOARD.md)
 - [Memory](docs/MEMORY.md)
+- [Portability](docs/PORTABILITY.md)
 - [Skills](docs/SKILLS.md)
 - [Cron Jobs](docs/CRON-JOBS.md)
 - [Deployment](docs/DEPLOYMENT.md)
