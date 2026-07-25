@@ -206,6 +206,19 @@ class SessionStore:
                 CREATE INDEX IF NOT EXISTS idx_pending_approvals_status
                     ON pending_approvals(status, requested_at)
             """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS external_effects (
+                    idempotency_key TEXT PRIMARY KEY,
+                    turn_id         TEXT NOT NULL,
+                    tool            TEXT NOT NULL,
+                    result          TEXT NOT NULL,
+                    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_external_effects_turn
+                    ON external_effects(turn_id, created_at)
+            """)
             await db.commit()
             self._initialized = True
 
@@ -297,6 +310,61 @@ class SessionStore:
                 (turn_id, tool_call_id, content),
             )
             await db.commit()
+
+    async def get_external_effect(self, key: str) -> str | None:
+        """Return the recorded result of a side-effecting call, if it already ran.
+
+        This is what makes re-running a turn safe: a message that was already
+        sent must not be sent twice just because the process died before the
+        journal recorded the answer.
+        """
+        if not key:
+            return None
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                "SELECT result FROM external_effects WHERE idempotency_key = ?",
+                (key,),
+            )
+            row = await cursor.fetchone()
+        return str(row[0]) if row else None
+
+    async def record_external_effect(self, *, key: str, turn_id: str, tool: str, result: str) -> bool:
+        """Record that a side effect happened. Returns False if it already was.
+
+        INSERT OR IGNORE rather than a check-then-write: two concurrent retries of
+        the same call must not both conclude they are first.
+        """
+        if not key:
+            return False
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                """
+                INSERT OR IGNORE INTO external_effects
+                    (idempotency_key, turn_id, tool, result)
+                VALUES (?, ?, ?, ?)
+                """,
+                (key, turn_id, tool, result),
+            )
+            await db.commit()
+            return bool(cursor.rowcount)
+
+    async def list_external_effects(self, turn_id: str) -> list[dict]:
+        """Effects recorded for one turn (dashboard / debugging)."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                """
+                SELECT idempotency_key, tool, result, created_at
+                FROM external_effects WHERE turn_id = ? ORDER BY created_at
+                """,
+                (turn_id,),
+            )
+            rows = await cursor.fetchall()
+        return [
+            {"idempotency_key": row[0], "tool": row[1], "result": row[2], "created_at": str(row[3])} for row in rows
+        ]
 
     def _pending_approval_from_row(self, row) -> dict | None:
         """Convert a pending_approvals row into a JSON-safe dict."""

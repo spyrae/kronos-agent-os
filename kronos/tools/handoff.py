@@ -11,6 +11,7 @@ from langchain_core.tools import tool
 from kronos.audit import get_tool_audit_context
 from kronos.config import settings
 from kronos.group_router import AGENT_PROFILES
+from kronos.security.effects import mark_side_effect
 from kronos.swarm_store import get_swarm
 
 
@@ -67,3 +68,8 @@ def handoff_to_agent(to_agent: str, why: str) -> str:
     role = AGENT_PROFILES[to_agent].get("role", "")
     role_txt = f" ({role})" if role else ""
     return f"↪️ Передал запрос агенту {to_agent}{role_txt} — он ответит здесь. #{handoff_id}"
+
+
+# Re-running a turn must not repeat these: a duplicate reminder, handoff or MCP
+# mutation is a visible bug, not a harmless retry.
+mark_side_effect([handoff_to_agent], reason="swarm handoff")

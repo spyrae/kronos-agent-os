@@ -10,6 +10,7 @@ from langchain_core.tools import tool
 from kronos.audit import get_tool_audit_context
 from kronos.config import settings
 from kronos.group_router import AGENT_PROFILES
+from kronos.security.effects import mark_side_effect
 from kronos.swarm_store import get_swarm
 
 
@@ -55,3 +56,8 @@ def ask_agent_memory(to_agent: str, query: str) -> str:
     )
     swarm.incr_metric("memory_requests_created")
     return f"🧠 Спросил {to_agent}, что у него есть про это — он поделится здесь. #{request_id}"
+
+
+# Re-running a turn must not repeat these: a duplicate reminder, handoff or MCP
+# mutation is a visible bug, not a harmless retry.
+mark_side_effect([ask_agent_memory], reason="swarm memory request")

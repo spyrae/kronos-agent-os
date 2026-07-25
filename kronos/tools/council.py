@@ -10,6 +10,7 @@ from langchain_core.tools import tool
 from kronos.audit import get_tool_audit_context
 from kronos.config import settings
 from kronos.group_router import AGENT_PROFILES
+from kronos.security.effects import mark_side_effect
 from kronos.swarm_store import get_swarm
 
 
@@ -72,3 +73,8 @@ def convene_council(question: str, participants: list[str]) -> str:
     )
     swarm.incr_metric("councils_convened")
     return f"🏛 Созвал консилиум #{session_id}: {', '.join(names)}. Соберу их позиции и синтезирую единый ответ здесь."
+
+
+# Re-running a turn must not repeat these: a duplicate reminder, handoff or MCP
+# mutation is a visible bug, not a harmless retry.
+mark_side_effect([convene_council], reason="swarm council")

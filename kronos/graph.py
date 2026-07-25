@@ -240,6 +240,17 @@ class KronosAgent:
                 content=content,
             )
 
+        async def get_external_effect(key: str) -> str | None:
+            return await self._session_store.get_external_effect(key)
+
+        async def record_external_effect(key: str, tool_name: str, result: str) -> None:
+            await self._session_store.record_external_effect(
+                key=key,
+                turn_id=turn_id,
+                tool=tool_name,
+                result=result,
+            )
+
         async def request_tool_approval(tool: BaseTool, tool_call: dict) -> str:
             # current_delegation() is set when the approval originates inside a
             # sub-agent — it records the parent delegate_to_X call so the resume
@@ -258,6 +269,9 @@ class KronosAgent:
             "get_cached_tool_result": get_cached_tool_result,
             "save_tool_result": save_tool_result,
             "request_tool_approval": request_tool_approval,
+            "get_external_effect": get_external_effect,
+            "record_external_effect": record_external_effect,
+            "turn_id": turn_id,
         }
         if approved_tool_name:
             kwargs["needs_tool_approval"] = self._approval_scope(approved_tool_name, approved_tool_args)
