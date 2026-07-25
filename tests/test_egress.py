@@ -190,7 +190,10 @@ def test_search_libraries_respect_the_allowlist(tmp_path, monkeypatch):
 
     _policy(tmp_path, monkeypatch, {"mode": "allowlist", "dry_run": False, "domains": ["api.exa.ai"]})
     monkeypatch.setattr(settings, "brave_api_key", "test-key")
-    monkeypatch.setattr(settings, "exa_api_key", "test-key")
+    # exa reads its key from the environment, not from settings — patching only
+    # the setting made this test pass locally (where the key exists) and fail in
+    # CI (where it does not).
+    monkeypatch.setenv("EXA_API_KEY", "test-key")
     monkeypatch.setattr(brave, "_brave_unavailable_until", 0.0, raising=False)
 
     # Brave's host is not listed → blocked before any request is made, and the
