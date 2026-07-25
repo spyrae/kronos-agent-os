@@ -2,6 +2,38 @@
 
 All notable changes to Kronos Agent OS are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **Agent portability (`.kaos` bundles)** — `kaos export` / `kaos import`
+  move an agent's persona, skills, facts, knowledge graph, shared facts and
+  pending schedule between installations. Bundles carry a `manifest.json`
+  with a SHA-256 per artifact; import verifies it before writing anything and
+  aborts on a single altered byte. Exports are deterministic (sorted JSONL,
+  fixed archive timestamps), so re-exporting unchanged state yields a
+  byte-identical file.
+- **Import from other tools** — `kaos import-from <tool|auto> <path>` converts
+  a foreign export into a bundle, then runs the same verified import path:
+  ChatGPT (`conversations.json`, directory, or export zip — keeps the retained
+  branch of each message tree), Claude projects (directory or `projects.json`),
+  Obsidian vaults (`[[wikilinks]]` become graph relations), Telegram
+  (`result.json`, opt-in per chat), and Letta `.af` agent files.
+- `kaos doctor` reports the bundle schema version and available importers.
+- New docs: [Portability](docs/PORTABILITY.md).
+
+### Changed
+
+- `kronos.audit.redact_secrets` is now public (was `_redact_string`'s inline
+  loop) so exports and audit logs share one copy of the credential patterns.
+
+### Fixed
+
+- `kronos.portability.export` and `import_` resolve `kronos.workspace.ws` at
+  call time instead of binding it at import time; a module-level binding
+  ignored a swapped workspace, which also made an earlier test pass against
+  the wrong directory.
+
 ## [0.2.0] - 2026-05-26
 
 ### Added

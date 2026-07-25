@@ -449,6 +449,14 @@ def run_doctor() -> int:
     else:
         ok("Telegram topic policy", "not configured; legacy group routing")
 
+    from kronos.portability import BUNDLE_SCHEMA_VERSION
+    from kronos.portability.importers import available as _importers
+
+    ok(
+        "Portability",
+        f"bundle schema v{BUNDLE_SCHEMA_VERSION}; importers: {', '.join(_importers())}",
+    )
+
     print("KAOS doctor\n")
     failed = 0
     for status, name, detail in checks:
@@ -824,6 +832,114 @@ def run_demo_seed(data_dir: str, workspace: str, swarm_db: str, reset: bool) -> 
     return 0
 
 
+def run_export(output: str, *, notes: bool, sessions: bool, transport_ids: bool) -> int:
+    """Export this agent into a `.kaos` bundle."""
+    from kronos.portability import BundleError, export_bundle
+
+    try:
+        report = export_bundle(
+            output,
+            include_notes=notes,
+            include_sessions=sessions,
+            include_transport_ids=transport_ids,
+        )
+    except BundleError as e:
+        print(f"Export failed: {e}")
+        return 1
+
+    print(f"Exported agent '{settings.agent_name}' → {report.path}")
+    print(f"  sections: {', '.join(report.manifest.includes)}")
+    for key, value in sorted(report.counts.items()):
+        print(f"  {key}: {value}")
+    for warning in report.warnings:
+        print(f"  ! {warning}")
+    if transport_ids:
+        print("  ! bundle contains Telegram chat ids — treat it as private")
+    return 0
+
+
+def run_import(path: str, *, merge: str, dry_run: bool, rebind_chat: int | None) -> int:
+    """Import a `.kaos` bundle into this agent."""
+    from kronos.portability import BundleError, import_bundle
+
+    try:
+        report = import_bundle(path, merge=merge, dry_run=dry_run, rebind_chat=rebind_chat)
+    except BundleError as e:
+        print(f"Import failed: {e}")
+        return 1
+
+    print(report.render())
+    if dry_run:
+        print("\nNothing was written. Re-run without --dry-run to apply.")
+    elif report.created.get("skills"):
+        print("\nImported skills are drafts — review them, then approve with the agent's approve_skill tool.")
+    return 0
+
+
+def run_import_from(
+    tool: str,
+    path: str,
+    *,
+    merge: str,
+    dry_run: bool,
+    limit: int | None,
+    chats: list[str] | None,
+    output: str,
+    convert_only: bool,
+) -> int:
+    """Convert a foreign export into a bundle, then import it."""
+    from tempfile import TemporaryDirectory
+
+    from kronos.portability import BundleError, import_bundle
+    from kronos.portability.importers import detect_importer, get_importer
+
+    name = tool
+    if tool == "auto":
+        name = detect_importer(path) or ""
+        if not name:
+            print(f"Could not recognise the export at {path}. Pass an explicit importer name.")
+            return 1
+        print(f"Detected importer: {name}")
+
+    try:
+        importer = get_importer(name)
+    except BundleError as e:
+        print(f"{e}")
+        return 1
+
+    kwargs: dict = {"limit": limit}
+    if chats:
+        if name != "telegram":
+            print(f"--chat is only supported by the telegram importer, ignoring it for '{name}'")
+        else:
+            kwargs["chats"] = chats
+
+    with TemporaryDirectory(prefix="kaos-convert-") as staging:
+        bundle_path = Path(output) if output else Path(staging) / f"{name}.kaos"
+        try:
+            result = importer.to_bundle(Path(path), bundle_path, **kwargs)
+        except BundleError as e:
+            print(f"Conversion failed: {e}")
+            return 1
+
+        print(result.render())
+        if convert_only:
+            print(f"\nBundle written to {result.bundle}. Import it with: kaos import {result.bundle}")
+            return 0
+
+        try:
+            report = import_bundle(result.bundle, merge=merge, dry_run=dry_run)
+        except BundleError as e:
+            print(f"Import failed: {e}")
+            return 1
+
+    print()
+    print(report.render())
+    if dry_run:
+        print("\nNothing was written. Re-run without --dry-run to apply.")
+    return 0
+
+
 async def _run_signals_dry_run(
     category: str,
     *,
@@ -862,6 +978,11 @@ async def _run_sessions_backfill_search(agent: str = "") -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # Imported here, like the other command modules, so `kaos --help` does not
+    # pay for the portability stack on every unrelated invocation.
+    from kronos.portability.import_ import MERGE_MODES, MERGE_SKIP
+    from kronos.portability.importers import available as importer_names
+
     parser = argparse.ArgumentParser(
         prog="kaos",
         description="Kronos Agent OS (KAOS) local control CLI",
@@ -949,6 +1070,48 @@ def build_parser() -> argparse.ArgumentParser:
     connect_sub = connect.add_subparsers(dest="connector")
     connect_sub.add_parser("telegram", help="check Telegram connector setup")
 
+    export = sub.add_parser("export", help="export this agent as a .kaos bundle")
+    export.add_argument("--out", "-o", default="agent.kaos", help="output bundle path")
+    export.add_argument("--include-notes", action="store_true", help="include workspace notes")
+    export.add_argument("--include-sessions", action="store_true", help="include conversation history")
+    export.add_argument(
+        "--include-transport-ids",
+        action="store_true",
+        help="keep Telegram chat/topic ids in scheduled tasks (private data)",
+    )
+
+    bundle_import = sub.add_parser("import", help="import a .kaos bundle into this agent")
+    bundle_import.add_argument("path", help="bundle file to import")
+    bundle_import.add_argument(
+        "--merge",
+        choices=MERGE_MODES,
+        default=MERGE_SKIP,
+        help="what to do when persona/notes/skills already exist (default: skip)",
+    )
+    bundle_import.add_argument("--dry-run", action="store_true", help="report what would change, write nothing")
+    bundle_import.add_argument(
+        "--rebind-chat",
+        type=int,
+        default=None,
+        help="chat id to attach imported reminders to",
+    )
+
+    import_from = sub.add_parser("import-from", help="import history from another tool")
+    import_from.add_argument("tool", choices=["auto", *importer_names()], help="source tool ('auto' to detect)")
+    import_from.add_argument("path", help="export file or directory")
+    import_from.add_argument("--merge", choices=MERGE_MODES, default=MERGE_SKIP, help="merge mode (default: skip)")
+    import_from.add_argument("--dry-run", action="store_true", help="report what would change, write nothing")
+    import_from.add_argument("--limit", type=int, default=None, help="cap items read from the export")
+    import_from.add_argument(
+        "--chat",
+        action="append",
+        default=None,
+        metavar="NAME_OR_ID",
+        help="telegram only: chat to import (repeatable)",
+    )
+    import_from.add_argument("--out", "-o", default="", help="keep the intermediate bundle at this path")
+    import_from.add_argument("--convert-only", action="store_true", help="write the bundle without importing it")
+
     return parser
 
 
@@ -1034,6 +1197,26 @@ def main(argv: list[str] | None = None) -> int:
             return run_connect_telegram()
         parser.parse_args(["connect", "--help"])
         return 0
+    if args.command == "export":
+        return run_export(
+            args.out,
+            notes=args.include_notes,
+            sessions=args.include_sessions,
+            transport_ids=args.include_transport_ids,
+        )
+    if args.command == "import":
+        return run_import(args.path, merge=args.merge, dry_run=args.dry_run, rebind_chat=args.rebind_chat)
+    if args.command == "import-from":
+        return run_import_from(
+            args.tool,
+            args.path,
+            merge=args.merge,
+            dry_run=args.dry_run,
+            limit=args.limit,
+            chats=args.chat,
+            output=args.out,
+            convert_only=args.convert_only,
+        )
 
     parser.print_help()
     return 0
