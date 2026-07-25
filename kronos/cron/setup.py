@@ -55,6 +55,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.sleep_compute import run_sleep_compute
     from kronos.cron.source_quality_audit import run_source_quality_audit
     from kronos.cron.swarm_retention import run_swarm_retention
+    from kronos.cron.swarm_weekly import run_swarm_weekly_report
     from kronos.cron.turn_retention import run_turn_retention
     from kronos.cron.user_model import run_user_model
 
@@ -157,6 +158,10 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # their journal/results/effects per policy.retention.turn_journal_days.
     scheduler.add_weekly("turn-retention", run_turn_retention, weekday=6, hour_utc=5)
 
+    # Swarm post-mortem — weekly Sunday 06:00 UTC (moat 11.4). Claims the week in
+    # the shared ledger first, so the digest is sent once, not once per agent.
+    scheduler.add_weekly("swarm-weekly-report", run_swarm_weekly_report, weekday=6, hour_utc=6)
+
     # ── Agent-exclusive jobs (only registered on the owning agent) ──────
     nexus_jobs_registered = 0
 
@@ -184,6 +189,6 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         nexus_jobs_registered = 4
 
     total = (
-        20 + nexus_jobs_registered
-    )  # +reminders +handoff/council/memory intake +sla-escalation +persona-evolution; signal-jobs, travel insights, people-scout and group-digest paused
+        21 + nexus_jobs_registered
+    )  # +reminders +handoff/council/memory intake +sla-escalation +swarm-weekly-report +persona-evolution; signal-jobs, travel insights, people-scout and group-digest paused
     log.info("%d cron jobs registered for agent '%s'", total, me)

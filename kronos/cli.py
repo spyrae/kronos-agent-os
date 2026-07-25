@@ -1177,6 +1177,23 @@ def run_audit_verify(as_json: bool) -> int:
     return 0
 
 
+def run_swarm_report(period: str, as_json: bool) -> int:
+    """Post-mortem of the swarm's period: who answered, how well, at what cost."""
+    from kronos.swarm_report import build_report, render_markdown
+
+    try:
+        report = build_report(period)
+    except ValueError as e:
+        print(f"[FAIL] {e}")
+        return 1
+
+    if as_json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+    else:
+        print(render_markdown(report))
+    return 0
+
+
 DEFAULT_EVAL_SUITE = "tests/evals/suites/golden"
 
 
@@ -1486,6 +1503,21 @@ def build_parser() -> argparse.ArgumentParser:
     policy_report = policy_sub.add_parser("report", help="print the effective policy and value sources")
     policy_report.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
 
+    swarm_cmd = sub.add_parser("swarm", help="swarm coordination reports")
+    swarm_sub = swarm_cmd.add_subparsers(dest="swarm_command")
+    swarm_report = swarm_sub.add_parser("report", help="who answered, how well, at what cost")
+    from kronos.swarm_report import PERIOD_DAYS
+
+    swarm_report.add_argument(
+        "--period",
+        default="week",
+        choices=sorted(PERIOD_DAYS),
+        help="reporting window (default: week)",
+    )
+    swarm_report.add_argument("--day", dest="period", action="store_const", const="day", help="shorthand for a day")
+    swarm_report.add_argument("--week", dest="period", action="store_const", const="week", help="shorthand for a week")
+    swarm_report.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+
     audit_cmd = sub.add_parser("audit", help="audit trail integrity")
     audit_sub = audit_cmd.add_subparsers(dest="audit_command")
     audit_verify = audit_sub.add_parser("verify", help="verify the audit log hash chain")
@@ -1634,6 +1666,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.policy_command == "report":
             return run_policy_report(args.as_json)
         parser.parse_args(["policy", "--help"])
+        return 0
+    if args.command == "swarm":
+        if args.swarm_command == "report":
+            return run_swarm_report(args.period, args.as_json)
+        parser.parse_args(["swarm", "--help"])
         return 0
     if args.command == "audit":
         if args.audit_command == "verify":

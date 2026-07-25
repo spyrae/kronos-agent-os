@@ -326,6 +326,18 @@ def _schema(conn) -> None:
             PRIMARY KEY (day, agent)
         );
 
+        -- Swarm-wide jobs that must fire once, not once per agent (moat 11.4).
+        -- Every process runs the same scheduler, so a weekly digest would be
+        -- delivered six times. The PRIMARY KEY is the arbitration: the first
+        -- INSERT OR IGNORE for a (job, period) wins and the rest are no-ops.
+        CREATE TABLE IF NOT EXISTS job_claims (
+            job TEXT NOT NULL,
+            period_key TEXT NOT NULL,
+            agent_name TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            PRIMARY KEY (job, period_key)
+        );
+
         -- Dissent (moat 11.4): on a topic whose owner declares `dissent:
         -- require`, the draft answer is shown to an agent with a different role
         -- before it is sent. Kept as its own queue rather than a council row,
@@ -1506,6 +1518,79 @@ class SwarmStore:
             "satisfaction_rate": round(rate, 1),
             "days": days,
         }
+
+    # ------------------------------------------------------------------
+    # Once-per-period jobs (moat 11.4)
+    # ------------------------------------------------------------------
+
+    def claim_periodic_job(self, *, job: str, period_key: str, agent_name: str) -> bool:
+        """True for exactly one agent per (job, period_key).
+
+        Six processes run the same scheduler, so a swarm-wide digest needs a
+        single winner. The PRIMARY KEY does the arbitration.
+        """
+        cursor = self._db.write(
+            "INSERT OR IGNORE INTO job_claims (job, period_key, agent_name, created_at) VALUES (?, ?, ?, ?)",
+            (job, period_key, agent_name, time.time()),
+        )
+        return cursor.rowcount > 0
+
+    def periodic_job_owner(self, *, job: str, period_key: str) -> str:
+        row = self._db.read_one(
+            "SELECT agent_name FROM job_claims WHERE job = ? AND period_key = ?",
+            (job, period_key),
+        )
+        return str(row["agent_name"]) if row else ""
+
+    # ------------------------------------------------------------------
+    # Post-mortem aggregates (moat 11.4)
+    # ------------------------------------------------------------------
+
+    def replies_by_agent(self, *, since_ts: float) -> list[dict]:
+        """Sent replies grouped by agent and tier — who answered, how."""
+        rows = self._db.read(
+            """
+            SELECT agent_name, tier, COUNT(*) AS replies
+            FROM reply_claims
+            WHERE state = 'sent' AND created_at >= ?
+            GROUP BY agent_name, tier
+            ORDER BY agent_name, tier
+            """,
+            (since_ts,),
+        )
+        return [dict(row) for row in rows]
+
+    def costs_by_agent(self, *, since_day: str) -> dict[str, dict]:
+        """Spend per agent over a range of days from the shared ledger."""
+        rows = self._db.read(
+            """
+            SELECT agent,
+                   SUM(requests) AS requests,
+                   SUM(cost_usd) AS cost_usd
+            FROM swarm_costs
+            WHERE day >= ?
+            GROUP BY agent
+            """,
+            (since_day,),
+        )
+        return {
+            row["agent"]: {"requests": int(row["requests"] or 0), "cost_usd": float(row["cost_usd"] or 0)}
+            for row in rows
+        }
+
+    def handoffs_since(self, *, since_ts: float, limit: int = 500) -> list[dict]:
+        rows = self._db.read(
+            "SELECT * FROM handoffs WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?",
+            (since_ts, limit),
+        )
+        return [dict(row) for row in rows]
+
+    def councils_since(self, *, since_ts: float, limit: int = 500) -> list[dict]:
+        rows = self._db.read(
+            "SELECT * FROM council_sessions WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?",
+            (since_ts, limit),
+        )
+        return [dict(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Retention (called by a periodic job — not wired in this step)
