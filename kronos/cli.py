@@ -199,6 +199,11 @@ async def run_cli(
 
 def _force_demo_safety() -> None:
     """Keep demo mode conservative even if local env enables risky features."""
+    from kronos.security.egress import force_allowlist
+
+    # Demo mode never reaches the network on its own; forcing allowlist means a
+    # stray tool call cannot either.
+    force_allowlist(True)
     settings.enable_dynamic_tools = False
     settings.enable_mcp_gateway_management = False
     settings.enable_dynamic_mcp_servers = False
