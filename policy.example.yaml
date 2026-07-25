@@ -1,0 +1,63 @@
+# KAOS policy — what this agent is allowed to do, in one readable file.
+#
+# Copy to policy.yaml (or point KAOS_POLICY_FILE at it). Without the file KAOS
+# behaves exactly as before, using the code defaults shown here.
+#
+# Precedence: env > policy > default. An explicit environment variable wins over
+# this file, so an operator hotfix is never silently ignored. Run
+# `kaos policy report` to see which source won for every value.
+#
+# Secrets never live here — keys stay in .env.
+
+version: 1
+
+# Risky runtime surfaces. Enable only in trusted deployments.
+capabilities:
+  dynamic_tools: false                # LLM-authored Python tools
+  dynamic_tool_sandbox_required: true # ...and only inside the Docker sandbox
+  mcp_gateway_management: false       # add/remove MCP servers at runtime
+  dynamic_mcp_servers: false          # load MCP servers persisted by the agent
+  server_ops: false                   # SSH / systemd / docker control
+
+# Which tool calls pause for a human. Empty lists mean "use engine defaults"
+# (mcp_add_server, add_expense, deploy*/send*/delete* prefixes, and so on) —
+# an empty list is far likelier to be an omission than an intent to gate nothing.
+approvals:
+  enabled: true
+  always: []
+  action_prefixes: []
+  read_only_prefixes: []
+
+# Spend ceilings. The daily limit is swarm-wide; per_agent_daily_usd narrows it
+# for individual agents (see Swarm 3.0).
+budgets:
+  daily_usd: 5.0
+  session_usd: 1.0
+  degrade_at_fraction: 0.8            # above this, drop to the lite tier
+  per_agent_daily_usd: {}
+
+# Content coming from outside the process (web pages, MCP servers, documents,
+# receipt emails, public channels).
+untrusted_output:
+  default_for_external: true          # mark every external tool untrusted
+  on_injection: log                   # log | strip | block
+
+# Where the agent may reach. `open` is the current behaviour; switch to
+# allowlist with dry_run first and watch the logs before enforcing.
+egress:
+  mode: open                          # allowlist | open
+  dry_run: true
+  domains: []
+    # - api.telegram.org
+    # - "*.githubusercontent.com"
+  allowed_commands: []                # stdio MCP servers, e.g. npx / uvx
+
+# How long local history is kept.
+retention:
+  turn_journal_days: 30
+  audit_jsonl_days: 90
+  swarm_messages_days: 30
+
+pii:
+  mask_in_logs: true
+  mask_in_cassettes: true

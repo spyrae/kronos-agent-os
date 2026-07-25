@@ -15,6 +15,7 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from kronos.config import settings
+from kronos.security.untrusted import mark_untrusted
 from kronos.tools.mcp_servers import build_mcp_config
 
 log = logging.getLogger("kronos.tools.gateway")
@@ -115,11 +116,43 @@ class MCPGateway:
             len(self._dynamic_config),
         )
 
+        combined = self._filter_by_egress_policy(combined)
+        if not combined:
+            log.warning("All MCP servers were filtered out by the egress policy")
+            return []
+
         client = MultiServerMCPClient(combined)
         self._tools = await client.get_tools()
 
+        # An MCP tool runs in another process and returns whatever that process
+        # (or the site/API behind it) says. All of it is attacker-controllable, so
+        # the whole surface is marked untrusted rather than enumerated per server.
+        mark_untrusted(self._tools, reason="mcp")
+
         log.info("Loaded %d tools from %d servers", len(self._tools), len(combined))
         return self._tools
+
+    def _filter_by_egress_policy(self, combined: dict) -> dict:
+        """Drop stdio servers whose command the policy does not allow.
+
+        A blocked server is skipped rather than fatal: one unlisted command
+        should not take the whole agent down, and the decision is audited.
+        """
+        from kronos.security.egress import EgressBlockedError, check_command
+
+        allowed = {}
+        for name, config in combined.items():
+            command = str((config or {}).get("command") or "")
+            if not command:
+                allowed[name] = config
+                continue
+            try:
+                check_command(command, server=name)
+            except EgressBlockedError as e:
+                log.warning("Skipping MCP server %s: %s", name, e)
+                continue
+            allowed[name] = config
+        return allowed
 
     def add_server(self, name: str, config: dict) -> str:
         """Add a new MCP server dynamically.
@@ -193,9 +226,17 @@ class MCPGateway:
         if not combined:
             return "No servers configured."
 
+        combined = self._filter_by_egress_policy(combined)
+        if not combined:
+            return "No servers permitted by the egress policy."
+
         try:
             client = MultiServerMCPClient(combined)
             self._tools = await client.get_tools()
+            # Reload replaces the tool list, so the untrusted marking has to be
+            # re-applied here too — otherwise a reload silently un-marks every
+            # MCP tool and their output starts reaching the model as trusted text.
+            mark_untrusted(self._tools, reason="mcp")
             msg = f"Reloaded: {len(self._tools)} tools from {len(combined)} servers"
             log.info(msg)
             return msg

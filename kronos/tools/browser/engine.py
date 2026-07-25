@@ -58,11 +58,19 @@ async def _ensure_browser():
 
 async def navigate(url: str, wait_until: str = "domcontentloaded") -> str:
     """Navigate to URL. Returns page title."""
+    from kronos.security.egress import EgressBlockedError, check_url
     from kronos.tools.browser.security import is_url_safe
 
     safe, reason = is_url_safe(url)
     if not safe:
         return f"Navigation blocked: {reason}"
+
+    # is_url_safe covers what must never be reachable (schemes, private ranges);
+    # the policy covers what this deployment chose to allow.
+    try:
+        check_url(url, tool="browser_navigate")
+    except EgressBlockedError as e:
+        return f"Navigation blocked: {e}"
 
     page = await _ensure_browser()
     try:

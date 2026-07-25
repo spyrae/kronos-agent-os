@@ -22,10 +22,13 @@ from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolM
 from langchain_core.tools import BaseTool
 
 from kronos import cassettes
+from kronos.audit import log_tool_event
 from kronos.cassettes import CassetteMissError
 from kronos.config import settings
 from kronos.security.loop_detector import LoopDetector, LoopLevel, get_nudge_message
-from kronos.security.sanitize import wrap_untrusted
+from kronos.security.sanitize import detect_injection, strip_injection, wrap_untrusted
+from kronos.security.untrusted import tool_output_is_untrusted
+from kronos.swarm_store import get_swarm
 from kronos.tools.error_handler import classify_tool_error
 
 log = logging.getLogger("kronos.engine")
@@ -185,6 +188,22 @@ class AgentResult:
     approval_tool_name: str | None = None
 
 
+def _approval_lists() -> tuple[set[str], tuple[str, ...], tuple[str, ...]]:
+    """Approval rules from the policy, falling back to the engine defaults.
+
+    An empty list in the policy means "unspecified", not "gate nothing": a blank
+    YAML list is far likelier to be an omission than an intent to disable every
+    gate, and reading it as the latter would silently un-gate deploys.
+    """
+    from kronos.policy import get_policy
+
+    approvals = get_policy().approvals
+    names = set(approvals.always) or DEFAULT_APPROVAL_TOOL_NAMES
+    actions = tuple(approvals.action_prefixes) or DEFAULT_APPROVAL_ACTION_PREFIXES
+    read_only = tuple(approvals.read_only_prefixes) or READ_ONLY_TOOL_PREFIXES
+    return names, actions, read_only
+
+
 def tool_requires_approval(tool: BaseTool, args: dict) -> bool:
     """Return whether a tool call should pause for human approval."""
     if not settings.tool_approvals_enabled:
@@ -203,12 +222,13 @@ def tool_requires_approval(tool: BaseTool, args: dict) -> bool:
     if declared_attr is not None:
         return bool(declared_attr)
 
+    approval_names, action_prefixes, read_only_prefixes = _approval_lists()
     name = tool.name.lower()
-    if name in DEFAULT_APPROVAL_TOOL_NAMES:
+    if name in approval_names:
         return True
-    if name.startswith(READ_ONLY_TOOL_PREFIXES):
+    if name.startswith(read_only_prefixes):
         return False
-    if name.startswith(DEFAULT_APPROVAL_ACTION_PREFIXES):
+    if name.startswith(action_prefixes):
         return True
     return any(marker in name for marker in DEFAULT_APPROVAL_NAME_MARKERS)
 
@@ -281,21 +301,6 @@ def _default_should_compact_tool_output(tool: BaseTool) -> bool:
     return any(marker in name for marker in DEFAULT_COMPACT_OUTPUT_NAME_MARKERS)
 
 
-def _tool_output_is_untrusted(tool: BaseTool) -> bool:
-    """Whether a tool returns attacker-controllable external content.
-
-    Such output (web pages, fetched documents, third-party API bodies) must be
-    handed to the model as DATA, not trusted text, so an instruction injected
-    into it is not obeyed. Opt in per tool via ``metadata['untrusted_output']``
-    or an ``untrusted_output`` attribute — the same pattern as ``needs_approval``.
-    """
-    metadata = getattr(tool, "metadata", None) or {}
-    flag = metadata.get("untrusted_output")
-    if flag is None:
-        flag = getattr(tool, "untrusted_output", None)
-    return bool(flag)
-
-
 async def _maybe_await(value: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
@@ -325,6 +330,50 @@ def tool_message_raw_content(message: ToolMessage) -> str:
     return str(message.additional_kwargs.get(RAW_TOOL_CONTENT_KEY, message.content))
 
 
+INJECTION_ACTION_LOG = "log"
+INJECTION_ACTION_STRIP = "strip"
+INJECTION_ACTION_BLOCK = "block"
+INJECTION_BLOCKED_MESSAGE = "[BLOCKED] injection attempt detected in external content"
+
+
+def _handle_injection_in_untrusted(tool: BaseTool, content: str) -> tuple[str, list[str]]:
+    """Detect and react to injection attempts inside untrusted tool output.
+
+    Framing already tells the model to treat this text as data, so the default is
+    to record the attempt rather than alter the payload — an attempt is signal,
+    and silently rewriting external content makes debugging harder. Deployments
+    that prefer defence over fidelity set ``strip`` or ``block``.
+
+    Returns (content, matches). Empty matches means nothing was found.
+    """
+    matches = detect_injection(content)
+    if not matches:
+        return content, []
+
+    action = (settings.untrusted_injection_action or INJECTION_ACTION_LOG).strip().lower()
+    log.warning(
+        "Injection attempt in untrusted output of %s (action=%s): %s",
+        tool.name,
+        action,
+        "; ".join(matches[:3])[:200],
+    )
+    try:
+        log_tool_event(
+            "tool_injection",
+            {"name": tool.name, "content": f"patterns: {'; '.join(matches[:5])}", "capability": "security"},
+        )
+        get_swarm().incr_metric("injections_detected")
+    except Exception as e:  # observability must never break the tool path
+        log.debug("Could not record injection event: %s", e)
+
+    if action == INJECTION_ACTION_BLOCK:
+        return INJECTION_BLOCKED_MESSAGE, matches
+    if action == INJECTION_ACTION_STRIP:
+        cleaned, _ = strip_injection(content)
+        return cleaned, matches
+    return content, matches
+
+
 async def execute_tool(
     tool: BaseTool,
     tool_call: dict,
@@ -337,12 +386,13 @@ async def execute_tool(
     """
     tool_call_id = tool_call.get("id", "")
     args = tool_call.get("args", {})
-    untrusted = _tool_output_is_untrusted(tool)
+    untrusted = tool_output_is_untrusted(tool)
 
     replayed = cassettes.read_tool_call(tool.name, args) if cassettes.replaying() else None
     if replayed is not None:
         content = replayed["content"]
         if untrusted:
+            content, _ = _handle_injection_in_untrusted(tool, content)
             content = wrap_untrusted(content, label=f"tool:{tool.name}")
         return _build_tool_message(content, replayed["raw_content"], tool_call_id)
 
@@ -368,9 +418,12 @@ async def execute_tool(
         content, raw_content = await _tool_model_output(tool, result)
         recorded_content, is_error = content, False
         if untrusted:
-            # Attacker-controllable content — frame it as data so an injected
-            # instruction inside it is not executed. raw_content (kept for the
-            # audit journal) stays the unwrapped original.
+            # Attacker-controllable content — check it for injection attempts,
+            # then frame it as data so an injected instruction is not executed.
+            # raw_content (kept for the audit journal) stays the unwrapped
+            # original, and the cassette stores the pre-framing text.
+            content, _ = _handle_injection_in_untrusted(tool, content)
+            recorded_content = content
             content = wrap_untrusted(content, label=f"tool:{tool.name}")
 
     except SubAgentApprovalPause:

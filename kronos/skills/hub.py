@@ -33,6 +33,11 @@ def _fetch_url(url: str, timeout: int = 15) -> str:
         urllib.error.URLError: On network errors.
         urllib.error.HTTPError: On non-2xx HTTP responses.
     """
+    # Importing a skill executes nothing, but it does pull instructions the agent
+    # will follow — so the source host is subject to the egress allowlist.
+    from kronos.security.egress import check_url
+
+    check_url(url, tool="import_skill")
     req = urllib.request.Request(url, headers={"User-Agent": "kaos/1.0"})
     resp = urllib.request.urlopen(req, timeout=timeout)
     return resp.read().decode("utf-8")

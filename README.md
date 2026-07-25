@@ -148,6 +148,8 @@ kaos import a.kaos --dry-run # preview importing a bundle
 kaos import-from auto <path> # bring history from ChatGPT/Claude/Obsidian/Telegram/Letta
 kaos eval run         # replay golden scenarios (no keys, no network)
 kaos eval diff --base origin/main # what did my change move?
+kaos policy report    # effective governance posture and value sources
+kaos audit verify     # has the audit trail been edited?
 kaos connect telegram # guided Telegram setup check
 kaos templates list  # list bundled agent templates
 kaos skills packs    # list bundled skill packs
@@ -275,6 +277,21 @@ KAOS Swarm Mode is the optional multi-agent coordination layer inside the broade
 
 This is useful for multi-persona group chats and expert panels, but the default KAOS runtime also works as a single durable agent.
 
+## Governance
+
+What the agent may do lives in one readable file — capabilities, approvals,
+budgets, untrusted-content handling, egress, retention:
+
+```bash
+cp policy.example.yaml policy.yaml
+kaos policy report        # effective posture, and where each value came from
+kaos audit verify         # audit logs are hash-chained; has anything been edited?
+```
+
+Precedence is env > policy > default, and the report names the winning source for
+every value. An invalid policy stops startup rather than reverting to permissive
+defaults. See [Governance](docs/GOVERNANCE.md).
+
 ## Safety
 
 KAOS can connect to tools, memory, external services, and scheduled jobs. The public defaults are intentionally conservative:
@@ -311,6 +328,7 @@ See [docs/SECURITY.md](docs/SECURITY.md) and [SECURITY.md](SECURITY.md).
 - [Memory](docs/MEMORY.md)
 - [Portability](docs/PORTABILITY.md)
 - [Agent CI](docs/EVALS.md)
+- [Governance](docs/GOVERNANCE.md)
 - [Skills](docs/SKILLS.md)
 - [Cron Jobs](docs/CRON-JOBS.md)
 - [Deployment](docs/DEPLOYMENT.md)

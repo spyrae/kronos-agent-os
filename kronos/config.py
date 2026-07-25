@@ -84,6 +84,12 @@ class Settings(BaseSettings):
     # single-user deployments opt out with TOOL_APPROVALS_ENABLED=false.
     # Only gates the interactive agent path; cron jobs invoke tools directly.
     tool_approvals_enabled: bool = True
+    # What to do when an injection attempt is found inside untrusted tool output:
+    #   log   — record it, keep the content (framing already tells the model to
+    #           treat it as data). Default: visibility without changing behaviour.
+    #   strip — remove the matched phrases before the model sees them.
+    #   block — replace the whole result with a blocked marker.
+    untrusted_injection_action: str = "log"
 
     # Memory — per-agent isolation (resolved in model_post_init from agent_name
     # when left empty). Explicit env overrides still win.

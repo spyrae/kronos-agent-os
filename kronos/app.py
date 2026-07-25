@@ -94,9 +94,28 @@ def _ensure_data_dirs() -> None:
     log.info("Data dirs ready: %s (swarm=%s)", db_dir, settings.swarm_db_path)
 
 
+def _activate_policy_or_exit() -> None:
+    """Load policy.yaml before any capability gate is read.
+
+    A malformed policy stops the process instead of falling back to permissive
+    defaults — the same fail-closed reasoning as the webhook secret.
+    """
+    from kronos.policy import PolicyError, activate_policy
+
+    try:
+        policy = activate_policy()
+    except PolicyError as e:
+        log.error("Refusing to start: %s", e)
+        raise SystemExit(1) from e
+
+    if policy.loaded_from_file:
+        log.info("Governance policy active: %s", policy.source_path)
+
+
 async def main():
     """Start Kronos Agent OS: build agent, start bridge + cron scheduler."""
     log.info("Starting Kronos Agent OS v%s", __version__)
+    _activate_policy_or_exit()
     _ensure_data_dirs()
 
     session_store = SessionStore(settings.db_path, agent_name=settings.agent_name)

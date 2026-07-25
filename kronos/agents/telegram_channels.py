@@ -13,6 +13,7 @@ from langchain_core.tools import StructuredTool
 
 from kronos.engine import create_agent
 from kronos.llm import ModelTier, get_model
+from kronos.security.untrusted import mark_untrusted
 from kronos.tools.telegram_channels import (
     compare_channels,
     digest,
@@ -164,38 +165,41 @@ async def _tool_compare_channels(channels: str, limit: int = 30) -> str:
 # Tool definitions
 # ---------------------------------------------------------------------------
 
-TELEGRAM_CHANNEL_TOOLS = [
-    StructuredTool.from_function(
-        coroutine=_tool_fetch_posts,
-        name="tg_channel_fetch_posts",
-        description="Получить последние посты из публичного Telegram-канала",
-    ),
-    StructuredTool.from_function(
-        coroutine=_tool_channel_info,
-        name="tg_channel_info",
-        description="Получить информацию о публичном Telegram-канале (название, описание, подписчики)",
-    ),
-    StructuredTool.from_function(
-        coroutine=_tool_search_posts,
-        name="tg_channel_search",
-        description="Поиск по постам публичного Telegram-канала",
-    ),
-    StructuredTool.from_function(
-        coroutine=_tool_top_posts,
-        name="tg_channel_top_posts",
-        description="Топ постов канала по просмотрам или реакциям",
-    ),
-    StructuredTool.from_function(
-        coroutine=_tool_digest,
-        name="tg_channels_digest",
-        description="Дайджест постов из нескольких Telegram-каналов за период (today/yesterday/week/N дней)",
-    ),
-    StructuredTool.from_function(
-        coroutine=_tool_compare_channels,
-        name="tg_channels_compare",
-        description="Сравнить Telegram-каналы по метрикам (подписчики, просмотры, реакции, частота публикаций)",
-    ),
-]
+TELEGRAM_CHANNEL_TOOLS = mark_untrusted(
+    [
+        StructuredTool.from_function(
+            coroutine=_tool_fetch_posts,
+            name="tg_channel_fetch_posts",
+            description="Получить последние посты из публичного Telegram-канала",
+        ),
+        StructuredTool.from_function(
+            coroutine=_tool_channel_info,
+            name="tg_channel_info",
+            description="Получить информацию о публичном Telegram-канале (название, описание, подписчики)",
+        ),
+        StructuredTool.from_function(
+            coroutine=_tool_search_posts,
+            name="tg_channel_search",
+            description="Поиск по постам публичного Telegram-канала",
+        ),
+        StructuredTool.from_function(
+            coroutine=_tool_top_posts,
+            name="tg_channel_top_posts",
+            description="Топ постов канала по просмотрам или реакциям",
+        ),
+        StructuredTool.from_function(
+            coroutine=_tool_digest,
+            name="tg_channels_digest",
+            description="Дайджест постов из нескольких Telegram-каналов за период (today/yesterday/week/N дней)",
+        ),
+        StructuredTool.from_function(
+            coroutine=_tool_compare_channels,
+            name="tg_channels_compare",
+            description="Сравнить Telegram-каналы по метрикам (подписчики, просмотры, реакции, частота публикаций)",
+        ),
+    ],
+    reason="telegram channels",
+)
 
 
 # ---------------------------------------------------------------------------
