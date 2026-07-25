@@ -326,6 +326,30 @@ def _schema(conn) -> None:
             PRIMARY KEY (day, agent)
         );
 
+        -- Dissent (moat 11.4): on a topic whose owner declares `dissent:
+        -- require`, the draft answer is shown to an agent with a different role
+        -- before it is sent. Kept as its own queue rather than a council row,
+        -- because a council ends in synthesis posted to the chat and this must
+        -- end in a verdict returned to the author — same shape, opposite exit.
+        CREATE TABLE IF NOT EXISTS challenges (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            topic_id INTEGER NOT NULL DEFAULT 0,
+            thread_id TEXT NOT NULL,
+            root_msg_id INTEGER NOT NULL DEFAULT 0,
+            topic TEXT NOT NULL DEFAULT '',
+            author_agent TEXT NOT NULL,
+            reviewer_agent TEXT NOT NULL,
+            claim TEXT NOT NULL,
+            verdict TEXT NOT NULL DEFAULT '',
+            response TEXT NOT NULL DEFAULT '',
+            state TEXT NOT NULL CHECK (state IN ('pending','reviewing','answered','timeout')),
+            created_at REAL NOT NULL,
+            answered_at REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_challenges_intake
+            ON challenges(reviewer_agent, state, created_at);
+
         -- SLA watch (moat 11.2): a message on an owned topic gets a deadline.
         -- Any agent that recognised the topic registers the row — including a
         -- non-owner, because the case worth covering is precisely the one where
@@ -673,6 +697,103 @@ class SwarmStore:
             (chat_id, topic_id or 0, root_msg_id),
         )
         return int(row["c"]) if row else 0
+
+    # ------------------------------------------------------------------
+    # Dissent (moat 11.4): a draft answer reviewed by another role
+    # ------------------------------------------------------------------
+
+    def request_challenge(
+        self,
+        *,
+        chat_id: int,
+        topic_id: int | None,
+        thread_id: str,
+        root_msg_id: int,
+        topic: str,
+        author_agent: str,
+        reviewer_agent: str,
+        claim: str,
+    ) -> int:
+        """Ask another agent to poke holes in a draft answer. Returns its id."""
+        cursor = self._db.write(
+            """
+            INSERT INTO challenges
+                (chat_id, topic_id, thread_id, root_msg_id, topic, author_agent,
+                 reviewer_agent, claim, state, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+            """,
+            (
+                chat_id,
+                topic_id or 0,
+                thread_id,
+                root_msg_id,
+                topic,
+                author_agent,
+                reviewer_agent,
+                claim,
+                time.time(),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    def accept_next_challenge(self, reviewer_agent: str) -> dict | None:
+        """Atomically claim the oldest pending review for this agent."""
+
+        def _tx(conn):
+            row = conn.execute(
+                """
+                SELECT * FROM challenges
+                WHERE reviewer_agent = ? AND state = 'pending'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (reviewer_agent,),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute("UPDATE challenges SET state = 'reviewing' WHERE id = ?", (row["id"],))
+            return dict(row)
+
+        return self._db.write_tx(_tx)
+
+    def answer_challenge(self, challenge_id: int, *, verdict: str, response: str) -> None:
+        if verdict not in ("agree", "challenge"):
+            raise ValueError(f"unknown challenge verdict: {verdict}")
+        self._db.write(
+            """
+            UPDATE challenges
+            SET state = 'answered', verdict = ?, response = ?, answered_at = ?
+            WHERE id = ? AND state IN ('pending', 'reviewing')
+            """,
+            (verdict, response, time.time(), challenge_id),
+        )
+
+    def timeout_challenge(self, challenge_id: int) -> bool:
+        """Give up waiting. True if this call closed it (the reviewer may win).
+
+        The compare-and-set matters: a reviewer that answers in the same instant
+        must not have its verdict overwritten by the author's timeout.
+        """
+
+        def _tx(conn):
+            cur = conn.execute(
+                "UPDATE challenges SET state = 'timeout' WHERE id = ? AND state IN ('pending', 'reviewing')",
+                (challenge_id,),
+            )
+            return cur.rowcount > 0
+
+        return self._db.write_tx(_tx)
+
+    def get_challenge(self, challenge_id: int) -> dict | None:
+        row = self._db.read_one("SELECT * FROM challenges WHERE id = ?", (challenge_id,))
+        return dict(row) if row else None
+
+    def challenges(self, *, since_ts: float = 0.0, limit: int = 200) -> list[dict]:
+        rows = self._db.read(
+            "SELECT * FROM challenges WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?",
+            (since_ts, limit),
+        )
+        return [dict(row) for row in rows]
 
     # ------------------------------------------------------------------
     # SLA watch (moat 11.2): owned topics get a deadline

@@ -66,6 +66,7 @@ from kronos.bridge_topics import (
     _topic_owner_agents,
 )
 from kronos.config import settings
+from kronos.dissent import review_before_send
 from kronos.graph import KronosAgent
 from kronos.observer.capture import CaptureDecision, classify_capture, record_capture
 from kronos.security.cost_guardian import get_guardian
@@ -1453,6 +1454,20 @@ async def run_bridge(agent: KronosAgent) -> None:
         validation = validate_output(reply)
         if not validation.is_clean:
             reply = validation.redacted_text
+
+        # Dissent gate (moat 11.4): an owner that declares `dissent: require`
+        # shows its answer to another role before sending. Opt-in and owner-only,
+        # so this is a cheap early return for everyone else.
+        if not is_dm and decision is not None and reply and decision.topic_owner == settings.agent_name:
+            reply = await review_before_send(
+                answer=reply,
+                chat_id=event.chat_id,
+                topic_id=topic_id_inbound,
+                thread_id=_thread_id_for(event.chat_id, topic_id_inbound),
+                root_msg_id=event.message.id,
+                topic=decision.topic,
+                author_agent=settings.agent_name,
+            )
 
         approval_id = _last_pending_approval_id()
         approval_buttons = _approval_buttons(approval_id) if approval_id else None
