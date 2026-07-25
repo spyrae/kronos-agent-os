@@ -14,7 +14,6 @@ database that did not already exist and never blocks a live writer.
 
 import json
 import logging
-import sqlite3
 import zipfile
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -22,6 +21,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from kronos.config import settings
+from kronos.portability.dbread import read_rows
 from kronos.portability.manifest import (
     SECTION_FACTS,
     SECTION_GRAPH,
@@ -36,7 +36,7 @@ from kronos.portability.manifest import (
     write_manifest,
 )
 from kronos.portability.redact import redact_structure, redact_text
-from kronos.workspace import Workspace, ws
+from kronos.workspace import Workspace
 
 log = logging.getLogger("kronos.portability.export")
 
@@ -80,23 +80,6 @@ def _is_exportable(path: Path) -> bool:
     if name.endswith(_BLOCKED_SUFFIXES):
         return False
     return path.suffix.lower() in _ALLOWED_SUFFIXES
-
-
-def _read_rows(db_path: Path, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
-    """Read rows from an existing database without creating or locking it."""
-    if not db_path.exists():
-        return []
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
-    conn.row_factory = sqlite3.Row
-    try:
-        return conn.execute(sql, params).fetchall()
-    except sqlite3.OperationalError as e:
-        # Database exists but the table does not — an agent that never wrote
-        # facts is a valid state, not an error.
-        log.debug("Skipping %s: %s", db_path.name, e)
-        return []
-    finally:
-        conn.close()
 
 
 def _write_jsonl(path: Path, rows: Iterable[dict]) -> int:
@@ -168,7 +151,7 @@ def _export_skills(workspace: Workspace, root: Path, *, warnings: list[str]) -> 
 def _export_facts(root: Path, *, warnings: list[str]) -> int:
     """Dump FTS-indexed facts, ordered for reproducible hashes."""
     db_path = Path(settings.db_dir) / "memory_fts.db"
-    rows = _read_rows(db_path, "SELECT * FROM memory_facts ORDER BY created_at, content")
+    rows = read_rows(db_path, "SELECT * FROM memory_facts ORDER BY created_at, content")
     if not rows:
         warnings.append("no extracted facts found")
 
@@ -194,12 +177,12 @@ def _export_graph(root: Path) -> tuple[int, int]:
     """Dump entities and relations, with relations keyed by (name, type)."""
     db_path = Path(settings.db_dir) / "knowledge_graph.db"
 
-    entities = _read_rows(db_path, "SELECT name, type, properties FROM entities ORDER BY type, name")
+    entities = read_rows(db_path, "SELECT name, type, properties FROM entities ORDER BY type, name")
     entity_rows = [
         {"name": row["name"], "type": row["type"], "properties": _json_or_empty(row["properties"])} for row in entities
     ]
 
-    relations = _read_rows(
+    relations = read_rows(
         db_path,
         """
         SELECT s.name AS source_name, s.type AS source_type,
@@ -236,7 +219,7 @@ def _json_or_empty(raw: str | None) -> dict:
 
 def _export_shared_facts(root: Path) -> int:
     """Dump only facts this agent contributed to the swarm ledger."""
-    rows = _read_rows(
+    rows = read_rows(
         Path(settings.swarm_db_path),
         """
         SELECT user_id, fact, created_at FROM shared_user_facts
@@ -258,7 +241,7 @@ def _export_schedule(root: Path, *, include_transport_ids: bool) -> int:
     dropped and the task is marked ``needs_rebind`` — the importer then knows the
     task cannot fire until it is attached to a local chat.
     """
-    rows = _read_rows(
+    rows = read_rows(
         Path(settings.db_dir) / "scheduled_tasks.db",
         """
         SELECT chat_id, topic_id, thread_id, run_at, recur_seconds, message, kind
@@ -311,7 +294,7 @@ def _export_sessions(root: Path) -> int:
     A single file avoids turning thread ids — which contain ``:`` — into
     filesystem-hostile filenames.
     """
-    rows = _read_rows(
+    rows = read_rows(
         Path(settings.db_path),
         "SELECT thread_id, messages, updated_at FROM sessions ORDER BY thread_id",
     )
@@ -356,6 +339,10 @@ def export_bundle(
 ) -> ExportReport:
     """Export the configured agent into a `.kaos` bundle at ``out_path``."""
     target = Path(out_path)
+    # Resolved here, not at import time: tests and multi-agent hosts swap
+    # kronos.workspace.ws, and a module-level binding would freeze the first one.
+    from kronos.workspace import ws
+
     space = workspace or ws
     warnings: list[str] = []
     counts: dict[str, int] = {}
