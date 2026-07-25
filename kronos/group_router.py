@@ -23,13 +23,10 @@ Cross-agent addressing guard
 """
 
 import logging
-import os
 import random
 import re
 import time
 from dataclasses import dataclass, field
-
-import yaml
 
 log = logging.getLogger("kronos.group_router")
 
@@ -45,32 +42,16 @@ PEER_REACTION_COOLDOWN = 300  # 5 minutes
 
 
 def _load_profiles() -> dict[str, dict]:
-    """Load agent profiles from agents.yaml, apply env overrides."""
-    config_path = os.environ.get(
-        "AGENTS_CONFIG_PATH",
-        os.path.join(os.path.dirname(__file__), "..", "agents.yaml"),
-    )
-    config_path = os.path.normpath(config_path)
+    """Load agent profiles from agents.yaml, apply env overrides.
 
-    if os.path.exists(config_path):
-        with open(config_path, encoding="utf-8") as f:
-            raw = yaml.safe_load(f) or {}
-    else:
-        log.warning("agents.yaml not found at %s — using empty profile set", config_path)
-        raw = {}
+    Parsing and validation live in `kronos.swarm_config`; the router keeps the
+    plain-dict shape because tools index it by key and tests replace it
+    wholesale. `swarm_config.profile_for()` gives the typed view of an entry
+    when the extended fields (ownership, SLA, budget) matter.
+    """
+    from kronos.swarm_config import load_profiles
 
-    resolved: dict[str, dict] = {}
-    for name, base in raw.items():
-        username = os.environ.get(
-            f"AGENT_USERNAME_{name.upper()}",
-            base.get("username", f"{name}agnt"),
-        )
-        resolved[name] = {
-            "username": username.lower().lstrip("@"),
-            "aliases": [a.lower() for a in base.get("aliases", [name])],
-            "role": base.get("role", ""),
-        }
-    return resolved
+    return {name: profile.model_dump() for name, profile in load_profiles().items()}
 
 
 AGENT_PROFILES: dict[str, dict] = _load_profiles()
