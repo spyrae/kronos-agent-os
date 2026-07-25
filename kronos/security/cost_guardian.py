@@ -34,16 +34,24 @@ DEFAULT_DAILY_LIMIT_USD = 5.0
 DEFAULT_SESSION_LIMIT_USD = 1.0
 
 # Once daily spend crosses this fraction of the limit, degrade to the lite tier
-# (soft) instead of blocking — the hard block stays at 100%.
+# (soft) instead of blocking — the hard block stays at 100%. Overridable via
+# policy.budgets.degrade_at_fraction; kept as the code default.
 DEGRADE_RATIO = 0.8
+
+
+def _policy_budgets():
+    """Budget limits from the policy (falls back to the module defaults)."""
+    from kronos.policy import get_policy
+
+    return get_policy().budgets
 
 
 @dataclass
 class CostGuardian:
     """Tracks and enforces cost limits."""
 
-    daily_limit: float = DEFAULT_DAILY_LIMIT_USD
-    session_limit: float = DEFAULT_SESSION_LIMIT_USD
+    daily_limit: float = field(default_factory=lambda: _policy_budgets().daily_usd)
+    session_limit: float = field(default_factory=lambda: _policy_budgets().session_usd)
 
     # Per-session tracking (resets when session changes)
     _session_costs: dict[str, float] = field(default_factory=dict)
@@ -77,8 +85,8 @@ class CostGuardian:
                 log.warning("Cost guardian: %s", msg)
                 return False, msg
 
-        # Warning at 80% of daily limit
-        if daily_cost >= self.daily_limit * 0.8:
+        # Warning at the degrade threshold
+        if daily_cost >= self.daily_limit * _policy_budgets().degrade_at_fraction:
             log.info(
                 "Cost guardian: daily budget at %.0f%% ($%.2f / $%.2f)",
                 (daily_cost / self.daily_limit) * 100,
@@ -94,13 +102,13 @@ class CostGuardian:
             self._session_costs[session_id] = self._session_costs.get(session_id, 0) + cost_usd
 
     def should_degrade(self) -> bool:
-        """True once daily spend crosses DEGRADE_RATIO — prefer the lite tier.
+        """True once daily spend crosses the policy degrade fraction.
 
         Soft degradation: keep answering (cheaper) instead of blocking, until
         the hard daily limit in check_budget kicks in.
         """
         daily_cost = _swarm_daily_cost().get("cost_usd", 0)
-        return daily_cost >= self.daily_limit * DEGRADE_RATIO
+        return daily_cost >= self.daily_limit * _policy_budgets().degrade_at_fraction
 
     def get_status(self) -> dict:
         """Get current cost status."""

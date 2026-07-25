@@ -188,6 +188,22 @@ class AgentResult:
     approval_tool_name: str | None = None
 
 
+def _approval_lists() -> tuple[set[str], tuple[str, ...], tuple[str, ...]]:
+    """Approval rules from the policy, falling back to the engine defaults.
+
+    An empty list in the policy means "unspecified", not "gate nothing": a blank
+    YAML list is far likelier to be an omission than an intent to disable every
+    gate, and reading it as the latter would silently un-gate deploys.
+    """
+    from kronos.policy import get_policy
+
+    approvals = get_policy().approvals
+    names = set(approvals.always) or DEFAULT_APPROVAL_TOOL_NAMES
+    actions = tuple(approvals.action_prefixes) or DEFAULT_APPROVAL_ACTION_PREFIXES
+    read_only = tuple(approvals.read_only_prefixes) or READ_ONLY_TOOL_PREFIXES
+    return names, actions, read_only
+
+
 def tool_requires_approval(tool: BaseTool, args: dict) -> bool:
     """Return whether a tool call should pause for human approval."""
     if not settings.tool_approvals_enabled:
@@ -206,12 +222,13 @@ def tool_requires_approval(tool: BaseTool, args: dict) -> bool:
     if declared_attr is not None:
         return bool(declared_attr)
 
+    approval_names, action_prefixes, read_only_prefixes = _approval_lists()
     name = tool.name.lower()
-    if name in DEFAULT_APPROVAL_TOOL_NAMES:
+    if name in approval_names:
         return True
-    if name.startswith(READ_ONLY_TOOL_PREFIXES):
+    if name.startswith(read_only_prefixes):
         return False
-    if name.startswith(DEFAULT_APPROVAL_ACTION_PREFIXES):
+    if name.startswith(action_prefixes):
         return True
     return any(marker in name for marker in DEFAULT_APPROVAL_NAME_MARKERS)
 
