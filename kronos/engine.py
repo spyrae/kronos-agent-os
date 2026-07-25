@@ -22,13 +22,14 @@ from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolM
 from langchain_core.tools import BaseTool
 
 from kronos import cassettes
-from kronos.audit import log_tool_event
 from kronos.cassettes import CassetteMissError
 from kronos.config import settings
 from kronos.security.loop_detector import LoopDetector, LoopLevel, get_nudge_message
-from kronos.security.sanitize import detect_injection, strip_injection, wrap_untrusted
-from kronos.security.untrusted import tool_output_is_untrusted
-from kronos.swarm_store import get_swarm
+from kronos.security.sanitize import wrap_untrusted
+from kronos.security.untrusted import (
+    handle_injection,
+    tool_output_is_untrusted,
+)
 from kronos.tools.error_handler import classify_tool_error
 
 log = logging.getLogger("kronos.engine")
@@ -330,48 +331,9 @@ def tool_message_raw_content(message: ToolMessage) -> str:
     return str(message.additional_kwargs.get(RAW_TOOL_CONTENT_KEY, message.content))
 
 
-INJECTION_ACTION_LOG = "log"
-INJECTION_ACTION_STRIP = "strip"
-INJECTION_ACTION_BLOCK = "block"
-INJECTION_BLOCKED_MESSAGE = "[BLOCKED] injection attempt detected in external content"
-
-
 def _handle_injection_in_untrusted(tool: BaseTool, content: str) -> tuple[str, list[str]]:
-    """Detect and react to injection attempts inside untrusted tool output.
-
-    Framing already tells the model to treat this text as data, so the default is
-    to record the attempt rather than alter the payload — an attempt is signal,
-    and silently rewriting external content makes debugging harder. Deployments
-    that prefer defence over fidelity set ``strip`` or ``block``.
-
-    Returns (content, matches). Empty matches means nothing was found.
-    """
-    matches = detect_injection(content)
-    if not matches:
-        return content, []
-
-    action = (settings.untrusted_injection_action or INJECTION_ACTION_LOG).strip().lower()
-    log.warning(
-        "Injection attempt in untrusted output of %s (action=%s): %s",
-        tool.name,
-        action,
-        "; ".join(matches[:3])[:200],
-    )
-    try:
-        log_tool_event(
-            "tool_injection",
-            {"name": tool.name, "content": f"patterns: {'; '.join(matches[:5])}", "capability": "security"},
-        )
-        get_swarm().incr_metric("injections_detected")
-    except Exception as e:  # observability must never break the tool path
-        log.debug("Could not record injection event: %s", e)
-
-    if action == INJECTION_ACTION_BLOCK:
-        return INJECTION_BLOCKED_MESSAGE, matches
-    if action == INJECTION_ACTION_STRIP:
-        cleaned, _ = strip_injection(content)
-        return cleaned, matches
-    return content, matches
+    """React to an injection attempt in this tool's untrusted output."""
+    return handle_injection(content, source=f"tool:{tool.name}")
 
 
 async def execute_tool(

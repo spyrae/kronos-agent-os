@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from html import escape
 from typing import Any
 
+from kronos.security.untrusted import frame_external
 from kronos.signals.ideas import caveat_for_items, product_angle_for_items, why_now_for_items
 from kronos.signals.models import SignalDigest, SignalItem
 from kronos.signals.news import news_priority_score
@@ -240,9 +241,12 @@ def _news_insights(titles: Sequence[str]) -> str | None:
     if len(clean_titles) < 3:
         return None
     joined = "\n".join(f"- {t}" for t in clean_titles[:12])
+    # Headlines come from third-party feeds and posts, so they are data, not
+    # instructions — a title is a perfectly good injection carrier.
+    framed = frame_external(joined, source="signal:headlines")
     prompt = (
         "Вот заголовки главных новостей сегодняшнего AI/tech-дайджеста:\n\n"
-        f"{joined}\n\n"
+        f"{framed}\n\n"
         "Сформулируй 2-3 предложения об общих трендах и выводах дня: что "
         "связывает эти новости и куда движется индустрия. Только суть, без "
         "вступления и списков. По-русски."
@@ -384,14 +388,22 @@ def synthesize_ideas_digest(
 
 
 def _numbered_candidate_catalog(candidates: Sequence[Mapping[str, Any]]) -> str:
+    """Numbered catalog of candidate clusters for the editor model.
+
+    Titles and summaries come from third-party feeds, posts and pages, and the
+    editor's answer decides what gets published — so the catalog is framed as
+    data. The numbering stays outside the frame: the editor must still be able to
+    refer to entries by index.
+    """
     entries = []
     for index, cluster in enumerate(candidates):
         title = _clean_display_text(str(cluster.get("title") or ""))
         summary = _clean_display_text(str(cluster.get("summary") or ""), limit=240)
-        block = f"[{index}] {title}".rstrip()
+        block = f"{title}".rstrip()
         if summary:
             block += f"\n{summary}"
-        entries.append(block)
+        framed = frame_external(block, source="signal:candidate") if block else ""
+        entries.append(f"[{index}]\n{framed}".rstrip())
     return "\n\n".join(entries)
 
 

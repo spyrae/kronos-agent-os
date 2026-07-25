@@ -28,6 +28,12 @@ All notable changes to Kronos Agent OS are documented here.
   hash-chained (`prev_hash` / `entry_hash`); `kaos audit verify` reports the
   first edited, removed or reordered line. Pre-chain entries from an older
   install are skipped and counted rather than reported as tampering.
+- **Scheduled pipelines covered** — signal digests (candidate catalog, headline
+  block) and competitor page diffs now frame external content as data before it
+  reaches a model, and Brave/Exa/`t.me` requests go through the egress
+  allowlist. A competitor's page was previously read into an LLM prompt verbatim
+  by a weekly job. Injection reaction is shared between the tool loop and the
+  pipelines (`security/untrusted.frame_external`) instead of being duplicated.
 - New docs: [Governance](docs/GOVERNANCE.md).
 - **Agent CI: cassettes, golden scenarios, behaviour diff** — `kaos eval
   capture/run/diff/turns`. Cassettes (`KAOS_CASSETTE_MODE=off|record|replay`)

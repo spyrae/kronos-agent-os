@@ -19,6 +19,7 @@ import urllib.request
 from dataclasses import dataclass
 
 from kronos.config import settings
+from kronos.security.egress import check_url
 from kronos.tools import exa as _exa
 
 log = logging.getLogger("kronos.tools.brave")
@@ -94,6 +95,9 @@ def search(query: str, count: int = 10, freshness: str = "pd") -> list[SearchRes
         }
     )
     url = f"{BRAVE_API_URL}?{params}"
+    # Same allowlist as the agent's tools: a cron pipeline reaching the network is
+    # still the agent reaching the network.
+    check_url(url, tool="brave_search")
 
     try:
         req = urllib.request.Request(

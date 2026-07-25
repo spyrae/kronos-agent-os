@@ -16,6 +16,8 @@ from html import unescape
 
 import aiohttp
 
+from kronos.security.egress import check_url
+
 log = logging.getLogger("kronos.tools.telegram_channels")
 
 TG_BASE_URL = "https://t.me/s"
@@ -102,6 +104,7 @@ async def _fetch_page(
 ) -> str:
     """Fetch one page of t.me/s/ HTML."""
     url = f"{TG_BASE_URL}/{channel}"
+    check_url(url, tool="tg_channel_fetch")
     if before:
         url += f"?before={before}"
 

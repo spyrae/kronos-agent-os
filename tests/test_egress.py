@@ -181,3 +181,44 @@ def test_skill_import_is_subject_to_the_allowlist(tmp_path, monkeypatch):
 
     with pytest.raises(EgressBlockedError):
         hub._fetch_url("https://evil.example.invalid/SKILL.md")
+
+
+def test_search_libraries_respect_the_allowlist(tmp_path, monkeypatch):
+    """brave/exa are the funnel for agent tools AND cron pipelines alike."""
+    from kronos.config import settings
+    from kronos.tools import brave, exa
+
+    _policy(tmp_path, monkeypatch, {"mode": "allowlist", "dry_run": False, "domains": ["api.exa.ai"]})
+    monkeypatch.setattr(settings, "brave_api_key", "test-key")
+    monkeypatch.setattr(settings, "exa_api_key", "test-key")
+    monkeypatch.setattr(brave, "_brave_unavailable_until", 0.0, raising=False)
+
+    # Brave's host is not listed → blocked before any request is made, and the
+    # block is not swallowed by the Exa fallback.
+    with pytest.raises(EgressBlockedError, match="api.search.brave.com"):
+        brave.search("kaos", count=1)
+
+    # Exa's host IS listed, so the allowlist lets the request start. exa.search
+    # swallows transport errors by design (it is a fallback path), so the check is
+    # "did we get as far as the socket", not "did it raise".
+    attempts: list = []
+
+    def fake_urlopen(*args, **kwargs):
+        attempts.append(args)
+        raise RuntimeError("network disabled in test")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    assert exa.search("kaos", count=1) == []
+    assert attempts, "an allowlisted host should have been reached"
+
+
+def test_telegram_channel_fetch_respects_the_allowlist(tmp_path, monkeypatch):
+    import asyncio
+
+    from kronos.tools import telegram_channels
+
+    _policy(tmp_path, monkeypatch, {"mode": "allowlist", "dry_run": False, "domains": ["example.com"]})
+
+    with pytest.raises(EgressBlockedError, match="t.me"):
+        asyncio.run(telegram_channels.fetch_posts("@somechannel", limit=1))
