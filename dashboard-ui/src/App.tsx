@@ -21,6 +21,7 @@ const MonitoringPage = lazy(() => import('./pages/MonitoringPage'));
 const PerformancePage = lazy(() => import('./pages/PerformancePage'));
 const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage'));
 const AuditTrailPage = lazy(() => import('./pages/AuditTrailPage'));
+const TurnsPage = lazy(() => import('./pages/TurnsPage'));
 const AnomaliesPage = lazy(() => import('./pages/AnomaliesPage'));
 const SandboxPage = lazy(() => import('./pages/SandboxPage'));
 
@@ -112,6 +113,7 @@ const NAV_SECTIONS: NavSection[] = [
       { path: '/performance', label: 'Performance', icon: 'P' },
       { path: '/analytics', label: 'Analytics', icon: 'N' },
       { path: '/audit', label: 'Audit Trail', icon: 'T' },
+      { path: '/turns', label: 'Durable Turns', icon: 'D' },
       { path: '/sandbox', label: 'Sandbox', icon: 'X' },
     ],
   },
@@ -341,6 +343,7 @@ export default function App() {
           <Route path="/performance" element={<PerformancePage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/audit" element={<AuditTrailPage />} />
+          <Route path="/turns" element={<TurnsPage />} />
           <Route path="/sandbox" element={<SandboxPage />} />
           <Route path="/anomalies" element={<AnomaliesPage />} />
           <Route path="/mcp" element={<McpPage />} />
