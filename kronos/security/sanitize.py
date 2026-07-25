@@ -30,6 +30,21 @@ _INJECTION_PATTERNS = [
     r"jailbreak",
     r"DAN\s+mode",
     r"developer\s+mode\s+(enabled|on|activated)",
+    # Russian equivalents. The agent converses in Russian, so an injection in
+    # Russian is the likelier attempt, not the exotic one — English-only patterns
+    # left the primary language unguarded.
+    r"игнорируй\s+(все\s+|всё\s+)?(предыдущие|прошлые|прежние|выше)",
+    r"не\s+обращай\s+внимания\s+на\s+(предыдущие|все|инструкции)",
+    r"забудь\s+(все|всё|предыдущие|прошлые|свои)\s*(инструкции|указания|выше)?",
+    r"новые\s+инструкции\s*:",
+    r"ты\s+(теперь|больше\s+не)\s+",
+    r"действуй\s+как\s+",
+    r"представь,?\s+что\s+ты\s+",
+    r"веди\s+себя\s+как\s+",
+    r"систем(а|ное)\s*(сообщение)?\s*:",
+    r"режим\s+разработчика",
+    r"без\s+(всяких\s+)?ограничений",
+    r"раскрой\s+(системный\s+)?промпт",
 ]
 
 _INJECTION_RE = re.compile(
@@ -170,6 +185,21 @@ def sanitize_html(html: str) -> str:
 def detect_injection(text: str) -> list[str]:
     """Detect potential prompt injection patterns. Returns list of matched patterns."""
     return [m.group() for m in _INJECTION_RE.finditer(text)]
+
+
+INJECTION_PLACEHOLDER = "[REMOVED: injection attempt]"
+
+
+def strip_injection(text: str) -> tuple[str, list[str]]:
+    """Remove injection phrases from text. Returns (cleaned, matches).
+
+    Uses the same pattern set as ``detect_injection`` so detection and removal
+    can never disagree about what counts as an attempt.
+    """
+    matches = detect_injection(text)
+    if not matches:
+        return text, []
+    return _INJECTION_RE.sub(INJECTION_PLACEHOLDER, text), matches
 
 
 def wrap_untrusted(content: str, label: str = "external message") -> str:
