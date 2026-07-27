@@ -32,6 +32,12 @@ def _init_schema(conn) -> None:
         """
     )
 
+    # Measurement of the proposal (moat 12.4). Added by migration so an existing
+    # database keeps its pending proposals.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(persona_proposals)").fetchall()}
+    if "eval_json" not in columns:
+        conn.execute("ALTER TABLE persona_proposals ADD COLUMN eval_json TEXT")
+
 
 def _db():
     db = get_db("persona_proposals")
@@ -39,15 +45,54 @@ def _db():
     return db
 
 
-def create_proposal(*, agent_name: str, target: str, rationale: str, proposal: str) -> int:
+def create_proposal(
+    *,
+    agent_name: str,
+    target: str,
+    rationale: str,
+    proposal: str,
+    eval_json: str = "",
+) -> int:
     """Insert a pending proposal and return its id."""
     cursor = _db().write(
         "INSERT INTO persona_proposals "
-        "(agent_name, target, rationale, proposal, state, created_at) "
-        "VALUES (?, ?, ?, ?, 'pending', ?)",
-        (agent_name, target, rationale, proposal, time.time()),
+        "(agent_name, target, rationale, proposal, state, created_at, eval_json) "
+        "VALUES (?, ?, ?, ?, 'pending', ?, ?)",
+        (agent_name, target, rationale, proposal, time.time(), eval_json),
     )
     return int(cursor.lastrowid)
+
+
+def list_proposals(agent_name: str, *, state: str = "", limit: int = 20) -> list[dict]:
+    """Recent proposals, optionally filtered by state (including rejected ones).
+
+    Auto-rejected proposals are listed here on purpose: a measurement that hides
+    what it rejected is indistinguishable from one that never ran.
+    """
+    if state:
+        rows = _db().read(
+            "SELECT * FROM persona_proposals WHERE agent_name=? AND state=? ORDER BY created_at DESC LIMIT ?",
+            (agent_name, state, limit),
+        )
+    else:
+        rows = _db().read(
+            "SELECT * FROM persona_proposals WHERE agent_name=? ORDER BY created_at DESC LIMIT ?",
+            (agent_name, limit),
+        )
+    return [dict(row) for row in rows]
+
+
+def record_decision_reason(proposal_id: int, reason: str) -> None:
+    """Attach why a proposal was decided, inside the stored measurement."""
+    import json as _json
+
+    row = _db().read_one("SELECT eval_json FROM persona_proposals WHERE id=?", (proposal_id,))
+    try:
+        payload = _json.loads(row["eval_json"]) if row and row["eval_json"] else {}
+    except (TypeError, ValueError):
+        payload = {}
+    payload["decision_reason"] = reason
+    _db().write("UPDATE persona_proposals SET eval_json=? WHERE id=?", (_json.dumps(payload), proposal_id))
 
 
 def list_pending(agent_name: str) -> list[dict]:

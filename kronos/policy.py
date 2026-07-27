@@ -153,7 +153,6 @@ class RegistryPolicy(BaseModel):
     trust_default: str = "checksum"
     require_eval_on_install: bool = True
     telemetry: str = "off"
-    max_regression_pct: float = 0.0
 
     @field_validator("trust_default")
     @classmethod
@@ -169,11 +168,22 @@ class RegistryPolicy(BaseModel):
             raise ValueError(f"registry.telemetry must be one of {TELEMETRY_MODES}, got {value!r}")
         return value
 
+
+class EvolutionPolicy(BaseModel):
+    """How much a self-improvement proposal must prove (moat 12.4).
+
+    `max_regression_pct` is 0 by default: a proposal that makes any scenario fail
+    is auto-rejected rather than shown to the owner.
+    """
+
+    max_regression_pct: float = 0.0
+    auto_reject: bool = True
+
     @field_validator("max_regression_pct")
     @classmethod
     def _sane_regression(cls, value: float) -> float:
         if not 0 <= value <= 100:
-            raise ValueError("registry.max_regression_pct must be a percentage between 0 and 100")
+            raise ValueError("evolution.max_regression_pct must be a percentage between 0 and 100")
         return value
 
 
@@ -190,6 +200,7 @@ class Policy(BaseModel):
     durable: DurablePolicy = Field(default_factory=DurablePolicy)
     pii: PiiPolicy = Field(default_factory=PiiPolicy)
     registry: RegistryPolicy = Field(default_factory=RegistryPolicy)
+    evolution: EvolutionPolicy = Field(default_factory=EvolutionPolicy)
 
     # Where this policy came from; "" means "no file, code defaults".
     source_path: str = ""

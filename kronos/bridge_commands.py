@@ -7,6 +7,8 @@ Handlers that need the live client (``/observer``, the ``/osint`` runner) stay
 in ``bridge.py``.
 """
 
+import json
+
 from kronos.config import settings
 from kronos.security.cost_guardian import get_guardian
 from kronos.swarm_store import get_swarm
@@ -49,6 +51,23 @@ def _handle_runtime_info_query(text: str) -> str | None:
     )
 
 
+def _proposal_measurement(proposal: dict) -> dict:
+    """Stored measurement for a proposal, or {} when it predates measuring."""
+    raw = proposal.get("eval_json") or ""
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _proposal_verdict(proposal: dict) -> str:
+    measurement = _proposal_measurement(proposal)
+    return str(measurement.get("decision_reason") or measurement.get("verdict") or "")
+
+
 async def _handle_persona_command(text: str) -> str | None:
     """Handle /persona [list | approve <id> | reject <id>]. Returns reply or None."""
     if not text.startswith("/persona"):
@@ -61,14 +80,50 @@ async def _handle_persona_command(text: str) -> str | None:
     agent = settings.agent_name
 
     if action == "list":
+        # Auto-rejected proposals are listed on request: a measurement that hides
+        # what it rejected is indistinguishable from one that never ran.
+        if "--rejected" in parts:
+            rejected = evolution.list_proposals(agent, state="rejected", limit=10)
+            if not rejected:
+                return "🧬 Отклонённых предложений нет."
+            lines = ["🧬 Отклонённые предложения:"]
+            for proposal in rejected:
+                reason = _proposal_verdict(proposal)
+                lines.append(f"#{proposal['id']} → {proposal['target']}: {proposal['rationale'][:60]}")
+                if reason:
+                    lines.append(f"    причина: {reason}")
+            return "\n".join(lines)
+
         pending = evolution.list_pending(agent)
         if not pending:
             return "🧬 Нет предложений эволюции персоны."
         lines = ["🧬 Предложения эволюции персоны:"]
         for proposal in pending:
             lines.append(f"#{proposal['id']} → {proposal['target']}: {proposal['rationale'][:80]}")
-        lines.append("\n/persona approve <id> · /persona reject <id>")
+            reason = _proposal_verdict(proposal)
+            if reason:
+                lines.append(f"    замер: {reason}")
+        lines.append("\n/persona show <id> · /persona approve <id> · /persona reject <id>")
         return "\n".join(lines)
+
+    if action == "show" and len(parts) > 2 and parts[2].isdigit():
+        proposal = evolution.get_proposal(int(parts[2]), agent)
+        if proposal is None:
+            return f"Предложение #{parts[2]} не найдено."
+        from kronos.evolution_eval import render_report
+
+        measurement = _proposal_measurement(proposal)
+        body = [
+            f"🧬 Предложение #{proposal['id']} → {proposal['target'].upper()} ({proposal['state']})",
+            f"Почему: {proposal['rationale']}",
+            "",
+            proposal["proposal"],
+        ]
+        if measurement:
+            body += ["", "Замер:", render_report(measurement)]
+        else:
+            body += ["", "Замера нет (предложение старше механизма измерения)."]
+        return "\n".join(body)
 
     if action in ("approve", "reject") and len(parts) > 2 and parts[2].isdigit():
         pid = int(parts[2])
@@ -81,7 +136,7 @@ async def _handle_persona_command(text: str) -> str | None:
         get_swarm().incr_metric("persona_proposals_approved")
         return f"✅ Применил предложение #{pid} к {decided['target'].upper()}\n{path}"
 
-    return "Использование: /persona [list | approve <id> | reject <id>]"
+    return "Использование: /persona [list [--rejected] | show <id> | approve <id> | reject <id>]"
 
 
 async def _handle_stats_command(text: str) -> str | None:
