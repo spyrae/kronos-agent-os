@@ -583,6 +583,24 @@ def run_doctor() -> int:
     else:
         ok("Telegram topic policy", "not configured; legacy group routing")
 
+    from kronos.swarm_config import SwarmConfigError, load_profiles, validate_profiles
+
+    try:
+        _profiles = load_profiles()
+        if not _profiles:
+            ok("Swarm registry", "no agents.yaml; single-agent mode")
+        else:
+            _owned = sorted({topic for prof in _profiles.values() for topic in prof.owns})
+            _detail = f"{len(_profiles)} agent(s)"
+            _detail += f"; owned topics: {', '.join(_owned)}" if _owned else "; no topic ownership declared"
+            _warnings = validate_profiles(_profiles)
+            if _warnings:
+                warn("Swarm registry", f"{_detail}; {_warnings[0]}")
+            else:
+                ok("Swarm registry", _detail)
+    except SwarmConfigError as e:
+        fail("Swarm registry", str(e).splitlines()[0])
+
     from kronos.portability import BUNDLE_SCHEMA_VERSION
     from kronos.portability.importers import available as _importers
 

@@ -150,6 +150,8 @@ kaos eval run         # replay golden scenarios (no keys, no network)
 kaos eval diff --base origin/main # what did my change move?
 kaos policy report    # effective governance posture and value sources
 kaos audit verify     # has the audit trail been edited?
+kaos swarm report --week # who answered, how well, at what cost
+kaos demo --swarm     # swarm coordination locally: no Telegram, no keys
 kaos connect telegram # guided Telegram setup check
 kaos templates list  # list bundled agent templates
 kaos skills packs    # list bundled skill packs
@@ -275,7 +277,20 @@ KAOS Swarm Mode is the optional multi-agent coordination layer inside the broade
 - SQLite `IMMEDIATE` transactions prevent duplicate implicit replies.
 - Peer reactions let agents disagree or add perspective without polluting long-term memory.
 
-This is useful for multi-persona group chats and expert panels, but the default KAOS runtime also works as a single durable agent.
+The org chart is config. `agents.yaml` can declare what an agent `owns`, who it
+`escalates_to` after `sla_minutes` of silence, its own `budget_usd_daily`, and
+whether answers there need a peer's review (`dissent: require`). All optional —
+omit them and routing behaves as it always has.
+
+```bash
+kaos demo --swarm            # see arbitration, ownership and escalation locally
+kaos swarm report --week     # who answered, how well, at what cost
+```
+
+The demo needs no Telegram accounts and no provider keys: it runs three agents on
+an in-process bus over a temporary ledger, through the production router.
+
+This is useful for multi-persona group chats and expert panels, but the default KAOS runtime also works as a single durable agent. See [Sub-Agents & Swarm](docs/SWARM.md).
 
 ## Governance
 

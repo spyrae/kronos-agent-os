@@ -70,7 +70,7 @@ Then read:
 | Automations | `kronos/cron/`, `docs/CRON-JOBS.md` | scheduled jobs and notifications |
 | Dashboard API | `dashboard/`, `tests/test_dashboard_config.py` | local control-room backend |
 | Dashboard UI | `dashboard-ui/` | React UI, Node 18.18+ |
-| Sub-agents/swarm | `kronos/group_router.py`, `kronos/swarm_store.py`, `tests/test_swarm_store.py` | optional coordination mode |
+| Sub-agents/swarm | `kronos/group_router.py`, `kronos/swarm_config.py`, `kronos/swarm_store.py`, `kronos/swarm_local.py`, `tests/test_swarm_store.py` | optional coordination mode, org chart and offline bus |
 | Public surface | `README.md`, `.github/`, community files | launch trust and contributor onboarding |
 
 ## Contributor Notes

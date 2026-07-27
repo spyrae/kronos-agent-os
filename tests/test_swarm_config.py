@@ -255,3 +255,30 @@ def test_topic_owner_and_escalation_target():
     assert escalation_target(profiles, "kronos") == "nexus"
     assert escalation_target(profiles, "nexus") == ""
     assert escalation_target(profiles, "ghost") == ""
+
+
+# --- startup ------------------------------------------------------------------
+
+
+def test_startup_refuses_a_contradictory_registry(tmp_path, monkeypatch, caplog):
+    """A traceback from whichever module imported the router first is not a message."""
+    from kronos.app import _load_swarm_registry_or_exit
+
+    monkeypatch.setenv(
+        "AGENTS_CONFIG_PATH",
+        _write(tmp_path, {"kronos": {**LEGACY["kronos"], "escalates_to": "ghost"}}),
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        _load_swarm_registry_or_exit()
+
+    assert exit_info.value.code == 1
+    assert "Refusing to start" in caplog.text
+
+
+def test_startup_accepts_a_valid_registry(tmp_path, monkeypatch):
+    from kronos.app import _load_swarm_registry_or_exit
+
+    monkeypatch.setenv("AGENTS_CONFIG_PATH", _write(tmp_path, ORGANISED))
+
+    _load_swarm_registry_or_exit()  # must not raise
