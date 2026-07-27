@@ -36,6 +36,11 @@ class Skill:
     source_url: str = ""
     imported_at: str = ""
     review_required: bool = False
+    # Provenance (moat 12.1). Absent on every skill written before it existed,
+    # which is why "no checksum" means unverified rather than broken.
+    requires_kaos: str = ""
+    checksum: str = ""
+    signature: str = ""
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -163,6 +168,9 @@ class SkillStore:
             source_url = meta.get("source_url", "")
             imported_at = meta.get("imported_at", "")
             review_required = meta.get("review_required", "").lower() == "true"
+            requires_kaos = meta.get("requires_kaos", "")
+            checksum = meta.get("checksum", "")
+            signature = meta.get("signature", "")
 
             if not description:
                 # Fallback: extract first paragraph as description
@@ -193,6 +201,9 @@ class SkillStore:
                 source_url=source_url,
                 imported_at=imported_at,
                 review_required=review_required,
+                requires_kaos=requires_kaos,
+                checksum=checksum,
+                signature=signature,
             )
 
     @property

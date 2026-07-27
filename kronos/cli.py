@@ -786,6 +786,39 @@ def _skills_workspace_root(agent: str = "") -> Path:
     return _repo_root() / "workspaces" / _agent_slug(settings.agent_name)
 
 
+def _integrity_trusted_keys() -> list[str]:
+    from kronos.skills.integrity import trusted_keys
+
+    return trusted_keys()
+
+
+def _print_verify_reports(reports: list[dict], *, keys: list[str]) -> None:
+    """One line per skill, plus the detail only when it is not the happy path."""
+    for row in reports:
+        if row["unverified"]:
+            status = "UNVERIFIED"
+        elif row["trusted"]:
+            status = "SIGNED" if row["signature_ok"] else "OK"
+        else:
+            status = "FAIL"
+        print(f"[{status}] {row['skill']} v{row['version']}")
+        if not row["checksum_ok"]:
+            print(f"         {row['checksum_detail']}")
+        if not row["compatible"]:
+            print(f"         {row['compatibility_detail']}")
+        if row["signature_detail"] != "no signature declared":
+            print(f"         {row['signature_detail']}")
+
+    unverified = sum(1 for row in reports if row["unverified"])
+    if unverified:
+        print(
+            f"\n{unverified} skill(s) declare no checksum — locally authored skills normally do not. "
+            "Add `checksum:` to SKILL.md to make tampering detectable."
+        )
+    if not keys and any(row["signature_detail"].startswith("no trusted keys") for row in reports):
+        print("No registry.trusted_keys in policy.yaml, so signatures cannot be checked.")
+
+
 def run_skills(
     command: str,
     pack: str = "",
@@ -820,6 +853,32 @@ def run_skills(
         result = import_skill(source, store)
         print(result)
         return 0 if "imported successfully" in result else 1
+
+    if command == "verify":
+        from kronos.skills.integrity import verify_skill
+        from kronos.skills.store import SkillStore
+
+        store = SkillStore(str(_skills_workspace_root(agent)))
+        targets = [store.get(skill)] if skill else store.list_skills()
+        if skill and targets[0] is None:
+            print(f"Skill '{skill}' not found.")
+            return 1
+        if not targets:
+            print("No skills installed.")
+            return 0
+
+        keys = _integrity_trusted_keys()
+        reports = [verify_skill(target, keys=keys) for target in targets]
+        if output == "json":
+            print(json.dumps(reports, indent=2))
+        else:
+            _print_verify_reports(reports, keys=keys)
+        # A skill with no checksum is unverified, not broken — only a *failed*
+        # check is an error, otherwise every pre-12.1 skill would fail the exit code.
+        broken = [row for row in reports if row["checksum_ok"] is False and row["unverified"] is False]
+        broken += [row for row in reports if not row["compatible"]]
+        broken += [row for row in reports if row["signature_detail"].startswith("signature does not match")]
+        return 1 if broken else 0
 
     if command == "export":
         from kronos.skills.hub import export_skill
@@ -1542,6 +1601,10 @@ def build_parser() -> argparse.ArgumentParser:
     skill_import = skills_sub.add_parser("import", help="import an external SKILL.md as a draft")
     skill_import.add_argument("source", help="URL to SKILL.md or github:user/repo/skill-name")
     skill_import.add_argument("--agent", default="", help="target AGENT_NAME/workspace; defaults to current settings")
+    skill_verify = skills_sub.add_parser("verify", help="check skill checksums, signatures and version requirements")
+    skill_verify.add_argument("skill", nargs="?", default="", help="one skill; omit to verify all")
+    skill_verify.add_argument("--agent", default="", help="target AGENT_NAME/workspace; defaults to current settings")
+    skill_verify.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
     skill_export = skills_sub.add_parser("export", help="export a local skill as SKILL.md")
     skill_export.add_argument("skill")
     skill_export.add_argument("--agent", default="", help="source AGENT_NAME/workspace; defaults to current settings")
@@ -1756,6 +1819,13 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.skills_command == "import":
             return run_skills("import", source=args.source, agent=args.agent)
+        if args.skills_command == "verify":
+            return run_skills(
+                "verify",
+                skill=args.skill,
+                agent=args.agent,
+                output="json" if args.as_json else "",
+            )
         if args.skills_command == "export":
             return run_skills("export", skill=args.skill, agent=args.agent, output=args.output)
         parser.parse_args(["skills", "--help"])
