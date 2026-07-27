@@ -165,6 +165,32 @@ Two practical notes:
 Each agent writes to its own `data/<agent>/logs/`, so the six swarm processes
 maintain six independent chains and never contend.
 
+## What The Agent Installs: skills from elsewhere
+
+Two policy sections govern the registry (full detail in [Registry](REGISTRY.md)):
+
+```yaml
+registry:
+  trusted_keys: ["ssh-ed25519 AAAA… publisher@example.com"]
+  trust_default: checksum        # applies to a source that declares none
+  require_eval_on_install: true  # a failing scenario keeps the skill a draft
+  telemetry: "off"               # off | local | share
+
+evolution:
+  max_regression_pct: 0          # any regressed scenario auto-rejects a proposal
+  auto_reject: true
+```
+
+The one path where a skill activates without a human reading it is a signature from
+a key listed here, over the exact bytes, on a skill whose own offline check passed.
+Everything else installs as a draft — which is the same posture as the rest of this
+document: proof, or a pause.
+
+Note the YAML trap `telemetry` deliberately absorbs: a bare `off` parses as the
+boolean `false` in YAML 1.1, and it is honoured as "off" rather than failing
+startup. `telemetry: on` is refused, because guessing which mode was meant would be
+worse than an error.
+
 ## Checklist For A Public Or Shared Install
 
 1. `kaos policy report` — confirm every capability you did not intend is `false`.
@@ -173,5 +199,10 @@ maintain six independent chains and never contend.
 4. `ALLOWED_USERS` set; `ALLOW_ALL_USERS=false`.
 5. `WEBHOOK_SECRET` non-empty (an empty secret returns 401 for everything, which
    also breaks your own cron delivery).
+6. `kaos skills verify` — anything `FAIL` is a skill whose content no longer
+   matches what was signed or hashed. `UNVERIFIED` is normal for locally authored
+   skills.
+7. `registry.telemetry` stays `off` unless you decided otherwise; nothing is sent
+   automatically in any mode.
 6. `kaos audit verify` in a scheduled job, so a broken chain is noticed.
 7. `pytest -m eval` before deploying — see [Agent CI](EVALS.md).

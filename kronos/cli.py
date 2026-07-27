@@ -601,6 +601,32 @@ def run_doctor() -> int:
     except SwarmConfigError as e:
         fail("Swarm registry", str(e).splitlines()[0])
 
+    from kronos.skills.registry import RegistryError as _RegistryError
+    from kronos.skills.registry import load_sources as _load_sources
+
+    try:
+        _sources = _load_sources()
+        if not _sources:
+            ok("Skill sources", "none configured (copy registry.example.yaml to add one)")
+        else:
+            ok(
+                "Skill sources",
+                ", ".join(f"{source.name} ({source.trust})" for source in _sources),
+            )
+            _signed = [source for source in _sources if source.trust == "signed"]
+            if _signed:
+                from kronos.skills.integrity import trusted_keys as _keys
+
+                if not _keys():
+                    warn(
+                        "Skill signatures",
+                        f"{len(_signed)} source(s) require signing but registry.trusted_keys is empty",
+                    )
+                else:
+                    ok("Skill signatures", f"{len(_keys())} trusted key(s)")
+    except _RegistryError as e:
+        fail("Skill sources", str(e).splitlines()[0])
+
     from kronos.portability import BUNDLE_SCHEMA_VERSION
     from kronos.portability.importers import available as _importers
 
