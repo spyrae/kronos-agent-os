@@ -4,7 +4,27 @@ import { SectionHeader } from '../components/Charts';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown } from '@codemirror/lang-markdown';
 
-interface Skill { name: string; enabled: boolean; size: number; preview: string; }
+interface Skill {
+  name: string; enabled: boolean; size: number; preview: string;
+  version?: string; status?: string; verified?: boolean; signed?: boolean;
+  eval_status?: string; calls?: number;
+}
+
+// Provenance in one glance: what vouches for this skill, and is it ever used.
+// "unverified" is not a failure — a locally authored skill has no checksum —
+// so it reads as absence of proof, not as something broken.
+function proofLabel(s: Skill): { text: string; color: string; title: string } {
+  if (s.signed) return { text: 'signed', color: '#4ade80', title: 'a configured key signed this exact content' };
+  if (s.verified) return { text: 'checksum', color: '#38bdf8', title: 'declares a checksum that matches its content' };
+  return { text: 'unverified', color: '#555', title: 'declares no checksum — normal for a local skill' };
+}
+
+function evalLabel(status?: string): { text: string; color: string } | null {
+  if (status === 'passed') return { text: 'check ok', color: '#4ade80' };
+  if (status === 'failed') return { text: 'check failed', color: '#ef4444' };
+  if (status === 'error') return { text: 'check broken', color: '#f97316' };
+  return null;
+}
 
 export default function SkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([]);
@@ -140,9 +160,28 @@ export default function SkillsPage() {
                   border: `1px solid ${selected === s.name ? '#2563eb33' : 'transparent'}`,
                   opacity: s.enabled ? 1 : 0.5,
                 }} onClick={() => loadSkill(s.name)}>
-                  <span style={{ flex: 1, color: selected === s.name ? '#fff' : '#999', fontSize: '0.82rem', fontWeight: selected === s.name ? 500 : 400 }}>
-                    {s.name}
-                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}>
+                      <span style={{ color: selected === s.name ? '#fff' : '#999', fontSize: '0.82rem', fontWeight: selected === s.name ? 500 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {s.name}
+                      </span>
+                      {s.version && <span style={{ fontSize: '0.62rem', color: '#555', fontFamily: 'monospace', flexShrink: 0 }}>v{s.version}</span>}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '0.15rem', flexWrap: 'wrap' }}>
+                      <span title={proofLabel(s).title} style={{ fontSize: '0.6rem', color: proofLabel(s).color }}>
+                        {proofLabel(s).text}
+                      </span>
+                      {evalLabel(s.eval_status) && (
+                        <span style={{ fontSize: '0.6rem', color: evalLabel(s.eval_status)!.color }}>
+                          · {evalLabel(s.eval_status)!.text}
+                        </span>
+                      )}
+                      {s.status === 'draft' && <span style={{ fontSize: '0.6rem', color: '#f97316' }}>· draft</span>}
+                      <span title="times this skill was actually loaded" style={{ fontSize: '0.6rem', color: (s.calls ?? 0) > 0 ? '#888' : '#444' }}>
+                        · {(s.calls ?? 0) > 0 ? `${s.calls} loads` : 'never loaded'}
+                      </span>
+                    </div>
+                  </div>
                   <div style={{ display: 'flex', gap: '0.2rem', flexShrink: 0 }}>
                     <button onClick={(e) => { e.stopPropagation(); toggleSkill(s.name); }} style={{
                       padding: '0.12rem 0.4rem', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: '0.6rem', fontWeight: 600,

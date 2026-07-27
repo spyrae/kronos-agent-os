@@ -918,6 +918,45 @@ def run_skills(
     if command in ("search", "info", "install"):
         return _run_skills_registry(command, query=source or skill, agent=agent, source_name=pack, refresh=force)
 
+    if command == "stats":
+        from kronos.skills.store import SkillStore
+        from kronos.skills.usage import local_report, shareable_aggregate, telemetry_mode
+
+        store = SkillStore(str(_skills_workspace_root(agent)))
+        rows = local_report(store)
+        if not rows:
+            print("No skills installed.")
+            return 0
+
+        if output == "share":
+            payload = shareable_aggregate(store)
+            if not payload:
+                print(
+                    f"Telemetry is '{telemetry_mode()}'. Nothing was assembled and nothing was sent.\n"
+                    "Set registry.telemetry: share in policy.yaml to allow an anonymous aggregate."
+                )
+                return 1
+            print(json.dumps(payload, indent=2))
+            return 0
+
+        print(f"Skills in {store.skills_roots[-1]}\n")
+        print(f"{'skill':<28} {'ver':<8} {'calls':>6}  {'state':<8} {'proof':<12} check")
+        for row in rows:
+            proof = "signed" if row["signed"] else ("checksum" if row["verified"] else "unverified")
+            print(
+                f"{row['skill'][:28]:<28} {row['version'][:8]:<8} {row['calls']:>6}  "
+                f"{row['status']:<8} {proof:<12} {row['eval_status']}"
+            )
+        unused = [row["skill"] for row in rows if not row["calls"]]
+        if unused:
+            print(f"\nNever loaded: {', '.join(unused[:8])}")
+        print(
+            "\nCalls are real loads of the skill. Outcomes are not tracked: nothing in the\n"
+            "runtime links a turn's result to the skills it loaded, so an ok-rate here would\n"
+            "be invented. The check column is the skill's own scenario verdict."
+        )
+        return 0
+
     if command == "approve":
         from kronos.skills.store import SkillStore
 
@@ -1693,6 +1732,13 @@ def build_parser() -> argparse.ArgumentParser:
     skill_registry_install.add_argument("--source", default="", help="pin to one configured source")
     skill_registry_install.add_argument("--agent", default="", help="target AGENT_NAME/workspace")
     skill_registry_install.add_argument("--refresh", action="store_true", help="refetch source indexes first")
+    skill_stats = skills_sub.add_parser("stats", help="which skills are actually used")
+    skill_stats.add_argument("--agent", default="", help="target AGENT_NAME/workspace")
+    skill_stats.add_argument(
+        "--share",
+        action="store_true",
+        help="print the anonymous aggregate (requires registry.telemetry: share)",
+    )
     skill_approve = skills_sub.add_parser("approve", help="activate a draft skill after reviewing it")
     skill_approve.add_argument("skill")
     skill_approve.add_argument("--agent", default="", help="target AGENT_NAME/workspace")
@@ -1926,6 +1972,8 @@ def main(argv: list[str] | None = None) -> int:
                 agent=args.agent,
                 force=args.refresh,
             )
+        if args.skills_command == "stats":
+            return run_skills("stats", agent=args.agent, output="share" if args.share else "")
         if args.skills_command == "approve":
             return run_skills("approve", skill=args.skill, agent=args.agent)
         if args.skills_command == "verify":

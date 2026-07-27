@@ -28,13 +28,35 @@ class SkillContent(BaseModel):
     content: str
 
 
+def _provenance() -> dict[str, dict]:
+    """Version, proof and usage per skill, keyed by directory name.
+
+    Read through the store and the usage counter so the control room shows the
+    same facts as `kaos skills verify` and `kaos skills stats`. Best-effort: a
+    disabled or half-written skill must still list.
+    """
+    try:
+        from kronos.skills.store import SkillStore
+        from kronos.skills.usage import local_report
+
+        # Built from the same workspace the listing reads, not from the process-wide
+        # singleton: otherwise the two halves of a row could describe different
+        # agents' skills.
+        store = SkillStore(str(_skills_root().parent.parent))
+        return {row["skill"]: row for row in local_report(store)}
+    except Exception as e:  # pragma: no cover - defensive
+        log.debug("Could not read skill provenance: %s", e)
+        return {}
+
+
 @router.get("/")
 async def list_skills():
-    """List all skills with enabled status."""
+    """List all skills with enabled status, provenance and usage."""
     skills_dir = _skills_root()
     if not skills_dir.is_dir():
         return {"skills": []}
 
+    provenance = _provenance()
     skills = []
     for skill_dir in sorted(skills_dir.iterdir()):
         if not skill_dir.is_dir():
@@ -42,27 +64,30 @@ async def list_skills():
 
         skill_file = skill_dir / "SKILL.md"
         disabled_file = skill_dir / "SKILL.md.disabled"
-
         if skill_file.exists():
-            content = skill_file.read_text(encoding="utf-8")
-            skills.append(
-                {
-                    "name": skill_dir.name,
-                    "enabled": True,
-                    "size": len(content),
-                    "preview": content[:150],
-                }
-            )
+            content, enabled = skill_file.read_text(encoding="utf-8"), True
         elif disabled_file.exists():
-            content = disabled_file.read_text(encoding="utf-8")
-            skills.append(
-                {
-                    "name": skill_dir.name,
-                    "enabled": False,
-                    "size": len(content),
-                    "preview": content[:150],
-                }
-            )
+            content, enabled = disabled_file.read_text(encoding="utf-8"), False
+        else:
+            continue
+
+        row = provenance.get(skill_dir.name, {})
+        skills.append(
+            {
+                "name": skill_dir.name,
+                "enabled": enabled,
+                "size": len(content),
+                "preview": content[:150],
+                "version": row.get("version", ""),
+                "status": row.get("status", ""),
+                # "verified" means a checksum exists and this is what it covers;
+                # "signed" means a configured key vouched for it.
+                "verified": bool(row.get("verified", False)),
+                "signed": bool(row.get("signed", False)),
+                "eval_status": row.get("eval_status", "none"),
+                "calls": int(row.get("calls", 0) or 0),
+            }
+        )
 
     return {"skills": skills}
 

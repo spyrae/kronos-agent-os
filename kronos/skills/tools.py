@@ -42,6 +42,12 @@ def load_skill(skill_name: str) -> str:
 
     log.info("Loaded skill: %s (%d chars)", skill_name, len(skill.content))
 
+    # Count the load, not the catalog listing: being offered to the model is not
+    # being used (moat 12.5).
+    from kronos.skills.usage import record_call
+
+    record_call(skill.name)
+
     result = skill.content
     if skill.status == "draft":
         result = (

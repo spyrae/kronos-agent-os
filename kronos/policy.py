@@ -161,12 +161,20 @@ class RegistryPolicy(BaseModel):
             raise ValueError(f"registry.trust_default must be one of {TRUST_LEVELS}, got {value!r}")
         return value
 
-    @field_validator("telemetry")
+    @field_validator("telemetry", mode="before")
     @classmethod
-    def _known_telemetry_mode(cls, value: str) -> str:
-        if value not in TELEMETRY_MODES:
+    def _known_telemetry_mode(cls, value: object) -> str:
+        # YAML 1.1 parses a bare `off` as False, and `telemetry: off` is exactly how
+        # an operator will write "no telemetry". Honour that instead of failing
+        # startup over a quoting rule nobody should have to know.
+        if value is False:
+            return "off"
+        if value is True:
+            raise ValueError(f"registry.telemetry must be one of {TELEMETRY_MODES}, not a boolean true")
+        text = str(value or "").strip().lower()
+        if text not in TELEMETRY_MODES:
             raise ValueError(f"registry.telemetry must be one of {TELEMETRY_MODES}, got {value!r}")
-        return value
+        return text
 
 
 class EvolutionPolicy(BaseModel):
