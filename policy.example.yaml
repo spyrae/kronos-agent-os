@@ -81,3 +81,22 @@ durable:
 pii:
   mask_in_logs: true
   mask_in_cassettes: true
+
+# Where skills may come from and how much they must prove (see docs/REGISTRY.md).
+registry:
+  # Public keys allowed to sign a skill, in ssh-keygen allowed_signers form.
+  trusted_keys: []
+  # Applies to a source in registry.yaml that declares no trust level.
+  trust_default: checksum      # signed | checksum | none
+  # A skill whose own scenario fails stays a draft.
+  require_eval_on_install: true
+  # off = nothing is assembled for sharing; local = counters are yours only;
+  # share = `kaos skills stats --share` prints an anonymous aggregate.
+  telemetry: off               # off | local | share
+
+# How much a self-improvement proposal must prove before the owner sees it.
+evolution:
+  # Share of scenarios allowed to regress. 0 = any new failure is auto-rejected.
+  max_regression_pct: 0
+  # false keeps every proposal pending, measurement attached, nothing auto-decided.
+  auto_reject: true

@@ -601,6 +601,32 @@ def run_doctor() -> int:
     except SwarmConfigError as e:
         fail("Swarm registry", str(e).splitlines()[0])
 
+    from kronos.skills.registry import RegistryError as _RegistryError
+    from kronos.skills.registry import load_sources as _load_sources
+
+    try:
+        _sources = _load_sources()
+        if not _sources:
+            ok("Skill sources", "none configured (copy registry.example.yaml to add one)")
+        else:
+            ok(
+                "Skill sources",
+                ", ".join(f"{source.name} ({source.trust})" for source in _sources),
+            )
+            _signed = [source for source in _sources if source.trust == "signed"]
+            if _signed:
+                from kronos.skills.integrity import trusted_keys as _keys
+
+                if not _keys():
+                    warn(
+                        "Skill signatures",
+                        f"{len(_signed)} source(s) require signing but registry.trusted_keys is empty",
+                    )
+                else:
+                    ok("Skill signatures", f"{len(_keys())} trusted key(s)")
+    except _RegistryError as e:
+        fail("Skill sources", str(e).splitlines()[0])
+
     from kronos.portability import BUNDLE_SCHEMA_VERSION
     from kronos.portability.importers import available as _importers
 
@@ -786,6 +812,100 @@ def _skills_workspace_root(agent: str = "") -> Path:
     return _repo_root() / "workspaces" / _agent_slug(settings.agent_name)
 
 
+def _integrity_trusted_keys() -> list[str]:
+    from kronos.skills.integrity import trusted_keys
+
+    return trusted_keys()
+
+
+def _print_verify_reports(reports: list[dict], *, keys: list[str]) -> None:
+    """One line per skill, plus the detail only when it is not the happy path."""
+    for row in reports:
+        if row["unverified"]:
+            status = "UNVERIFIED"
+        elif row["trusted"]:
+            status = "SIGNED" if row["signature_ok"] else "OK"
+        else:
+            status = "FAIL"
+        print(f"[{status}] {row['skill']} v{row['version']}")
+        if not row["checksum_ok"]:
+            print(f"         {row['checksum_detail']}")
+        if not row["compatible"]:
+            print(f"         {row['compatibility_detail']}")
+        if row["signature_detail"] != "no signature declared":
+            print(f"         {row['signature_detail']}")
+
+    unverified = sum(1 for row in reports if row["unverified"])
+    if unverified:
+        print(
+            f"\n{unverified} skill(s) declare no checksum — locally authored skills normally do not. "
+            "Add `checksum:` to SKILL.md to make tampering detectable."
+        )
+    if not keys and any(row["signature_detail"].startswith("no trusted keys") for row in reports):
+        print("No registry.trusted_keys in policy.yaml, so signatures cannot be checked.")
+
+
+def _run_skills_registry(command: str, *, query: str, agent: str, source_name: str, refresh: bool) -> int:
+    """`kaos skills search|info|install` — the registry side of the skills verb."""
+    from kronos.skills.registry import RegistryError, find_entry, install, load_index, load_sources, search
+
+    try:
+        sources = load_sources()
+    except RegistryError as e:
+        print(f"[FAIL] {e}")
+        return 1
+
+    if not sources:
+        print("No skill sources configured. Copy registry.example.yaml to registry.yaml to add one.")
+        return 1
+
+    entries, problems = load_index(sources, refresh=refresh)
+    for problem in problems:
+        print(f"[WARN] {problem}")
+    if not entries:
+        print("No skills found in any configured source.")
+        return 1
+
+    if command == "search":
+        matches = search(query, entries)
+        if not matches:
+            print(f"Nothing matches '{query}'.")
+            return 0
+        for entry in matches:
+            marks = " (signed)" if entry.signed else ""
+            print(f"- {entry.name} v{entry.version or '?'} [{entry.source}{marks}]: {entry.description}")
+        print("\nInstall one with: kaos skills install <name>")
+        return 0
+
+    if command == "info":
+        entry = find_entry(query, entries, source=source_name)
+        if entry is None:
+            print(f"'{query}' is not in the index.")
+            return 1
+        print(f"{entry.name} v{entry.version or 'unknown'}")
+        print(f"  source:      {entry.source} (trust: {entry.trust})")
+        print(f"  description: {entry.description or 'none'}")
+        print(f"  author:      {entry.author or 'unknown'}")
+        print(f"  url:         {entry.url or 'missing'}")
+        print(f"  requires:    KAOS {entry.requires_kaos or 'any'}")
+        print(f"  checksum:    {entry.checksum or 'not advertised'}")
+        print(f"  signed:      {'yes' if entry.signed else 'no'}")
+        return 0
+
+    from kronos.skills.store import SkillStore
+
+    workspace_root = _skills_workspace_root(agent)
+    store = SkillStore(str(workspace_root))
+    result = install(query, store=store, source=source_name, entries=entries)
+    print(result.render())
+    if result.installed and result.status == "draft":
+        skill = store.get(result.skill)
+        if skill is not None:
+            print(f"Read it at {skill.path}")
+        print(f"Activate it once you trust it: kaos skills approve {result.skill}")
+    return 0 if result.installed else 1
+
+
 def run_skills(
     command: str,
     pack: str = "",
@@ -820,6 +940,89 @@ def run_skills(
         result = import_skill(source, store)
         print(result)
         return 0 if "imported successfully" in result else 1
+
+    if command in ("search", "info", "install"):
+        return _run_skills_registry(command, query=source or skill, agent=agent, source_name=pack, refresh=force)
+
+    if command == "stats":
+        from kronos.skills.store import SkillStore
+        from kronos.skills.usage import local_report, shareable_aggregate, telemetry_mode
+
+        store = SkillStore(str(_skills_workspace_root(agent)))
+        rows = local_report(store)
+        if not rows:
+            print("No skills installed.")
+            return 0
+
+        if output == "share":
+            payload = shareable_aggregate(store)
+            if not payload:
+                print(
+                    f"Telemetry is '{telemetry_mode()}'. Nothing was assembled and nothing was sent.\n"
+                    "Set registry.telemetry: share in policy.yaml to allow an anonymous aggregate."
+                )
+                return 1
+            print(json.dumps(payload, indent=2))
+            return 0
+
+        print(f"Skills in {store.skills_roots[-1]}\n")
+        print(f"{'skill':<28} {'ver':<8} {'calls':>6}  {'state':<8} {'proof':<12} check")
+        for row in rows:
+            proof = "signed" if row["signed"] else ("checksum" if row["verified"] else "unverified")
+            print(
+                f"{row['skill'][:28]:<28} {row['version'][:8]:<8} {row['calls']:>6}  "
+                f"{row['status']:<8} {proof:<12} {row['eval_status']}"
+            )
+        unused = [row["skill"] for row in rows if not row["calls"]]
+        if unused:
+            print(f"\nNever loaded: {', '.join(unused[:8])}")
+        print(
+            "\nCalls are real loads of the skill. Outcomes are not tracked: nothing in the\n"
+            "runtime links a turn's result to the skills it loaded, so an ok-rate here would\n"
+            "be invented. The check column is the skill's own scenario verdict."
+        )
+        return 0
+
+    if command == "approve":
+        from kronos.skills.store import SkillStore
+
+        store = SkillStore(str(_skills_workspace_root(agent)))
+        target = store.get(skill)
+        if target is None:
+            print(f"Skill '{skill}' not found.")
+            return 1
+        if target.status == "active":
+            print(f"Skill '{skill}' is already active.")
+            return 0
+        store.update_status(skill, "active")
+        print(f"Skill '{skill}' is now active.")
+        return 0
+
+    if command == "verify":
+        from kronos.skills.integrity import verify_skill
+        from kronos.skills.store import SkillStore
+
+        store = SkillStore(str(_skills_workspace_root(agent)))
+        targets = [store.get(skill)] if skill else store.list_skills()
+        if skill and targets[0] is None:
+            print(f"Skill '{skill}' not found.")
+            return 1
+        if not targets:
+            print("No skills installed.")
+            return 0
+
+        keys = _integrity_trusted_keys()
+        reports = [verify_skill(target, keys=keys) for target in targets]
+        if output == "json":
+            print(json.dumps(reports, indent=2))
+        else:
+            _print_verify_reports(reports, keys=keys)
+        # A skill with no checksum is unverified, not broken — only a *failed*
+        # check is an error, otherwise every pre-12.1 skill would fail the exit code.
+        broken = [row for row in reports if row["checksum_ok"] is False and row["unverified"] is False]
+        broken += [row for row in reports if not row["compatible"]]
+        broken += [row for row in reports if row["signature_detail"].startswith("signature does not match")]
+        return 1 if broken else 0
 
     if command == "export":
         from kronos.skills.hub import export_skill
@@ -1542,6 +1745,33 @@ def build_parser() -> argparse.ArgumentParser:
     skill_import = skills_sub.add_parser("import", help="import an external SKILL.md as a draft")
     skill_import.add_argument("source", help="URL to SKILL.md or github:user/repo/skill-name")
     skill_import.add_argument("--agent", default="", help="target AGENT_NAME/workspace; defaults to current settings")
+    skill_search = skills_sub.add_parser("search", help="search configured skill sources")
+    skill_search.add_argument("query", nargs="?", default="", help="substring to match; omit to list everything")
+    skill_search.add_argument(
+        "--refresh", action="store_true", help="refetch source indexes instead of using the cache"
+    )
+    skill_info = skills_sub.add_parser("info", help="show what a source advertises about a skill")
+    skill_info.add_argument("skill")
+    skill_info.add_argument("--source", default="", help="pin to one configured source")
+    skill_registry_install = skills_sub.add_parser("install", help="install a skill from a configured source")
+    skill_registry_install.add_argument("skill")
+    skill_registry_install.add_argument("--source", default="", help="pin to one configured source")
+    skill_registry_install.add_argument("--agent", default="", help="target AGENT_NAME/workspace")
+    skill_registry_install.add_argument("--refresh", action="store_true", help="refetch source indexes first")
+    skill_stats = skills_sub.add_parser("stats", help="which skills are actually used")
+    skill_stats.add_argument("--agent", default="", help="target AGENT_NAME/workspace")
+    skill_stats.add_argument(
+        "--share",
+        action="store_true",
+        help="print the anonymous aggregate (requires registry.telemetry: share)",
+    )
+    skill_approve = skills_sub.add_parser("approve", help="activate a draft skill after reviewing it")
+    skill_approve.add_argument("skill")
+    skill_approve.add_argument("--agent", default="", help="target AGENT_NAME/workspace")
+    skill_verify = skills_sub.add_parser("verify", help="check skill checksums, signatures and version requirements")
+    skill_verify.add_argument("skill", nargs="?", default="", help="one skill; omit to verify all")
+    skill_verify.add_argument("--agent", default="", help="target AGENT_NAME/workspace; defaults to current settings")
+    skill_verify.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
     skill_export = skills_sub.add_parser("export", help="export a local skill as SKILL.md")
     skill_export.add_argument("skill")
     skill_export.add_argument("--agent", default="", help="source AGENT_NAME/workspace; defaults to current settings")
@@ -1756,6 +1986,29 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.skills_command == "import":
             return run_skills("import", source=args.source, agent=args.agent)
+        if args.skills_command == "search":
+            return run_skills("search", source=args.query, force=args.refresh)
+        if args.skills_command == "info":
+            return run_skills("info", skill=args.skill, pack=args.source)
+        if args.skills_command == "install":
+            return run_skills(
+                "install",
+                skill=args.skill,
+                pack=args.source,
+                agent=args.agent,
+                force=args.refresh,
+            )
+        if args.skills_command == "stats":
+            return run_skills("stats", agent=args.agent, output="share" if args.share else "")
+        if args.skills_command == "approve":
+            return run_skills("approve", skill=args.skill, agent=args.agent)
+        if args.skills_command == "verify":
+            return run_skills(
+                "verify",
+                skill=args.skill,
+                agent=args.agent,
+                output="json" if args.as_json else "",
+            )
         if args.skills_command == "export":
             return run_skills("export", skill=args.skill, agent=args.agent, output=args.output)
         parser.parse_args(["skills", "--help"])

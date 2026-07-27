@@ -38,6 +38,8 @@ SOURCE_DEFAULT = "default"
 
 INJECTION_ACTIONS = ("log", "strip", "block")
 EGRESS_MODES = ("allowlist", "open")
+TRUST_LEVELS = ("signed", "checksum", "none")
+TELEMETRY_MODES = ("off", "local", "share")
 
 
 class PolicyError(Exception):
@@ -139,6 +141,60 @@ class PiiPolicy(BaseModel):
     mask_in_cassettes: bool = True
 
 
+class RegistryPolicy(BaseModel):
+    """Where skills may come from and how much they must prove (moat 12).
+
+    `trust_default` applies to a source that declares none. `telemetry` is off by
+    default and stays off unless an operator writes it here — usage data about
+    which skills work is the user's, not ours.
+    """
+
+    trusted_keys: list[str] = Field(default_factory=list)
+    trust_default: str = "checksum"
+    require_eval_on_install: bool = True
+    telemetry: str = "off"
+
+    @field_validator("trust_default")
+    @classmethod
+    def _known_trust_level(cls, value: str) -> str:
+        if value not in TRUST_LEVELS:
+            raise ValueError(f"registry.trust_default must be one of {TRUST_LEVELS}, got {value!r}")
+        return value
+
+    @field_validator("telemetry", mode="before")
+    @classmethod
+    def _known_telemetry_mode(cls, value: object) -> str:
+        # YAML 1.1 parses a bare `off` as False, and `telemetry: off` is exactly how
+        # an operator will write "no telemetry". Honour that instead of failing
+        # startup over a quoting rule nobody should have to know.
+        if value is False:
+            return "off"
+        if value is True:
+            raise ValueError(f"registry.telemetry must be one of {TELEMETRY_MODES}, not a boolean true")
+        text = str(value or "").strip().lower()
+        if text not in TELEMETRY_MODES:
+            raise ValueError(f"registry.telemetry must be one of {TELEMETRY_MODES}, got {value!r}")
+        return text
+
+
+class EvolutionPolicy(BaseModel):
+    """How much a self-improvement proposal must prove (moat 12.4).
+
+    `max_regression_pct` is 0 by default: a proposal that makes any scenario fail
+    is auto-rejected rather than shown to the owner.
+    """
+
+    max_regression_pct: float = 0.0
+    auto_reject: bool = True
+
+    @field_validator("max_regression_pct")
+    @classmethod
+    def _sane_regression(cls, value: float) -> float:
+        if not 0 <= value <= 100:
+            raise ValueError("evolution.max_regression_pct must be a percentage between 0 and 100")
+        return value
+
+
 class Policy(BaseModel):
     """The whole declared posture of one deployment."""
 
@@ -151,6 +207,8 @@ class Policy(BaseModel):
     retention: RetentionPolicy = Field(default_factory=RetentionPolicy)
     durable: DurablePolicy = Field(default_factory=DurablePolicy)
     pii: PiiPolicy = Field(default_factory=PiiPolicy)
+    registry: RegistryPolicy = Field(default_factory=RegistryPolicy)
+    evolution: EvolutionPolicy = Field(default_factory=EvolutionPolicy)
 
     # Where this policy came from; "" means "no file, code defaults".
     source_path: str = ""

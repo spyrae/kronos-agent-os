@@ -6,6 +6,25 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Added
 
+- **Skill registry with provenance and auto-eval** — a skill can now declare
+  `version`, `requires_kaos`, `checksum` and an SSH `signature` (verified through
+  `ssh-keygen -Y verify`, no new dependency), and `registry.yaml` lists named
+  sources with a trust level. `kaos skills search / info / install / verify /
+  approve / stats` work against them; install replays the skill's own scenario
+  offline and only a signature from a configured key plus a check that did not
+  fail installs a skill active — everything else lands as a reviewable draft with
+  the reason attached. A skill with no scenario is marked unverified, not refused.
+  Usage counting is local, and the anonymous aggregate is assembled only with
+  `registry.telemetry: share`. Docs: [Registry](docs/REGISTRY.md).
+- **Measured self-improvement** — every weekly persona proposal now carries a
+  measurement (`persona_proposals.eval_json`): the patch is applied to a copy of
+  the workspace, the prompt is reassembled and the offline suite runs against both.
+  A proposal that breaks prompt assembly, regresses a scenario, or repeats guidance
+  already in the file is auto-rejected with a reason and no notification; the rest
+  reach the owner with the delta. The report states plainly that scripted scenarios
+  cannot score answer quality (`measured_quality: false`) instead of implying a
+  number. `/persona show <id>`, `/persona list --rejected`.
+
 - **Swarm 3.0 — the org chart is config** — `agents.yaml` gained `owns`,
   `escalates_to`, `sla_minutes`, `budget_usd_daily`, `dissent` and
   `max_implicit_replies`, validated at startup (a broken `escalates_to` raises;

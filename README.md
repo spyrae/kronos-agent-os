@@ -151,6 +151,10 @@ kaos eval diff --base origin/main # what did my change move?
 kaos policy report    # effective governance posture and value sources
 kaos audit verify     # has the audit trail been edited?
 kaos swarm report --week # who answered, how well, at what cost
+kaos skills search memo  # search configured skill sources
+kaos skills install <name> # install with signature + scenario checks
+kaos skills verify       # re-check checksums, signatures, versions
+kaos skills stats        # which skills are actually used
 kaos demo --swarm     # swarm coordination locally: no Telegram, no keys
 kaos connect telegram # guided Telegram setup check
 kaos templates list  # list bundled agent templates
@@ -291,6 +295,24 @@ The demo needs no Telegram accounts and no provider keys: it runs three agents o
 an in-process bus over a temporary ledger, through the production router.
 
 This is useful for multi-persona group chats and expert panels, but the default KAOS runtime also works as a single durable agent. See [Sub-Agents & Swarm](docs/SWARM.md).
+
+## Skills From Elsewhere
+
+A skill is a markdown procedure the agent follows, so installing one accepts
+instructions. `registry.yaml` lists sources and how much each must prove:
+
+```bash
+cp registry.example.yaml registry.yaml
+kaos skills search memo
+kaos skills install decision-memo   # verifies, replays the skill's own scenario
+kaos skills verify                  # anything tampered with since?
+```
+
+A skill installs **active** only when its source requires signing, a key in
+`registry.trusted_keys` signed those exact bytes, and the skill's own offline
+scenario did not fail. Anything else lands as a draft with the reason attached —
+a failure never deletes anything. Publishing (checksum, signing, shipping a
+check) is documented in [Registry](docs/REGISTRY.md).
 
 ## Governance
 

@@ -24,6 +24,7 @@ Start here if you want to understand or contribute to Kronos Agent OS.
 | [MCP & Tools](MCP.md) | Static MCP, tool gateway, dynamic tool gates |
 | [Automations](AUTOMATIONS.md) | Scheduler, jobs, notifications, audit trail |
 | [Sub-Agents & Swarm](SWARM.md) | Optional multi-agent coordination |
+| [Skill Registry](REGISTRY.md) | Publishing, signing, installing and measuring skills |
 | [Dashboard](DASHBOARD.md) | Local control room and API map |
 | [Deployment](DEPLOYMENT.md) | Local, Docker, systemd, and server ops setup |
 | [Security](SECURITY.md) | Threat model and safe defaults |

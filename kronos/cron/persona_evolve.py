@@ -3,8 +3,17 @@
 Reads the week's satisfaction + negative feedback, asks the LLM for ONE concrete
 edit to SOUL or IDENTITY, stores it as a pending proposal, and notifies the user
 in Telegram to approve/reject via /persona. Nothing is applied without approval.
+
+Since moat 12.4 every proposal is measured before the owner sees it (see
+`kronos.evolution_eval`): the patched persona is applied to a copy of the
+workspace, the offline scenario suite is run against both, and a proposal that
+breaks prompt assembly, regresses a scenario, or merely repeats what the file
+already says is auto-rejected without a notification. What that measurement can
+and cannot prove is documented in that module — it cannot score answer quality,
+and the report says so rather than implying otherwise.
 """
 
+import json
 import logging
 
 from langchain_core.messages import HumanMessage
@@ -91,13 +100,47 @@ PROPOSAL: <конкретный текст, готовый к вставке в 
         return
 
     target, rationale, proposal = parsed
-    pid = evolution.create_proposal(agent_name=agent, target=target, rationale=rationale, proposal=proposal)
+
+    # Measure before anyone is asked (moat 12.4). A proposal that breaks prompt
+    # assembly, regresses a scenario or merely repeats what the file already says
+    # is decided here; the owner's attention is for judgement calls.
+    from kronos.evolution_eval import measure_proposal, render_report, verdict
+    from kronos.policy import get_policy
+
+    candidate = {"target": target, "rationale": rationale, "proposal": proposal}
+    try:
+        measurement = await measure_proposal(candidate)
+    except Exception as e:
+        log.warning("Persona proposal could not be measured: %s", e)
+        measurement = {"measured_quality": False, "notes": [f"measurement failed: {e}"], "regressions": []}
+
+    evolution_policy = get_policy().evolution
+    acceptable, reason = verdict(measurement, max_regression_pct=evolution_policy.max_regression_pct)
+    measurement["verdict"] = reason
+
+    pid = evolution.create_proposal(
+        agent_name=agent,
+        target=target,
+        rationale=rationale,
+        proposal=proposal,
+        eval_json=json.dumps(measurement, ensure_ascii=False),
+    )
     swarm.incr_metric("persona_proposals_created")
+
+    if not acceptable and evolution_policy.auto_reject:
+        evolution.decide_proposal(pid, agent, approved=False)
+        evolution.record_decision_reason(pid, reason)
+        swarm.incr_metric("persona_proposals_auto_rejected")
+        # No push: a proposal the measurement refuted is noise, not news. It stays
+        # visible in `/persona list --rejected` with its reason.
+        log.info("Persona proposal #%s auto-rejected: %s", pid, reason)
+        return
 
     send_bot_api(
         f"🧬 Предложение эволюции персоны #{pid} → {target.upper()}\n\n"
         f"Почему: {rationale}\n\n"
         f"Изменение:\n{proposal}\n\n"
+        f"Замер:\n{render_report(measurement)}\n\n"
         f"Применить: /persona approve {pid} · Отклонить: /persona reject {pid}",
         topic_id=TOPIC_GENERAL,
     )
