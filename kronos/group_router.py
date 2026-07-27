@@ -115,6 +115,60 @@ class RoutingDecision:
     owner_sla_minutes: int = 0
 
 
+@dataclass
+class EventFacts:
+    """Everything the router reads from an incoming message.
+
+    The one place that knows about Telethon's shape. Extracting it means the
+    in-process swarm bus (and eval scenarios) can drive the real routing logic
+    with a plain object instead of a mock that has to imitate a Telethon event —
+    the tier and arbitration rules below are then provably the same in both.
+    """
+
+    text: str = ""
+    sender_id: int = 0
+    msg_id: int = 0
+    is_reply: bool = False
+    reply_sender_id: int | None = None
+    mentioned_usernames: set[str] = field(default_factory=set)
+    mentioned_user_ids: set[int] = field(default_factory=set)
+    topic_label: str = ""
+
+
+async def event_facts(event) -> EventFacts:
+    """Read an event once: Telethon's, the local bus's, or a test's stub."""
+    if isinstance(event, EventFacts):
+        return event
+
+    facts = EventFacts(
+        text=event.raw_text or "",
+        sender_id=getattr(event, "sender_id", 0) or 0,
+        msg_id=getattr(getattr(event, "message", None), "id", 0) or 0,
+        is_reply=bool(getattr(event, "is_reply", False)),
+        topic_label=str(getattr(event, "topic_label", "") or ""),
+    )
+
+    from telethon.tl.types import MessageEntityMention, MessageEntityMentionName
+
+    entities = getattr(getattr(event, "message", None), "entities", None) or []
+    for ent in entities:
+        if isinstance(ent, MessageEntityMentionName):
+            facts.mentioned_user_ids.add(ent.user_id)
+        elif isinstance(ent, MessageEntityMention):
+            raw = facts.text[ent.offset : ent.offset + ent.length]
+            facts.mentioned_usernames.add(raw.lstrip("@").lower())
+
+    if facts.is_reply:
+        try:
+            replied = await event.get_reply_message()
+        except Exception:
+            replied = None
+        if replied is not None:
+            facts.reply_sender_id = getattr(replied, "sender_id", None)
+
+    return facts
+
+
 # Word-boundary alias matching — stops "импульс" substring from firing on
 # unrelated words. Accepts letters/numbers/underscore on either side as
 # non-match, unicode-aware via re.UNICODE (default in py3).
@@ -188,15 +242,20 @@ class GroupRouter:
     # ------------------------------------------------------------------
 
     async def decide(self, event, client) -> RoutingDecision:
-        """Main entry: should this agent respond to the group message?"""
-        text = event.raw_text or ""
-        sender_id = event.sender_id
+        """Main entry: should this agent respond to the group message?
+
+        Accepts a Telethon event or an EventFacts — the local swarm bus passes
+        the latter, so demos and eval scenarios exercise this exact logic.
+        """
+        facts = await event_facts(event)
+        text = facts.text
+        sender_id = facts.sender_id
 
         # Never respond to self
         if sender_id == self.my_id:
             return RoutingDecision(False, 0, 0, "own message")
 
-        addressing = await self._analyze_addressing(event, text)
+        addressing = self._addressing_from_facts(facts)
         is_peer = self._is_peer(sender_id)
 
         # --- Cross-agent addressing guard (fires for both user and peer src) ---
@@ -224,7 +283,7 @@ class GroupRouter:
                 )
 
             # Tier 3: auto-react if meaningfully disagree (with guards)
-            msg_id = event.message.id
+            msg_id = facts.msg_id
 
             # Guard 0: quiet mode — out of personal budget, so no volunteering.
             quiet = self._quiet_reason()
@@ -242,8 +301,7 @@ class GroupRouter:
 
             # Guard 3: Tier 3 requires a user-root. Peer-to-peer chains do
             # not trigger reactions (otherwise bots debate each other forever).
-            replied_to_user = await self._peer_replies_to_user(event)
-            if not replied_to_user:
+            if not self._facts_reply_to_user(facts):
                 return RoutingDecision(
                     False,
                     0,
@@ -296,7 +354,7 @@ class GroupRouter:
             return RoutingDecision(False, 0, 0, f"quiet mode ({quiet})", addressing=addressing)
 
         # Ownership: recognise the subject before spending a relevance call.
-        topic = await self._topic_key(event, text)
+        topic = await self._topic_key(facts, text)
         owner = self._topic_owners.get(topic, "")
         owner_sla = self._profiles[owner].sla_minutes if owner in self._profiles else 0
 
@@ -390,27 +448,24 @@ class GroupRouter:
     # ------------------------------------------------------------------
 
     async def _analyze_addressing(self, event, text: str) -> AddressingInfo:
+        """Kept for callers that hold an event; the logic lives on facts."""
+        return self._addressing_from_facts(await event_facts(event))
+
+    def _addressing_from_facts(self, facts: "EventFacts") -> AddressingInfo:
         info = AddressingInfo()
-        text_lower = text.lower()
+        text_lower = facts.text.lower()
 
         # 1. Telegram mention entities — authoritative for @username and
         #    MentionName (explicit user_id resolution).
-        from telethon.tl.types import MessageEntityMention, MessageEntityMentionName
-
-        entities = event.message.entities or []
-        for ent in entities:
-            if isinstance(ent, MessageEntityMentionName):
-                if ent.user_id == self.my_id:
-                    info.explicit_to_me = True
-                    info.target_agents.add(self.agent_name)
-            elif isinstance(ent, MessageEntityMention):
-                raw = event.raw_text[ent.offset : ent.offset + ent.length]
-                uname = raw.lstrip("@").lower()
-                if uname == self.my_username:
-                    info.explicit_to_me = True
-                    info.target_agents.add(self.agent_name)
-                elif uname in self._username_to_agent:
-                    info.target_agents.add(self._username_to_agent[uname])
+        if self.my_id in facts.mentioned_user_ids:
+            info.explicit_to_me = True
+            info.target_agents.add(self.agent_name)
+        for uname in facts.mentioned_usernames:
+            if uname == self.my_username:
+                info.explicit_to_me = True
+                info.target_agents.add(self.agent_name)
+            elif uname in self._username_to_agent:
+                info.target_agents.add(self._username_to_agent[uname])
 
         # 2. Fallback: raw-text @username scan (covers cases where the
         #    message came through a path without entities).
@@ -428,15 +483,10 @@ class GroupRouter:
                     info.explicit_to_me = True
 
         # 4. Reply-to-me
-        if event.is_reply:
-            try:
-                replied = await event.get_reply_message()
-                if replied is not None and replied.sender_id == self.my_id:
-                    info.reply_to_me = True
-                    info.explicit_to_me = True
-                    info.target_agents.add(self.agent_name)
-            except Exception:
-                pass
+        if facts.is_reply and facts.reply_sender_id == self.my_id:
+            info.reply_to_me = True
+            info.explicit_to_me = True
+            info.target_agents.add(self.agent_name)
 
         info.explicit_to_other = bool(info.target_agents) and self.agent_name not in info.target_agents
         return info
@@ -445,26 +495,18 @@ class GroupRouter:
     # Tier 3 guard: peer must reply to a user-root message
     # ------------------------------------------------------------------
 
-    async def _peer_replies_to_user(self, event) -> bool:
-        """True if this peer message is a reply to a user message.
+    def _facts_reply_to_user(self, facts: EventFacts) -> bool:
+        """True if this peer message is a reply to a whitelisted user.
 
-        Also accepts the case where the peer message is standalone (no reply)
-        only if it appeared right after a user message — we approximate that
-        by saying: if there's no reply linkage at all, treat as NOT user-rooted.
-        This is stricter than before and intentionally so; it prevents bots
-        from reacting to each other without a user anchor.
+        A peer message with no reply linkage is NOT treated as user-rooted. That
+        is deliberately strict: it prevents bots from reacting to each other
+        without a user anchor.
         """
-        if not event.is_reply:
-            return False
-        try:
-            replied = await event.get_reply_message()
-            if replied is None:
-                return False
-            # If the message being replied to is from a whitelisted user,
-            # this is a user-rooted thread.
-            return replied.sender_id in self.allowed_user_ids
-        except Exception:
-            return False
+        return facts.is_reply and facts.reply_sender_id in self.allowed_user_ids
+
+    async def _peer_replies_to_user(self, event) -> bool:
+        """Event-level wrapper around the fact check above."""
+        return self._facts_reply_to_user(await event_facts(event))
 
     # ------------------------------------------------------------------
     # Sender classification
@@ -514,12 +556,13 @@ class GroupRouter:
         """One of the topics declared in `owns`, or "" when none applies.
 
         Free when the registry declares no ownership, which keeps the whole
-        feature invisible to swarms that do not use it.
+        feature invisible to swarms that do not use it. Takes an EventFacts or
+        anything with a `topic_label`.
         """
         if not self._topic_owners:
             return ""
 
-        # An event may name its subject directly (the local swarm bus and eval
+        # A message may name its subject directly (the local swarm bus and eval
         # scenarios do). Trust it when it matches a declared topic — no LLM.
         declared = str(getattr(event, "topic_label", "") or "").strip().lower()
         if declared in self._topic_owners:
