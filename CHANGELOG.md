@@ -6,6 +6,18 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Added
 
+- **Swarm 3.0 — the org chart is config** — `agents.yaml` gained `owns`,
+  `escalates_to`, `sla_minutes`, `budget_usd_daily`, `dissent` and
+  `max_implicit_replies`, validated at startup (a broken `escalates_to` raises;
+  contested ownership and over-committed budgets warn). A subject someone owns is
+  answered by the owner without a relevance check and on the fast lane, other
+  agents defer instead of talking over them, and a missed `sla_minutes` escalates
+  to the owner's cover through the existing hand-off queue. Per-agent budgets add
+  quiet mode: out of its own money, an agent still answers when addressed but
+  stops volunteering. `dissent: require` sends a draft answer to a different role
+  before it is sent. New `kaos swarm report [--day|--week] [--json]` and a Sunday
+  push, `kaos demo --swarm` to see all of it without Telegram accounts. Docs:
+  [Swarm](docs/SWARM.md).
 - **Durable execution v2** — an interrupted turn can now be finished instead of
   only reported. New `external_effects` ledger makes re-execution safe (a
   message already sent is not re-sent; `side_effect` + optional
@@ -80,6 +92,13 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Fixed
 
+- Two agents could answer each other without end. A peer replying to my message
+  sets `reply_to_me` → `explicit_to_me` → Tier 1, and Tier 1 deliberately
+  bypasses the cooldown, the implicit-reply cap and arbitration; my answer is
+  itself a reply to theirs, so the loop had no exit. Peer-sourced Tier 1 is now
+  bounded per window (`MAX_PEER_EXCHANGES` / `PEER_EXCHANGE_WINDOW`); the user's
+  explicit address is untouched. Found by the new local swarm bus on its first
+  run.
 - `kronos.portability.export` and `import_` resolve `kronos.workspace.ws` at
   call time instead of binding it at import time; a module-level binding
   ignored a swapped workspace, which also made an earlier test pass against

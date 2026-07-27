@@ -325,6 +325,66 @@ def _schema(conn) -> None:
             updated_at REAL NOT NULL,
             PRIMARY KEY (day, agent)
         );
+
+        -- Swarm-wide jobs that must fire once, not once per agent (moat 11.4).
+        -- Every process runs the same scheduler, so a weekly digest would be
+        -- delivered six times. The PRIMARY KEY is the arbitration: the first
+        -- INSERT OR IGNORE for a (job, period) wins and the rest are no-ops.
+        CREATE TABLE IF NOT EXISTS job_claims (
+            job TEXT NOT NULL,
+            period_key TEXT NOT NULL,
+            agent_name TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            PRIMARY KEY (job, period_key)
+        );
+
+        -- Dissent (moat 11.4): on a topic whose owner declares `dissent:
+        -- require`, the draft answer is shown to an agent with a different role
+        -- before it is sent. Kept as its own queue rather than a council row,
+        -- because a council ends in synthesis posted to the chat and this must
+        -- end in a verdict returned to the author — same shape, opposite exit.
+        CREATE TABLE IF NOT EXISTS challenges (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            topic_id INTEGER NOT NULL DEFAULT 0,
+            thread_id TEXT NOT NULL,
+            root_msg_id INTEGER NOT NULL DEFAULT 0,
+            topic TEXT NOT NULL DEFAULT '',
+            author_agent TEXT NOT NULL,
+            reviewer_agent TEXT NOT NULL,
+            claim TEXT NOT NULL,
+            verdict TEXT NOT NULL DEFAULT '',
+            response TEXT NOT NULL DEFAULT '',
+            state TEXT NOT NULL CHECK (state IN ('pending','reviewing','answered','timeout')),
+            created_at REAL NOT NULL,
+            answered_at REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_challenges_intake
+            ON challenges(reviewer_agent, state, created_at);
+
+        -- SLA watch (moat 11.2): a message on an owned topic gets a deadline.
+        -- Any agent that recognised the topic registers the row — including a
+        -- non-owner, because the case worth covering is precisely the one where
+        -- the owner's process is down and cannot register anything. UNIQUE makes
+        -- that a race nobody loses, and the escalation job claims each due row
+        -- atomically so six processes create exactly one hand-off.
+        CREATE TABLE IF NOT EXISTS sla_watch (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            topic_id INTEGER NOT NULL DEFAULT 0,
+            root_msg_id INTEGER NOT NULL,
+            thread_id TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            owner_agent TEXT NOT NULL,
+            request TEXT NOT NULL DEFAULT '',
+            deadline_ts REAL NOT NULL,
+            state TEXT NOT NULL CHECK (state IN ('waiting','escalated','answered','dropped')),
+            created_at REAL NOT NULL,
+            resolved_at REAL,
+            UNIQUE(chat_id, topic_id, root_msg_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sla_watch_due
+            ON sla_watch(state, deadline_ts);
         """
     )
 
@@ -649,6 +709,185 @@ class SwarmStore:
             (chat_id, topic_id or 0, root_msg_id),
         )
         return int(row["c"]) if row else 0
+
+    # ------------------------------------------------------------------
+    # Dissent (moat 11.4): a draft answer reviewed by another role
+    # ------------------------------------------------------------------
+
+    def request_challenge(
+        self,
+        *,
+        chat_id: int,
+        topic_id: int | None,
+        thread_id: str,
+        root_msg_id: int,
+        topic: str,
+        author_agent: str,
+        reviewer_agent: str,
+        claim: str,
+    ) -> int:
+        """Ask another agent to poke holes in a draft answer. Returns its id."""
+        cursor = self._db.write(
+            """
+            INSERT INTO challenges
+                (chat_id, topic_id, thread_id, root_msg_id, topic, author_agent,
+                 reviewer_agent, claim, state, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+            """,
+            (
+                chat_id,
+                topic_id or 0,
+                thread_id,
+                root_msg_id,
+                topic,
+                author_agent,
+                reviewer_agent,
+                claim,
+                time.time(),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    def accept_next_challenge(self, reviewer_agent: str) -> dict | None:
+        """Atomically claim the oldest pending review for this agent."""
+
+        def _tx(conn):
+            row = conn.execute(
+                """
+                SELECT * FROM challenges
+                WHERE reviewer_agent = ? AND state = 'pending'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (reviewer_agent,),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute("UPDATE challenges SET state = 'reviewing' WHERE id = ?", (row["id"],))
+            return dict(row)
+
+        return self._db.write_tx(_tx)
+
+    def answer_challenge(self, challenge_id: int, *, verdict: str, response: str) -> None:
+        if verdict not in ("agree", "challenge"):
+            raise ValueError(f"unknown challenge verdict: {verdict}")
+        self._db.write(
+            """
+            UPDATE challenges
+            SET state = 'answered', verdict = ?, response = ?, answered_at = ?
+            WHERE id = ? AND state IN ('pending', 'reviewing')
+            """,
+            (verdict, response, time.time(), challenge_id),
+        )
+
+    def timeout_challenge(self, challenge_id: int) -> bool:
+        """Give up waiting. True if this call closed it (the reviewer may win).
+
+        The compare-and-set matters: a reviewer that answers in the same instant
+        must not have its verdict overwritten by the author's timeout.
+        """
+
+        def _tx(conn):
+            cur = conn.execute(
+                "UPDATE challenges SET state = 'timeout' WHERE id = ? AND state IN ('pending', 'reviewing')",
+                (challenge_id,),
+            )
+            return cur.rowcount > 0
+
+        return self._db.write_tx(_tx)
+
+    def get_challenge(self, challenge_id: int) -> dict | None:
+        row = self._db.read_one("SELECT * FROM challenges WHERE id = ?", (challenge_id,))
+        return dict(row) if row else None
+
+    def challenges(self, *, since_ts: float = 0.0, limit: int = 200) -> list[dict]:
+        rows = self._db.read(
+            "SELECT * FROM challenges WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?",
+            (since_ts, limit),
+        )
+        return [dict(row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # SLA watch (moat 11.2): owned topics get a deadline
+    # ------------------------------------------------------------------
+
+    def watch_sla(
+        self,
+        *,
+        chat_id: int,
+        topic_id: int | None,
+        root_msg_id: int,
+        thread_id: str,
+        topic: str,
+        owner_agent: str,
+        request: str,
+        sla_minutes: int,
+    ) -> bool:
+        """Register the owner's response deadline. True if this call created it.
+
+        Idempotent per root message: whichever agent recognises the topic first
+        registers the watch, the rest are no-ops.
+        """
+        now = time.time()
+        cursor = self._db.write(
+            """
+            INSERT OR IGNORE INTO sla_watch
+                (chat_id, topic_id, root_msg_id, thread_id, topic, owner_agent,
+                 request, deadline_ts, state, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)
+            """,
+            (
+                chat_id,
+                topic_id or 0,
+                root_msg_id,
+                thread_id,
+                topic,
+                owner_agent,
+                request[:4000],
+                now + max(sla_minutes, 1) * 60,
+                now,
+            ),
+        )
+        return cursor.rowcount > 0
+
+    def due_sla_watches(self, *, now: float | None = None, limit: int = 20) -> list[dict]:
+        """Watches whose deadline has passed and that are still waiting."""
+        rows = self._db.read(
+            """
+            SELECT * FROM sla_watch
+            WHERE state = 'waiting' AND deadline_ts <= ?
+            ORDER BY deadline_ts ASC
+            LIMIT ?
+            """,
+            (now if now is not None else time.time(), limit),
+        )
+        return [dict(row) for row in rows]
+
+    def resolve_sla_watch(self, watch_id: int, *, state: str) -> bool:
+        """Move a waiting watch to a terminal state. True if this call won.
+
+        The compare-and-set is what makes escalation safe across six processes:
+        each polls the same due rows, and only the one whose UPDATE changed a
+        row goes on to create the hand-off.
+        """
+        if state not in ("escalated", "answered", "dropped"):
+            raise ValueError(f"unknown sla_watch state: {state}")
+
+        def _tx(conn):
+            cur = conn.execute(
+                "UPDATE sla_watch SET state = ?, resolved_at = ? WHERE id = ? AND state = 'waiting'",
+                (state, time.time(), watch_id),
+            )
+            return cur.rowcount > 0
+
+        return self._db.write_tx(_tx)
+
+    def sla_watches(self, *, since_ts: float = 0.0, limit: int = 200) -> list[dict]:
+        rows = self._db.read(
+            "SELECT * FROM sla_watch WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?",
+            (since_ts, limit),
+        )
+        return [dict(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Cross-agent hand-offs (roadmap 5.1)
@@ -1279,6 +1518,79 @@ class SwarmStore:
             "satisfaction_rate": round(rate, 1),
             "days": days,
         }
+
+    # ------------------------------------------------------------------
+    # Once-per-period jobs (moat 11.4)
+    # ------------------------------------------------------------------
+
+    def claim_periodic_job(self, *, job: str, period_key: str, agent_name: str) -> bool:
+        """True for exactly one agent per (job, period_key).
+
+        Six processes run the same scheduler, so a swarm-wide digest needs a
+        single winner. The PRIMARY KEY does the arbitration.
+        """
+        cursor = self._db.write(
+            "INSERT OR IGNORE INTO job_claims (job, period_key, agent_name, created_at) VALUES (?, ?, ?, ?)",
+            (job, period_key, agent_name, time.time()),
+        )
+        return cursor.rowcount > 0
+
+    def periodic_job_owner(self, *, job: str, period_key: str) -> str:
+        row = self._db.read_one(
+            "SELECT agent_name FROM job_claims WHERE job = ? AND period_key = ?",
+            (job, period_key),
+        )
+        return str(row["agent_name"]) if row else ""
+
+    # ------------------------------------------------------------------
+    # Post-mortem aggregates (moat 11.4)
+    # ------------------------------------------------------------------
+
+    def replies_by_agent(self, *, since_ts: float) -> list[dict]:
+        """Sent replies grouped by agent and tier — who answered, how."""
+        rows = self._db.read(
+            """
+            SELECT agent_name, tier, COUNT(*) AS replies
+            FROM reply_claims
+            WHERE state = 'sent' AND created_at >= ?
+            GROUP BY agent_name, tier
+            ORDER BY agent_name, tier
+            """,
+            (since_ts,),
+        )
+        return [dict(row) for row in rows]
+
+    def costs_by_agent(self, *, since_day: str) -> dict[str, dict]:
+        """Spend per agent over a range of days from the shared ledger."""
+        rows = self._db.read(
+            """
+            SELECT agent,
+                   SUM(requests) AS requests,
+                   SUM(cost_usd) AS cost_usd
+            FROM swarm_costs
+            WHERE day >= ?
+            GROUP BY agent
+            """,
+            (since_day,),
+        )
+        return {
+            row["agent"]: {"requests": int(row["requests"] or 0), "cost_usd": float(row["cost_usd"] or 0)}
+            for row in rows
+        }
+
+    def handoffs_since(self, *, since_ts: float, limit: int = 500) -> list[dict]:
+        rows = self._db.read(
+            "SELECT * FROM handoffs WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?",
+            (since_ts, limit),
+        )
+        return [dict(row) for row in rows]
+
+    def councils_since(self, *, since_ts: float, limit: int = 500) -> list[dict]:
+        rows = self._db.read(
+            "SELECT * FROM council_sessions WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?",
+            (since_ts, limit),
+        )
+        return [dict(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Retention (called by a periodic job — not wired in this step)

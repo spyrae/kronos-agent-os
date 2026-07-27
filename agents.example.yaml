@@ -1,10 +1,22 @@
 # Agent profiles — define your swarm members here.
 # Copy to agents.yaml and customize.
 #
-# Each agent needs:
+# Identity (this is what stops two agents from answering the same message):
 #   username: Telegram @username (for cross-agent addressing detection)
 #   aliases:  natural-language names (word-boundary matched in messages)
 #   role:     one-line description used by LLM for topic relevance scoring
+#
+# Organisation (all optional — omitting them keeps the plain routing):
+#   owns:                 topics this agent answers without a relevance check,
+#                         and wins arbitration for against non-owners
+#   escalates_to:         who picks the topic up when this agent stays silent
+#                         (must name another agent in this file)
+#   sla_minutes:          how long "silent" is before escalation (default 15)
+#   budget_usd_daily:     this agent's slice of the swarm budget; 0 or absent
+#                         means it is bounded only by the swarm-wide cap
+#   dissent:              allow (default) | require — require means a final
+#                         answer on an owned topic waits for a challenge
+#   max_implicit_replies: per-agent override of the global implicit-reply cap
 #
 # You can have 1 to N agents. Each runs as a separate process.
 
@@ -12,13 +24,24 @@ strategist:
   username: strategist_bot
   aliases: ["strategist", "стратег"]
   role: "strategic advisor — priorities, planning, decision analysis"
+  owns: ["planning", "priorities", "strategy"]
+  escalates_to: analyst
+  sla_minutes: 15
+  budget_usd_daily: 1.5
+  dissent: require
 
 analyst:
   username: analyst_bot
   aliases: ["analyst", "аналитик"]
   role: "data analyst — metrics, research, competitive intelligence"
+  owns: ["metrics", "research"]
+  escalates_to: strategist
+  budget_usd_daily: 1.5
 
 creative:
   username: creative_bot
   aliases: ["creative", "креатив"]
   role: "creative director — brand, naming, product vision"
+  owns: ["brand", "naming"]
+  escalates_to: strategist
+  max_implicit_replies: 1

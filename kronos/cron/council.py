@@ -1,8 +1,11 @@
 """Council intake — contribute positions and synthesize (roadmap 5.2).
 
-Polled by the Scheduler. Each agent plays two roles against the shared ledger:
+Polled by the Scheduler. Each agent plays three roles against the shared ledger:
   1. participant — answer councils it's invited to, independently;
-  2. initiator — once all positions are in, synthesize one answer for the chat.
+  2. initiator — once all positions are in, synthesize one answer for the chat;
+  3. reviewer — poke holes in a peer's draft answer when it asked for dissent
+     (moat 11.4). It rides this pass instead of getting its own scheduler job:
+     the queue shape is identical and a second 30s poller would buy nothing.
 Synthesis is claimed under an IMMEDIATE transaction so it fires exactly once.
 """
 
@@ -11,6 +14,7 @@ import logging
 
 from kronos.config import settings
 from kronos.cron.notify import send_webhook
+from kronos.dissent import run_challenge_intake
 from kronos.swarm_store import get_swarm
 
 log = logging.getLogger("kronos.cron.council")
@@ -89,3 +93,7 @@ async def run_council_intake() -> None:
         ok = await _synthesize(agent, swarm, claimed)
         swarm.complete_council(claimed["id"], success=ok)
         swarm.incr_metric("councils_completed" if ok else "councils_failed")
+
+    # Role 3: review draft answers from agents that require dissent (moat 11.4).
+    # The author is blocking on this, so it runs on every pass.
+    await run_challenge_intake(agent, swarm, reviewer_agent=me, max_per_poll=_MAX_PER_POLL)

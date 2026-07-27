@@ -125,10 +125,31 @@ def _activate_policy_or_exit() -> None:
         log.info("Governance policy active: %s", policy.source_path)
 
 
+def _load_swarm_registry_or_exit() -> None:
+    """Validate agents.yaml before the router imports it.
+
+    The registry is read at import time and a contradiction raises there, which
+    would surface as a traceback from whichever module happened to import the
+    router first. Checking it here turns that into one readable line.
+    """
+    from kronos.swarm_config import SwarmConfigError, load_profiles
+
+    try:
+        profiles = load_profiles()
+    except SwarmConfigError as e:
+        log.error("Refusing to start: %s", e)
+        raise SystemExit(1) from e
+
+    if profiles:
+        owned = sum(1 for profile in profiles.values() if profile.owns)
+        log.info("Swarm registry: %d agent(s), %d with topic ownership", len(profiles), owned)
+
+
 async def main():
     """Start Kronos Agent OS: build agent, start bridge + cron scheduler."""
     log.info("Starting Kronos Agent OS v%s", __version__)
     _activate_policy_or_exit()
+    _load_swarm_registry_or_exit()
     _ensure_data_dirs()
 
     session_store = SessionStore(settings.db_path, agent_name=settings.agent_name)

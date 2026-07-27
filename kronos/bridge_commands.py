@@ -110,7 +110,15 @@ async def _handle_stats_command(text: str) -> str | None:
     daily = status["daily_cost"]
     limit = status["daily_limit"] or 0
     pct = (daily / limit * 100) if limit else 0
-    lines.append(f"\nДневной бюджет: ${daily:.2f} / ${limit:.2f} ({pct:.0f}%)")
+    lines.append(f"\nДневной бюджет роя: ${daily:.2f} / ${limit:.2f} ({pct:.0f}%)")
+
+    personal_limit = status.get("personal_limit") or 0
+    if personal_limit:
+        personal = status.get("personal_cost", 0)
+        personal_pct = personal / personal_limit * 100
+        lines.append(f"Свой лимит: ${personal:.2f} / ${personal_limit:.2f} ({personal_pct:.0f}%)")
+        if status.get("quiet"):
+            lines.append("🔇 Тихий режим: отвечаю только на прямые обращения.")
 
     swarm = swarm_cost_by_agent(period)
     if len(swarm) > 1:

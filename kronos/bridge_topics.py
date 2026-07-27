@@ -80,6 +80,11 @@ def _topic_owner_agents(owner_agent: str) -> set[str]:
     return {agent.strip().lower() for agent in (owner_agent or "").replace(";", ",").split(",") if agent.strip()}
 
 
+def _thread_id_for(chat_id: int, topic_id: int | None) -> str:
+    """Thread id for a chat/topic pair — the inverse of the parser below."""
+    return f"{chat_id}:{topic_id}" if topic_id else str(chat_id)
+
+
 def _chat_topic_from_thread_id(thread_id: str) -> tuple[int | None, int | None]:
     """Parse a Telegram thread id into chat/topic ids when possible."""
     try:

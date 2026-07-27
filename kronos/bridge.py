@@ -61,10 +61,12 @@ from kronos.bridge_topics import (
     _positive_int,
     _resolve_topic_route,
     _same_telegram_chat,
+    _thread_id_for,
     _topic_id_from_env_or_setting,
     _topic_owner_agents,
 )
 from kronos.config import settings
+from kronos.dissent import review_before_send
 from kronos.graph import KronosAgent
 from kronos.observer.capture import CaptureDecision, classify_capture, record_capture
 from kronos.security.cost_guardian import get_guardian
@@ -111,6 +113,7 @@ __all__ = [
     "_positive_int",
     "_resolve_topic_route",
     "_same_telegram_chat",
+    "_thread_id_for",
     "_topic_id_from_env_or_setting",
     "_topic_owner_agents",
     "_transcribe_voice",
@@ -496,7 +499,7 @@ async def _clear_context(chat_id: int, topic_id: int | None = None) -> str:
     swarm message ledger. Learned user facts (Mem0 / shared_user_facts) are
     cross-conversation and are NOT removed here — see clear_context's message.
     """
-    thread_id = f"{chat_id}:{topic_id}" if topic_id else str(chat_id)
+    thread_id = _thread_id_for(chat_id, topic_id)
     result = await _agent.clear_context(thread_id)
     try:
         from kronos.swarm_store import get_swarm
@@ -640,7 +643,7 @@ async def _ask_agent(
     history and causing verbatim-parrot replies.
     """
     # Topic-aware thread isolation
-    thread_id = f"{chat_id}:{topic_id}" if topic_id else str(chat_id)
+    thread_id = _thread_id_for(chat_id, topic_id)
 
     # Start typing indicator + live progress reporter
     stop_typing = asyncio.Event()
@@ -1106,6 +1109,22 @@ async def run_bridge(agent: KronosAgent) -> None:
             elif _group_router:
                 # Multi-agent group routing (all group types)
                 decision = await _group_router.decide(event, _client)
+
+                # An owned topic gets a deadline, registered even when this agent
+                # skips: the silence worth escalating is the owner's, and the
+                # owner may be the process that is down.
+                if decision.topic_owner:
+                    swarm.watch_sla(
+                        chat_id=event.chat_id,
+                        topic_id=topic_id_inbound,
+                        root_msg_id=event.message.id,
+                        thread_id=_thread_id_for(event.chat_id, topic_id_inbound),
+                        topic=decision.topic,
+                        owner_agent=decision.topic_owner,
+                        request=text,
+                        sla_minutes=decision.owner_sla_minutes,
+                    )
+
                 if not decision.should_respond:
                     # Count "skipped because another agent was addressed" as
                     # a successful addressing-correctness event, and count
@@ -1163,13 +1182,17 @@ async def run_bridge(agent: KronosAgent) -> None:
                     swarm.incr_metric("duplicate_replies_avoided")
                     return
 
-                # Atomic arbitration across all agents.
+                # Atomic arbitration across all agents. The cap is this agent's
+                # own tolerance (agents.yaml max_implicit_replies): it decides
+                # when *I* stand down, so a talkative generalist can be told to
+                # yield sooner without touching anyone else's routing.
                 outcome = swarm.can_send_claim(
                     chat_id=event.chat_id,
                     topic_id=topic_id_inbound,
                     root_msg_id=root_msg_id,
                     agent_name=settings.agent_name,
                     tier=decision.tier,
+                    max_implicit_replies=_group_router.max_implicit_replies,
                 )
                 if not outcome.won:
                     log.info("[Swarm] %s stands down: %s", settings.agent_name, outcome.reason)
@@ -1431,6 +1454,20 @@ async def run_bridge(agent: KronosAgent) -> None:
         validation = validate_output(reply)
         if not validation.is_clean:
             reply = validation.redacted_text
+
+        # Dissent gate (moat 11.4): an owner that declares `dissent: require`
+        # shows its answer to another role before sending. Opt-in and owner-only,
+        # so this is a cheap early return for everyone else.
+        if not is_dm and decision is not None and reply and decision.topic_owner == settings.agent_name:
+            reply = await review_before_send(
+                answer=reply,
+                chat_id=event.chat_id,
+                topic_id=topic_id_inbound,
+                thread_id=_thread_id_for(event.chat_id, topic_id_inbound),
+                root_msg_id=event.message.id,
+                topic=decision.topic,
+                author_agent=settings.agent_name,
+            )
 
         approval_id = _last_pending_approval_id()
         approval_buttons = _approval_buttons(approval_id) if approval_id else None

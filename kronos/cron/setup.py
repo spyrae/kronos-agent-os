@@ -30,6 +30,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # DISABLED 2026-07-07: group-digest paused — duplicate of news-monitor on Digest:News.
     # from kronos.cron.group_digest import run_group_digest
     from kronos.cron.council import run_council_intake
+    from kronos.cron.escalation import run_sla_escalation
     from kronos.cron.expense_digest import run_expense_digest
     from kronos.cron.expenses.processor import run_email_expenses
     from kronos.cron.handoff import run_handoff_intake
@@ -54,6 +55,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.sleep_compute import run_sleep_compute
     from kronos.cron.source_quality_audit import run_source_quality_audit
     from kronos.cron.swarm_retention import run_swarm_retention
+    from kronos.cron.swarm_weekly import run_swarm_weekly_report
     from kronos.cron.turn_retention import run_turn_retention
     from kronos.cron.user_model import run_user_model
 
@@ -73,6 +75,10 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
 
     # Cross-agent memory query intake — poll every 30s (roadmap 5.3)
     scheduler.add_periodic("memory-intake", run_memory_intake, interval_seconds=30)
+
+    # SLA escalation for owned topics — poll every 60s (moat 11.2). A no-op
+    # ledger read when agents.yaml declares no ownership.
+    scheduler.add_periodic("sla-escalation", run_sla_escalation, interval_seconds=60)
 
     # News Monitor — daily at 00:00 UTC (was: kronos-news-monitor.timer)
     scheduler.add_daily("news-monitor", run_news_monitor, hour_utc=0)
@@ -152,6 +158,10 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # their journal/results/effects per policy.retention.turn_journal_days.
     scheduler.add_weekly("turn-retention", run_turn_retention, weekday=6, hour_utc=5)
 
+    # Swarm post-mortem — weekly Sunday 06:00 UTC (moat 11.4). Claims the week in
+    # the shared ledger first, so the digest is sent once, not once per agent.
+    scheduler.add_weekly("swarm-weekly-report", run_swarm_weekly_report, weekday=6, hour_utc=6)
+
     # ── Agent-exclusive jobs (only registered on the owning agent) ──────
     nexus_jobs_registered = 0
 
@@ -179,6 +189,6 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         nexus_jobs_registered = 4
 
     total = (
-        19 + nexus_jobs_registered
-    )  # +reminders +handoff/council/memory intake +persona-evolution; signal-jobs, travel insights, people-scout and group-digest paused
+        21 + nexus_jobs_registered
+    )  # +reminders +handoff/council/memory intake +sla-escalation +swarm-weekly-report +persona-evolution; signal-jobs, travel insights, people-scout and group-digest paused
     log.info("%d cron jobs registered for agent '%s'", total, me)

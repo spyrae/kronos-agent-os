@@ -7,7 +7,12 @@ Tier 1: Explicit addressing (1-5s delay)
   - @mention of my username, reply to my message
 
 Tier 2: Topic relevance (5-20s delay, user messages only)
-  - LLM quick-check: is this my domain? Score 1-10, respond if ≥7
+  - Owner-first: if the message is about a topic this agent `owns`, it answers
+    without the relevance check and on the fast lane, so it wins arbitration
+    against agents who merely find the topic interesting
+  - Otherwise LLM quick-check: is this my domain? Score 1-10, respond if ≥7
+  - A non-owner who would answer an owned topic waits, giving the owner a head
+    start; if the owner is down, the deferred reply still lands
   - Skipped entirely when another known agent is addressed
   - After delay: check if ≥MAX_PEER_REPLIES peers already replied → skip
 
@@ -20,16 +25,21 @@ Cross-agent addressing guard
   - If the user @-addresses specific known agents (by username or alias),
     only those agents pass Tier 1; everyone else skips silently. This is
     the guard that fixes "Impulse answers when Nexus was addressed".
+
+Two kinds of "topic" meet here, and they are not the same thing. A Telegram
+forum topic is routed by id in `bridge_topics` (`TOPIC_*` + `*_agent`): a hard
+assignment where non-owners never even reach this router. What `owns` in
+agents.yaml describes is a *subject* — "planning", "metrics" — recognised from
+the message itself, which is what the shared stream needs, because there every
+agent sees every message.
 """
 
+import hashlib
 import logging
-import os
 import random
 import re
 import time
 from dataclasses import dataclass, field
-
-import yaml
 
 log = logging.getLogger("kronos.group_router")
 
@@ -40,37 +50,42 @@ MAX_PEER_REPLIES = 2
 # Tier 3: cooldown between peer reactions per agent (seconds).
 PEER_REACTION_COOLDOWN = 300  # 5 minutes
 
+# A peer replying to my message reads as an explicit address, and my answer is
+# itself a reply to them — which is how two agents ping-pong forever. Every
+# other loop guard is bypassed at Tier 1 by design, because Tier 1 exists so the
+# *user's* explicit address is always honoured; a peer's does not earn that.
+# Bounded per window instead: a real exchange gets a couple of turns, a loop
+# cannot outlive the window.
+PEER_EXCHANGE_WINDOW = 600  # 10 minutes
+MAX_PEER_EXCHANGES = 2
+
+# Topic classification is agent-independent and messages repeat (edits, retries),
+# so the lite-tier answer is cached per process for five minutes.
+TOPIC_CACHE_TTL = 300
+
+# How long a non-owner defers to the topic owner. Bounded below the swarm's
+# CLAIM_EXPIRY_SECONDS on purpose: a claim held longer than that expires and can
+# never win arbitration, so a literal SLA-long sleep would mean "never answer"
+# while still costing a task and an LLM call. Within this window a live owner
+# always wins (their eta is seconds away); past it, an owner whose process is
+# down no longer leaves the user waiting for the escalation job.
+OWNER_DEFERENCE_SECONDS = 90
+
 # Agent profiles loaded from agents.yaml (see agents.example.yaml for format).
 # Usernames can be overridden per-agent via env: AGENT_USERNAME_KRONOS=..., etc.
 
 
 def _load_profiles() -> dict[str, dict]:
-    """Load agent profiles from agents.yaml, apply env overrides."""
-    config_path = os.environ.get(
-        "AGENTS_CONFIG_PATH",
-        os.path.join(os.path.dirname(__file__), "..", "agents.yaml"),
-    )
-    config_path = os.path.normpath(config_path)
+    """Load agent profiles from agents.yaml, apply env overrides.
 
-    if os.path.exists(config_path):
-        with open(config_path, encoding="utf-8") as f:
-            raw = yaml.safe_load(f) or {}
-    else:
-        log.warning("agents.yaml not found at %s — using empty profile set", config_path)
-        raw = {}
+    Parsing and validation live in `kronos.swarm_config`; the router keeps the
+    plain-dict shape because tools index it by key and tests replace it
+    wholesale. `swarm_config.profile_for()` gives the typed view of an entry
+    when the extended fields (ownership, SLA, budget) matter.
+    """
+    from kronos.swarm_config import load_profiles
 
-    resolved: dict[str, dict] = {}
-    for name, base in raw.items():
-        username = os.environ.get(
-            f"AGENT_USERNAME_{name.upper()}",
-            base.get("username", f"{name}agnt"),
-        )
-        resolved[name] = {
-            "username": username.lower().lstrip("@"),
-            "aliases": [a.lower() for a in base.get("aliases", [name])],
-            "role": base.get("role", ""),
-        }
-    return resolved
+    return {name: profile.model_dump() for name, profile in load_profiles().items()}
 
 
 AGENT_PROFILES: dict[str, dict] = _load_profiles()
@@ -101,6 +116,66 @@ class RoutingDecision:
     tier: int  # 0=skip, 1=explicit, 2=relevance, 3=peer-reaction
     reason: str = ""
     addressing: AddressingInfo | None = None
+    # Recognised subject and its owner, when ownership is configured. The
+    # transport uses them to register the SLA watch — including on a skip, so a
+    # topic stays watched even when this agent has nothing to say about it.
+    topic: str = ""
+    topic_owner: str = ""
+    owner_sla_minutes: int = 0
+
+
+@dataclass
+class EventFacts:
+    """Everything the router reads from an incoming message.
+
+    The one place that knows about Telethon's shape. Extracting it means the
+    in-process swarm bus (and eval scenarios) can drive the real routing logic
+    with a plain object instead of a mock that has to imitate a Telethon event —
+    the tier and arbitration rules below are then provably the same in both.
+    """
+
+    text: str = ""
+    sender_id: int = 0
+    msg_id: int = 0
+    is_reply: bool = False
+    reply_sender_id: int | None = None
+    mentioned_usernames: set[str] = field(default_factory=set)
+    mentioned_user_ids: set[int] = field(default_factory=set)
+    topic_label: str = ""
+
+
+async def event_facts(event) -> EventFacts:
+    """Read an event once: Telethon's, the local bus's, or a test's stub."""
+    if isinstance(event, EventFacts):
+        return event
+
+    facts = EventFacts(
+        text=event.raw_text or "",
+        sender_id=getattr(event, "sender_id", 0) or 0,
+        msg_id=getattr(getattr(event, "message", None), "id", 0) or 0,
+        is_reply=bool(getattr(event, "is_reply", False)),
+        topic_label=str(getattr(event, "topic_label", "") or ""),
+    )
+
+    from telethon.tl.types import MessageEntityMention, MessageEntityMentionName
+
+    entities = getattr(getattr(event, "message", None), "entities", None) or []
+    for ent in entities:
+        if isinstance(ent, MessageEntityMentionName):
+            facts.mentioned_user_ids.add(ent.user_id)
+        elif isinstance(ent, MessageEntityMention):
+            raw = facts.text[ent.offset : ent.offset + ent.length]
+            facts.mentioned_usernames.add(raw.lstrip("@").lower())
+
+    if facts.is_reply:
+        try:
+            replied = await event.get_reply_message()
+        except Exception:
+            replied = None
+        if replied is not None:
+            facts.reply_sender_id = getattr(replied, "sender_id", None)
+
+    return facts
 
 
 # Word-boundary alias matching — stops "импульс" substring from firing on
@@ -155,21 +230,43 @@ class GroupRouter:
         # falsely treat the FIRST reaction as cooled-down and never react.
         self._last_peer_reaction: float = float("-inf")
         self._reacted_to_msgs: set[int] = set()
+        # Monotonic timestamps of Tier-1 replies to peers, for the exchange bound.
+        self._peer_exchanges: list[float] = []
+
+        # Ownership map, read once like the alias index above. An empty map is
+        # the common case for a registry without `owns`, and it makes every
+        # ownership branch below a no-op — including the classification call.
+        from kronos.swarm_config import all_profiles
+
+        self._profiles = all_profiles()
+        self._topic_owners: dict[str, str] = {}
+        for name, prof in self._profiles.items():
+            for topic in prof.owns:
+                # A contested topic has no single owner; swarm_config warned at
+                # load time and routing falls back to plain relevance.
+                self._topic_owners[topic] = "" if topic in self._topic_owners else name
+        self._topic_owners = {topic: owner for topic, owner in self._topic_owners.items() if owner}
+        self._topic_cache: dict[str, tuple[float, str]] = {}
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     async def decide(self, event, client) -> RoutingDecision:
-        """Main entry: should this agent respond to the group message?"""
-        text = event.raw_text or ""
-        sender_id = event.sender_id
+        """Main entry: should this agent respond to the group message?
+
+        Accepts a Telethon event or an EventFacts — the local swarm bus passes
+        the latter, so demos and eval scenarios exercise this exact logic.
+        """
+        facts = await event_facts(event)
+        text = facts.text
+        sender_id = facts.sender_id
 
         # Never respond to self
         if sender_id == self.my_id:
             return RoutingDecision(False, 0, 0, "own message")
 
-        addressing = await self._analyze_addressing(event, text)
+        addressing = self._addressing_from_facts(facts)
         is_peer = self._is_peer(sender_id)
 
         # --- Cross-agent addressing guard (fires for both user and peer src) ---
@@ -186,8 +283,19 @@ class GroupRouter:
 
         # --- Peer bot messages ---
         if is_peer:
-            # Tier 1: explicit @mention from peer → always respond
+            # Tier 1: explicit @mention or reply from a peer → respond, but not
+            # forever: my answer is a reply to them, which reads as an address
+            # back to me on their side.
             if addressing.explicit_to_me:
+                if not self._peer_exchange_allowed():
+                    return RoutingDecision(
+                        False,
+                        0,
+                        0,
+                        f"peer exchange budget spent ({MAX_PEER_EXCHANGES} per {PEER_EXCHANGE_WINDOW}s)",
+                        addressing=addressing,
+                    )
+                self._peer_exchanges.append(time.monotonic())
                 return RoutingDecision(
                     True,
                     random.uniform(3, 8),
@@ -197,7 +305,12 @@ class GroupRouter:
                 )
 
             # Tier 3: auto-react if meaningfully disagree (with guards)
-            msg_id = event.message.id
+            msg_id = facts.msg_id
+
+            # Guard 0: quiet mode — out of personal budget, so no volunteering.
+            quiet = self._quiet_reason()
+            if quiet:
+                return RoutingDecision(False, 0, 0, f"quiet mode ({quiet})", addressing=addressing)
 
             # Guard 1: cooldown — max 1 peer reaction per 5 minutes
             now = time.monotonic()
@@ -210,8 +323,7 @@ class GroupRouter:
 
             # Guard 3: Tier 3 requires a user-root. Peer-to-peer chains do
             # not trigger reactions (otherwise bots debate each other forever).
-            replied_to_user = await self._peer_replies_to_user(event)
-            if not replied_to_user:
+            if not self._facts_reply_to_user(facts):
                 return RoutingDecision(
                     False,
                     0,
@@ -256,15 +368,50 @@ class GroupRouter:
                 addressing=addressing,
             )
 
-        # Tier 2: Topic relevance → respond with delay
-        relevance = await self._check_relevance(text)
-        if relevance >= 7:
+        # Quiet mode: an agent that spent its personal budget still answers when
+        # addressed (Tier 1, above) but stops volunteering. Checked before the
+        # classification and relevance calls, because those are the spend.
+        quiet = self._quiet_reason()
+        if quiet:
+            return RoutingDecision(False, 0, 0, f"quiet mode ({quiet})", addressing=addressing)
+
+        # Ownership: recognise the subject before spending a relevance call.
+        topic = await self._topic_key(facts, text)
+        owner = self._topic_owners.get(topic, "")
+        owner_sla = self._profiles[owner].sla_minutes if owner in self._profiles else 0
+
+        # Tier 2a: the owner answers its own topic — no relevance threshold, and
+        # on the fast lane so it outranks non-owners in arbitration by eta.
+        if owner and owner == self.agent_name:
             return RoutingDecision(
                 True,
-                random.uniform(5, 20),
+                random.uniform(1, 4),
                 2,
-                f"relevance={relevance}",
+                f"owner of '{topic}'",
                 addressing=addressing,
+                topic=topic,
+                topic_owner=owner,
+                owner_sla_minutes=owner_sla,
+            )
+
+        # Tier 2b: relevance as before.
+        relevance = await self._check_relevance(text)
+        if relevance >= 7:
+            delay = random.uniform(5, 20)
+            reason = f"relevance={relevance}"
+            if owner:
+                # Defer to the owner rather than answering over them.
+                delay = OWNER_DEFERENCE_SECONDS
+                reason = f"relevance={relevance}, deferring to owner {owner} of '{topic}'"
+            return RoutingDecision(
+                True,
+                delay,
+                2,
+                reason,
+                addressing=addressing,
+                topic=topic,
+                topic_owner=owner,
+                owner_sla_minutes=owner_sla,
             )
 
         return RoutingDecision(
@@ -273,7 +420,37 @@ class GroupRouter:
             0,
             f"low relevance={relevance}",
             addressing=addressing,
+            topic=topic,
+            topic_owner=owner,
+            owner_sla_minutes=owner_sla,
         )
+
+    @property
+    def max_implicit_replies(self) -> int:
+        """How many peer replies this agent tolerates before standing down.
+
+        Per-agent override from agents.yaml, so a chatty generalist can be told
+        to yield sooner than the swarm default without changing anyone else.
+        """
+        mine = self._profiles[self.agent_name].max_implicit_replies if self.agent_name in self._profiles else None
+        return MAX_PEER_REPLIES if mine is None else mine
+
+    def _peer_exchange_allowed(self) -> bool:
+        """Room left in this window for another Tier-1 reply to a peer."""
+        cutoff = time.monotonic() - PEER_EXCHANGE_WINDOW
+        self._peer_exchanges = [ts for ts in self._peer_exchanges if ts > cutoff]
+        return len(self._peer_exchanges) < MAX_PEER_EXCHANGES
+
+    def _quiet_reason(self) -> str:
+        """Non-empty when this agent has spent its personal daily budget."""
+        try:
+            from kronos.security.cost_guardian import get_guardian
+
+            return get_guardian().quiet_reason(self.agent_name)
+        except Exception as e:  # pragma: no cover - defensive
+            # A budget read must never be the reason an agent goes mute.
+            log.debug("[GroupRouter] Quiet-mode check failed: %s", e)
+            return ""
 
     async def should_still_respond(self, event, client, tier: int) -> bool:
         """Re-check after delay: did too many peers already respond?
@@ -284,7 +461,7 @@ class GroupRouter:
         if tier == 1:
             return True
         count = await self._count_peer_replies(event, client)
-        if count >= MAX_PEER_REPLIES:
+        if count >= self.max_implicit_replies:
             log.info(
                 "[GroupRouter] %s: %d peers already replied (tier=%d), skipping",
                 self.agent_name,
@@ -299,27 +476,24 @@ class GroupRouter:
     # ------------------------------------------------------------------
 
     async def _analyze_addressing(self, event, text: str) -> AddressingInfo:
+        """Kept for callers that hold an event; the logic lives on facts."""
+        return self._addressing_from_facts(await event_facts(event))
+
+    def _addressing_from_facts(self, facts: "EventFacts") -> AddressingInfo:
         info = AddressingInfo()
-        text_lower = text.lower()
+        text_lower = facts.text.lower()
 
         # 1. Telegram mention entities — authoritative for @username and
         #    MentionName (explicit user_id resolution).
-        from telethon.tl.types import MessageEntityMention, MessageEntityMentionName
-
-        entities = event.message.entities or []
-        for ent in entities:
-            if isinstance(ent, MessageEntityMentionName):
-                if ent.user_id == self.my_id:
-                    info.explicit_to_me = True
-                    info.target_agents.add(self.agent_name)
-            elif isinstance(ent, MessageEntityMention):
-                raw = event.raw_text[ent.offset : ent.offset + ent.length]
-                uname = raw.lstrip("@").lower()
-                if uname == self.my_username:
-                    info.explicit_to_me = True
-                    info.target_agents.add(self.agent_name)
-                elif uname in self._username_to_agent:
-                    info.target_agents.add(self._username_to_agent[uname])
+        if self.my_id in facts.mentioned_user_ids:
+            info.explicit_to_me = True
+            info.target_agents.add(self.agent_name)
+        for uname in facts.mentioned_usernames:
+            if uname == self.my_username:
+                info.explicit_to_me = True
+                info.target_agents.add(self.agent_name)
+            elif uname in self._username_to_agent:
+                info.target_agents.add(self._username_to_agent[uname])
 
         # 2. Fallback: raw-text @username scan (covers cases where the
         #    message came through a path without entities).
@@ -337,15 +511,10 @@ class GroupRouter:
                     info.explicit_to_me = True
 
         # 4. Reply-to-me
-        if event.is_reply:
-            try:
-                replied = await event.get_reply_message()
-                if replied is not None and replied.sender_id == self.my_id:
-                    info.reply_to_me = True
-                    info.explicit_to_me = True
-                    info.target_agents.add(self.agent_name)
-            except Exception:
-                pass
+        if facts.is_reply and facts.reply_sender_id == self.my_id:
+            info.reply_to_me = True
+            info.explicit_to_me = True
+            info.target_agents.add(self.agent_name)
 
         info.explicit_to_other = bool(info.target_agents) and self.agent_name not in info.target_agents
         return info
@@ -354,26 +523,18 @@ class GroupRouter:
     # Tier 3 guard: peer must reply to a user-root message
     # ------------------------------------------------------------------
 
-    async def _peer_replies_to_user(self, event) -> bool:
-        """True if this peer message is a reply to a user message.
+    def _facts_reply_to_user(self, facts: EventFacts) -> bool:
+        """True if this peer message is a reply to a whitelisted user.
 
-        Also accepts the case where the peer message is standalone (no reply)
-        only if it appeared right after a user message — we approximate that
-        by saying: if there's no reply linkage at all, treat as NOT user-rooted.
-        This is stricter than before and intentionally so; it prevents bots
-        from reacting to each other without a user anchor.
+        A peer message with no reply linkage is NOT treated as user-rooted. That
+        is deliberately strict: it prevents bots from reacting to each other
+        without a user anchor.
         """
-        if not event.is_reply:
-            return False
-        try:
-            replied = await event.get_reply_message()
-            if replied is None:
-                return False
-            # If the message being replied to is from a whitelisted user,
-            # this is a user-rooted thread.
-            return replied.sender_id in self.allowed_user_ids
-        except Exception:
-            return False
+        return facts.is_reply and facts.reply_sender_id in self.allowed_user_ids
+
+    async def _peer_replies_to_user(self, event) -> bool:
+        """Event-level wrapper around the fact check above."""
+        return self._facts_reply_to_user(await event_facts(event))
 
     # ------------------------------------------------------------------
     # Sender classification
@@ -414,6 +575,68 @@ class GroupRouter:
         except Exception as e:
             log.warning("[GroupRouter] Relevance check failed: %s", e)
             return 5  # neutral — don't respond on error
+
+    # ------------------------------------------------------------------
+    # Ownership: which declared subject is this message about?
+    # ------------------------------------------------------------------
+
+    async def _topic_key(self, event, text: str) -> str:
+        """One of the topics declared in `owns`, or "" when none applies.
+
+        Free when the registry declares no ownership, which keeps the whole
+        feature invisible to swarms that do not use it. Takes an EventFacts or
+        anything with a `topic_label`.
+        """
+        if not self._topic_owners:
+            return ""
+
+        # A message may name its subject directly (the local swarm bus and eval
+        # scenarios do). Trust it when it matches a declared topic — no LLM.
+        declared = str(getattr(event, "topic_label", "") or "").strip().lower()
+        if declared in self._topic_owners:
+            return declared
+
+        return await self._classify_topic(text)
+
+    async def _classify_topic(self, text: str) -> str:
+        """Lite-tier classification of the message into a declared topic."""
+        if not text.strip():
+            return ""
+
+        topics = sorted(self._topic_owners)
+        cache_key = hashlib.sha256("|".join([text[:500], *topics]).encode("utf-8")).hexdigest()
+        cached = self._topic_cache.get(cache_key)
+        now = time.monotonic()
+        if cached and cached[0] > now:
+            return cached[1]
+
+        from langchain_core.messages import HumanMessage
+
+        from kronos.llm import ModelTier, get_model
+
+        prompt = (
+            "Classify the message into exactly one of these topics:\n"
+            f"{', '.join(topics)}\n"
+            "Reply with ONLY the topic label, or NONE if none of them fits.\n\n"
+            f"Message: {text[:500]}"
+        )
+
+        try:
+            model = get_model(ModelTier.LITE)
+            response = await model.ainvoke([HumanMessage(content=prompt)])
+            raw = response.content if isinstance(response.content, str) else str(response.content)
+            answer = raw.strip().strip(".\"'").lower()
+            # The model can invent a label; only a declared one counts.
+            topic = answer if answer in self._topic_owners else ""
+        except Exception as e:
+            # Fail open: a classification glitch must not silence the swarm.
+            log.warning("[GroupRouter] Topic classification failed: %s", e)
+            return ""
+
+        if len(self._topic_cache) > 500:
+            self._topic_cache.clear()
+        self._topic_cache[cache_key] = (now + TOPIC_CACHE_TTL, topic)
+        return topic
 
     # ------------------------------------------------------------------
     # Tier 3: Peer reaction (LLM, lite model)

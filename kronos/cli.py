@@ -255,6 +255,135 @@ def _demo_reply(prompt: str) -> str:
     return "KAOS demo: runtime + memory + skills + MCP + automations + optional swarm, with risky capabilities disabled until explicit opt-in."
 
 
+_DEMO_SWARM = (
+    # name, role, owns, escalates_to
+    ("strategist", "strategy and priorities", ["planning"], "analyst"),
+    ("analyst", "metrics and research", ["metrics"], "strategist"),
+    ("operator", "momentum and unblocking", [], "strategist"),
+)
+
+
+def run_demo_swarm() -> int:
+    """Show swarm coordination locally: no Telegram accounts, no LLM keys.
+
+    Three agents on one in-process bus over a temporary swarm ledger. Everything
+    printed is the production routing — the same tier rules, the same claim
+    arbitration, the same escalation job — driven through EventFacts instead of
+    Telethon events.
+    """
+    import tempfile
+
+    from kronos.group_router import AGENT_PROFILES
+
+    _force_demo_safety()
+
+    with tempfile.TemporaryDirectory(prefix="kaos-swarm-demo-") as tmp:
+        settings.swarm_db_path = str(Path(tmp) / "swarm.db")
+        settings.db_dir = tmp
+        import kronos.db as _db
+        import kronos.swarm_store as _swarm_store
+
+        # The escalation job reads the process-wide store, so the demo must own
+        # that singleton — otherwise the job would poll a different ledger than
+        # the bus writes to and find nothing due.
+        _db._instances.clear()
+        _swarm_store._singleton = None
+
+        original = {name: dict(prof) for name, prof in AGENT_PROFILES.items()}
+        AGENT_PROFILES.clear()
+        AGENT_PROFILES.update(
+            {
+                name: {
+                    "username": f"{name}bot",
+                    "aliases": [name],
+                    "role": role,
+                    "owns": owns,
+                    "escalates_to": escalates_to,
+                    "sla_minutes": 15,
+                }
+                for name, role, owns, escalates_to in _DEMO_SWARM
+            }
+        )
+        try:
+            asyncio.run(_run_demo_swarm_rounds())
+        finally:
+            AGENT_PROFILES.clear()
+            AGENT_PROFILES.update(original)
+            _db._instances.clear()
+            _swarm_store._singleton = None
+    return 0
+
+
+async def _run_demo_swarm_rounds() -> None:
+    from kronos.cron.escalation import run_sla_escalation
+    from kronos.swarm_local import LocalSwarmBus
+    from kronos.swarm_store import get_swarm
+
+    store = get_swarm()
+    bus = LocalSwarmBus(store=store)
+    for name, _role, _owns, _escalates in _DEMO_SWARM:
+        bus.add_agent(
+            name,
+            username=f"{name}bot",
+            relevance=lambda agent, text: 9,  # everyone wants to answer
+            react=lambda agent, text: agent == "operator",
+        )
+
+    print("KAOS swarm demo — three agents, one shared ledger, no Telegram.\n")
+    print("Registry: strategist owns 'planning', analyst owns 'metrics',")
+    print("operator owns nothing; both owners escalate to each other.\n")
+
+    async def round_of(label: str, text: str, *, topic_label: str = "") -> list[dict]:
+        print(f"--- {label}")
+        print(f"user> {text}" + (f"   [topic: {topic_label}]" if topic_label else ""))
+        sent = await bus.user_says(text, topic_label=topic_label)
+        for entry in sent:
+            print(f"  {entry['agent']} (tier {entry['tier']}, {entry['reason']}): {entry['text']}")
+        if not sent:
+            print("  (nobody answered)")
+        return sent
+
+    await round_of("Three eager agents, two replies — the swarm cap decides", "что делать с ростом?")
+    print("    (the third agent stood down: arbitration, not luck)\n")
+
+    # Only the owner is keen now, so the ownership shortcut is what shows.
+    for agent in bus.agents.values():
+        agent.relevance = lambda name, text: 5
+    owned = await round_of(
+        "Owned topic — the specialist answers below the relevance threshold",
+        "распланируй следующий квартал",
+        topic_label="planning",
+    )
+    if owned:
+        for entry in await bus.run_round(owned[0]["reply_facts"]):
+            print(f"  {entry['agent']} (tier {entry['tier']}, {entry['reason']}): {entry['text']}")
+        print("    (a peer added a Tier 3 reaction — it spends the same reply budget)\n")
+
+    print("--- Owner's process is down — the deadline is still watched, then escalates")
+    print("user> нужны свежие метрики по воронке   [topic: metrics]")
+    del bus.agents["analyst"]  # the owner of 'metrics' is not running
+    for agent in bus.agents.values():
+        agent.relevance = lambda name, text: 1  # and nobody else volunteers
+    await bus.user_says("нужны свежие метрики по воронке", topic_label="metrics")
+    print("  (nobody answered — the watch was registered by a NON-owner, which is")
+    print("   the whole point: the owner could not register anything)")
+    watch = next(row for row in store.sla_watches() if row["topic"] == "metrics")
+    store._db.write("UPDATE sla_watch SET deadline_ts = 0 WHERE id = ?", (watch["id"],))
+    settings.agent_name = "operator"
+    await run_sla_escalation()
+    for handoff in store.pending_handoffs("strategist"):
+        print(f"  → escalated to strategist: {handoff['context'].splitlines()[0]}")
+
+    print("\n--- Ledger")
+    for metric, value in sorted(store.get_metrics().items()):
+        print(f"  {metric}: {value}")
+
+    from kronos.swarm_report import build_report, render_markdown
+
+    print("\n--- The same post-mortem production sends weekly\n")
+    print(render_markdown(build_report("day")))
+
+
 def run_demo(interactive: bool = False, live: bool = False, use_tools: bool = False) -> int:
     """Run a safe local demo that does not require Telegram, Docker, or LLM keys."""
     _force_demo_safety()
@@ -453,6 +582,24 @@ def run_doctor() -> int:
             warn("Telegram general topic", "unset; configured swarm chat without a general routing topic")
     else:
         ok("Telegram topic policy", "not configured; legacy group routing")
+
+    from kronos.swarm_config import SwarmConfigError, load_profiles, validate_profiles
+
+    try:
+        _profiles = load_profiles()
+        if not _profiles:
+            ok("Swarm registry", "no agents.yaml; single-agent mode")
+        else:
+            _owned = sorted({topic for prof in _profiles.values() for topic in prof.owns})
+            _detail = f"{len(_profiles)} agent(s)"
+            _detail += f"; owned topics: {', '.join(_owned)}" if _owned else "; no topic ownership declared"
+            _warnings = validate_profiles(_profiles)
+            if _warnings:
+                warn("Swarm registry", f"{_detail}; {_warnings[0]}")
+            else:
+                ok("Swarm registry", _detail)
+    except SwarmConfigError as e:
+        fail("Swarm registry", str(e).splitlines()[0])
 
     from kronos.portability import BUNDLE_SCHEMA_VERSION
     from kronos.portability.importers import available as _importers
@@ -1177,6 +1324,23 @@ def run_audit_verify(as_json: bool) -> int:
     return 0
 
 
+def run_swarm_report(period: str, as_json: bool) -> int:
+    """Post-mortem of the swarm's period: who answered, how well, at what cost."""
+    from kronos.swarm_report import build_report, render_markdown
+
+    try:
+        report = build_report(period)
+    except ValueError as e:
+        print(f"[FAIL] {e}")
+        return 1
+
+    if as_json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+    else:
+        print(render_markdown(report))
+    return 0
+
+
 DEFAULT_EVAL_SUITE = "tests/evals/suites/golden"
 
 
@@ -1390,6 +1554,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     demo = sub.add_parser("demo", help="run safe local demo")
     demo.add_argument("--interactive", action="store_true", help="open deterministic offline demo prompt")
+    demo.add_argument("--swarm", action="store_true", help="show swarm coordination locally (no Telegram, no keys)")
     demo.add_argument("--live", action="store_true", help="start real LLM-backed chat with demo safety gates")
     demo.add_argument("--tools", action="store_true", help="load configured static MCP tools in --live mode")
 
@@ -1485,6 +1650,21 @@ def build_parser() -> argparse.ArgumentParser:
     policy_sub = policy_cmd.add_subparsers(dest="policy_command")
     policy_report = policy_sub.add_parser("report", help="print the effective policy and value sources")
     policy_report.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+
+    swarm_cmd = sub.add_parser("swarm", help="swarm coordination reports")
+    swarm_sub = swarm_cmd.add_subparsers(dest="swarm_command")
+    swarm_report = swarm_sub.add_parser("report", help="who answered, how well, at what cost")
+    from kronos.swarm_report import PERIOD_DAYS
+
+    swarm_report.add_argument(
+        "--period",
+        default="week",
+        choices=sorted(PERIOD_DAYS),
+        help="reporting window (default: week)",
+    )
+    swarm_report.add_argument("--day", dest="period", action="store_const", const="day", help="shorthand for a day")
+    swarm_report.add_argument("--week", dest="period", action="store_const", const="week", help="shorthand for a week")
+    swarm_report.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
 
     audit_cmd = sub.add_parser("audit", help="audit trail integrity")
     audit_sub = audit_cmd.add_subparsers(dest="audit_command")
@@ -1583,6 +1763,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "chat":
         return asyncio.run(run_cli(use_tools=args.tools, prompt=args.prompt, enable_memory=not args.no_memory))
     if args.command == "demo":
+        if args.swarm:
+            return run_demo_swarm()
         return run_demo(interactive=args.interactive, live=args.live, use_tools=args.tools)
     if args.command == "demo-seed":
         return run_demo_seed(args.data_dir, args.workspace, args.swarm_db, reset=args.reset)
@@ -1634,6 +1816,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.policy_command == "report":
             return run_policy_report(args.as_json)
         parser.parse_args(["policy", "--help"])
+        return 0
+    if args.command == "swarm":
+        if args.swarm_command == "report":
+            return run_swarm_report(args.period, args.as_json)
+        parser.parse_args(["swarm", "--help"])
         return 0
     if args.command == "audit":
         if args.audit_command == "verify":

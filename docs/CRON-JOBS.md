@@ -24,6 +24,12 @@ All core cron jobs are registered in `kronos/cron/setup.py` and run by the built
 | 16 | market-review | Weekly Fri 10:00 UTC (18:00 UTC+8) | Weekly | `market_review.py` |
 | 17 | source-quality-audit | Weekly Sun 04:00 UTC with 13-day guard | Weekly | `source_quality_audit.py` |
 | 18 | swarm-retention | Weekly Sun 03:00 UTC (11:00 UTC+8) | Weekly | `swarm_retention.py` |
+| 19 | turn-retention | Weekly Sun 05:00 UTC (13:00 UTC+8) | Weekly | `turn_retention.py` |
+| 20 | swarm-weekly-report | Weekly Sun 06:00 UTC (14:00 UTC+8) | Weekly | `swarm_weekly.py` |
+| 21 | sla-escalation | Every 60 s | Periodic | `escalation.py` |
+
+Intake pollers registered alongside these: `user-reminders` (60 s),
+`handoff-intake`, `council-intake`, `memory-intake` (30 s each).
 
 ## Job Details
 
@@ -276,6 +282,43 @@ Retention cleanup:
 3. Run safely on all agents; empty per-agent stores are harmless.
 
 **Notification:** Silent unless logs/errors require investigation.
+
+### 19. turn-retention
+**Schedule:** Weekly Sunday 05:00 UTC
+**Module:** `kronos/cron/turn_retention.py`
+
+Prunes finished durable turns and their journal / tool results / effects rows per
+`policy.retention.turn_journal_days`. A turn's effects are dropped with the turn
+because the default idempotency key contains its `turn_id`.
+
+**Notification:** Silent unless logs/errors require investigation.
+
+### 20. swarm-weekly-report
+**Schedule:** Weekly Sunday 06:00 UTC
+**Module:** `kronos/cron/swarm_weekly.py`
+
+The same post-mortem as `kaos swarm report --week`: who answered and at which
+tier, spend and cost per reply, reactions, owned-topic activity and missed SLAs,
+hand-offs, councils and reviews.
+
+All six processes run this job, so it first claims the ISO week in the shared
+`job_claims` table — the one whose INSERT won sends, the rest return. A week with
+no replies and no watched topics is not pushed at all.
+
+**Notification:** Bot API → Telegram `Digest` topic + NTFY summary.
+
+### 21. sla-escalation
+**Schedule:** Every 60 seconds
+**Module:** `kronos/cron/escalation.py`
+
+For each `sla_watch` row whose deadline passed with no answer, hands the topic to
+the owner's `escalates_to` through the existing hand-off queue. An owner that
+answered late closes the watch as `answered`; an owner with no cover is dropped
+once and counted rather than rechecked forever. Cross-process safety comes from a
+compare-and-set on the watch row, so exactly one of the six pollers creates the
+hand-off. A no-op ledger read when `agents.yaml` declares no ownership.
+
+**Notification:** none directly — delivery is the hand-off itself.
 
 ## Scheduler Implementation
 
