@@ -77,6 +77,8 @@ class RegistryEntry:
     signed: bool = False
     source: str = ""
     trust: str = "checksum"
+    # Optional override; by default the scenario is a sibling of SKILL.md.
+    scenario_url: str = ""
 
     def matches(self, query: str) -> bool:
         needle = query.strip().lower()
@@ -211,6 +213,7 @@ def parse_index(source: RegistrySource, payload: str) -> list[RegistryEntry]:
                 requires_kaos=str(item.get("requires_kaos", "")).strip(),
                 checksum=str(item.get("checksum", "")).strip(),
                 signed=bool(item.get("signed", False)),
+                scenario_url=str(item.get("scenario_url", "")).strip(),
                 source=source.name,
                 trust=source.trust,
             )
@@ -309,11 +312,13 @@ def install(
     source: str = "",
     entries: list[RegistryEntry] | None = None,
     allow_activate: bool = True,
+    run_eval: bool = True,
 ) -> InstallResult:
     """Install one advertised skill, then decide what its proof allows.
 
-    The skill lands as a draft first (the existing import path), and is promoted
-    only when the source demands a signature and that signature verifies.
+    The skill lands as a draft first (the existing import path), then its own
+    scenario is replayed offline, and only proof on both counts — a signature from
+    a trusted key and a scenario that passes — promotes it to active.
     """
     if entries is None:
         entries, problems = load_index()
@@ -328,13 +333,51 @@ def install(
     if not entry.url:
         return InstallResult(skill=name, installed=False, reason=f"'{name}' has no url in the index")
 
+    from kronos.skills.autoeval import name_conflicts
+
+    conflict = name_conflicts(name, store)
+    if conflict:
+        return InstallResult(skill=name, installed=False, reason=conflict)
+
     from kronos.skills.hub import import_skill
 
     message = import_skill(entry.url, store)
     if "imported successfully" not in message:
         return InstallResult(skill=name, installed=False, reason=message)
 
-    return finish_install(entry, store=store, allow_activate=allow_activate)
+    outcome = evaluate_installed(entry, store=store) if run_eval else None
+    return finish_install(entry, store=store, allow_activate=allow_activate, outcome=outcome)
+
+
+def evaluate_installed(entry: RegistryEntry, *, store: SkillStore):
+    """Fetch and replay the skill's own scenario. Returns an EvalOutcome."""
+    import asyncio
+
+    from kronos.skills.autoeval import EVAL_ERROR, EvalOutcome, fetch_scenario, record_outcome, run_skill_eval
+    from kronos.skills.autoeval import scenario_url as derive_scenario_url
+
+    skill = store.get(entry.name)
+    if skill is None:  # pragma: no cover - import reported success
+        return EvalOutcome(EVAL_ERROR, "skill vanished after import")
+
+    skill_dir = skill.path.parent
+    fetch_scenario(
+        derive_scenario_url(entry.url, entry.scenario_url),
+        skill_dir,
+        declared=bool(entry.scenario_url),
+    )
+    try:
+        outcome = asyncio.run(run_skill_eval(skill_dir))
+    except RuntimeError:
+        # Already inside a loop (an agent tool calling install): run it in a
+        # thread with its own loop rather than refusing to check.
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            outcome = pool.submit(lambda: asyncio.run(run_skill_eval(skill_dir))).result()
+
+    record_outcome(store, entry.name, outcome)
+    return outcome
 
 
 def finish_install(
@@ -342,9 +385,10 @@ def finish_install(
     *,
     store: SkillStore,
     allow_activate: bool = True,
-    eval_detail: str = "",
+    outcome=None,
 ) -> InstallResult:
     """Verify a freshly imported skill and set its status accordingly."""
+    from kronos.skills.autoeval import EVAL_ERROR, EVAL_FAILED, EVAL_MISSING
     from kronos.skills.integrity import trusted_keys, verify_skill
 
     skill = store.get(entry.name)
@@ -372,17 +416,41 @@ def finish_install(
     elif entry.trust == "signed" and not report["signature_ok"]:
         reasons.append(f"source requires a signature: {report['signature_detail']}")
 
-    # Proof strong enough to skip a human read: the source demands signing and a
-    # key we configured signed these exact bytes.
+    # A failing scenario is the skill contradicting its own publisher, which is
+    # reason enough to leave it a draft. A *missing* one is not a failure — most
+    # skills have none yet, and refusing them would leave the registry empty and
+    # the "unverified" marking meaningless — it only means nothing vouches for
+    # behaviour, which is what the marking says.
+    eval_status = getattr(outcome, "status", EVAL_MISSING) if outcome is not None else ""
+    report["eval_status"] = eval_status or EVAL_MISSING
+    report["eval_detail"] = getattr(outcome, "detail", "") if outcome is not None else ""
+    eval_refuted = eval_status in (EVAL_FAILED, EVAL_ERROR)
+    if eval_refuted:
+        reasons.append(report["eval_detail"])
+
+    from kronos.policy import get_policy
+
+    try:
+        require_eval = get_policy().registry.require_eval_on_install
+    except Exception:  # pragma: no cover - policy is optional
+        require_eval = True
+
+    # Proof strong enough to skip a human read: the source demands signing, a key
+    # we configured signed these exact bytes, and nothing the skill itself claims
+    # to check came back red.
     proven = report["signature_ok"] and report["checksum_ok"] and report["compatible"] and entry.trust == "signed"
+    if require_eval and eval_refuted:
+        proven = False
     status = "active" if (proven and allow_activate and not reasons) else "draft"
     if status == "active":
         store.update_status(entry.name, "active")
 
     reason = "; ".join(reasons)
     if not reason:
-        reason = report["signature_detail"] if proven else "installed for review (no signature to vouch for it)"
-    if eval_detail:
-        reason = f"{reason}; {eval_detail}"
+        reason = report["signature_detail"] if report["signature_ok"] else "installed for review"
+        if eval_status == EVAL_MISSING:
+            reason = f"{reason}; unverified: skill ships no scenario"
+        elif report["eval_detail"]:
+            reason = f"{reason}; {report['eval_detail']}"
 
     return InstallResult(skill=entry.name, installed=True, status=status, reason=reason, report=report)

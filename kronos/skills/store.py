@@ -41,6 +41,9 @@ class Skill:
     requires_kaos: str = ""
     checksum: str = ""
     signature: str = ""
+    # Verdict of the skill's own scenario, when it ships one (moat 12.3).
+    eval_status: str = ""
+    eval_detail: str = ""
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -171,6 +174,8 @@ class SkillStore:
             requires_kaos = meta.get("requires_kaos", "")
             checksum = meta.get("checksum", "")
             signature = meta.get("signature", "")
+            eval_status = meta.get("eval_status", "")
+            eval_detail = meta.get("eval_detail", "")
 
             if not description:
                 # Fallback: extract first paragraph as description
@@ -204,6 +209,8 @@ class SkillStore:
                 requires_kaos=requires_kaos,
                 checksum=checksum,
                 signature=signature,
+                eval_status=eval_status,
+                eval_detail=eval_detail,
             )
 
     @property
@@ -269,6 +276,8 @@ class SkillStore:
             requires_kaos=meta.get("requires_kaos", ""),
             checksum=meta.get("checksum", ""),
             signature=meta.get("signature", ""),
+            eval_status=meta.get("eval_status", ""),
+            eval_detail=meta.get("eval_detail", ""),
         )
         log.info("Skill added: %s (status=%s)", name, meta.get("status", "active"))
         self._generate_manifest_file()
@@ -276,13 +285,21 @@ class SkillStore:
 
     def update_status(self, name: str, status: str) -> bool:
         """Update a skill status in frontmatter and refresh the manifest."""
+        return self.set_meta(name, {"status": status})
+
+    def set_meta(self, name: str, updates: dict[str, object]) -> bool:
+        """Merge frontmatter fields for one skill and refresh the manifest.
+
+        Used for local bookkeeping (status, eval verdicts). Deliberately does not
+        touch the body or the reference files, so a recorded verdict cannot change
+        what the skill's checksum covers.
+        """
         skill = self._skills.get(name)
         if not skill:
             return False
 
-        raw = skill.path.read_text(encoding="utf-8")
-        meta, body = _parse_frontmatter(raw)
-        meta["status"] = status
+        meta, body = _parse_frontmatter(skill.path.read_text(encoding="utf-8"))
+        meta.update({key: _format_frontmatter_value(value) for key, value in updates.items()})
 
         fm_lines = ["---"]
         for key, value in meta.items():
@@ -290,7 +307,12 @@ class SkillStore:
         fm_lines.extend(["---", "", body])
         skill.path.write_text("\n".join(fm_lines), encoding="utf-8")
 
-        skill.status = status
+        if "status" in updates:
+            skill.status = str(updates["status"])
+        if "eval_status" in updates:
+            skill.eval_status = str(updates["eval_status"])
+        if "eval_detail" in updates:
+            skill.eval_detail = str(updates["eval_detail"])
         self._generate_manifest_file()
         return True
 
@@ -338,6 +360,11 @@ class SkillStore:
                 row["imported_at"] = skill.imported_at
             if skill.review_required:
                 row["review_required"] = True
+            if skill.requires_kaos:
+                row["requires_kaos"] = skill.requires_kaos
+            row["verified"] = bool(skill.checksum)
+            row["signed"] = bool(skill.signature)
+            row["eval_status"] = skill.eval_status or "none"
             skills_list.append(row)
         return {
             "version": "1.0.0",

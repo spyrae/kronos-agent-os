@@ -379,13 +379,14 @@ def test_an_incompatible_skill_stays_a_draft(store, served, monkeypatch):
     assert "needs 99" in result.reason
 
 
-def test_installing_twice_is_refused_by_the_existing_guard(store, served):
+def test_installing_twice_is_refused_before_any_fetch(store, served):
+    """The name conflict is known locally, so it costs no round trip."""
     install("decision-memo", store=store, entries=[_entry(trust="none")])
 
     second = install("decision-memo", store=store, entries=[_entry(trust="none")])
 
     assert second.installed is False
-    assert "already exists" in second.reason
+    assert "already installed" in second.reason
 
 
 # --- the one path that activates -----------------------------------------------
