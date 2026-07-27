@@ -266,6 +266,9 @@ class SkillStore:
             source_url=meta.get("source_url", ""),
             imported_at=meta.get("imported_at", ""),
             review_required=str(meta.get("review_required", "")).lower() == "true",
+            requires_kaos=meta.get("requires_kaos", ""),
+            checksum=meta.get("checksum", ""),
+            signature=meta.get("signature", ""),
         )
         log.info("Skill added: %s (status=%s)", name, meta.get("status", "active"))
         self._generate_manifest_file()

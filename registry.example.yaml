@@ -1,0 +1,42 @@
+# Skill sources — where `kaos skills search|info|install` may fetch from.
+# Copy to registry.yaml. No file means no sources, and install says so.
+#
+# This is a list of places, not a service. Each source publishes an index.json:
+#
+#   {
+#     "version": 1,
+#     "skills": [
+#       {
+#         "name": "decision-memo",
+#         "description": "Write a one-page decision memo",
+#         "version": "1.2.0",
+#         "url": "github:acme/skills/decision-memo",
+#         "author": "acme",
+#         "requires_kaos": ">=0.2",
+#         "checksum": "sha256:…",
+#         "signed": true
+#       }
+#     ]
+#   }
+#
+# For a `github:user/repo` source the index is read from the repository root
+# (github:user/repo/subdir looks in that subdir).
+#
+# trust levels — how much a source must prove before a skill can activate:
+#   signed   — a signature from a key in policy.yaml registry.trusted_keys is
+#              required; only then does an installed skill become active
+#   checksum — the declared checksum must match; the skill installs as a draft
+#   none     — nothing is required; the skill installs as a draft
+#
+# A failed check never deletes anything: the worst case is a draft you can read.
+
+version: 1
+
+sources:
+  - name: kaos-official
+    url: github:spyrae/kaos-skills
+    trust: signed
+
+  - name: community
+    url: https://example.invalid/skills/index.json
+    trust: checksum
