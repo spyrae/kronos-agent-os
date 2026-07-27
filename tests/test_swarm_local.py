@@ -201,3 +201,61 @@ async def test_a_peer_chain_does_not_start_new_reactions(bus):
     chain = await bus.run_round(reaction[0]["reply_facts"])
 
     assert [row["tier"] for row in chain] == [1]
+
+
+@pytest.mark.asyncio
+async def test_a_peer_ping_pong_runs_out_of_budget(bus):
+    """Found by this bus: Tier 1 bypasses every cap, so two agents looped forever.
+
+    A peer replying to my message reads as an explicit address, and my answer is
+    a reply to them — so before the exchange bound this ran without end, burning
+    budget and flooding the chat.
+    """
+    from kronos.group_router import MAX_PEER_EXCHANGES
+
+    bus.add_agent("nexus", relevance=_keen, react=lambda agent, text: True)
+    bus.add_agent("kronos", relevance=lambda agent, text: 1, react=lambda agent, text: True)
+
+    facts = (await bus.user_says("что с метриками?"))[0]["reply_facts"]
+    hops = 0
+    for _ in range(20):
+        sent = await bus.run_round(facts)
+        if not sent:
+            break
+        hops += 1
+        facts = sent[0]["reply_facts"]
+
+    assert hops < 20, "the exchange must terminate on its own"
+    # One Tier 3 reaction plus a bounded exchange for each of the two agents.
+    assert hops <= 1 + 2 * MAX_PEER_EXCHANGES
+
+
+@pytest.mark.asyncio
+async def test_an_agent_never_answers_itself(bus):
+    bus.add_agent("nexus", relevance=_keen)
+
+    sent = await bus.user_says("вопрос")
+    echo = await bus.run_round(sent[0]["reply_facts"])
+
+    assert echo == []
+
+
+# --- the ledger is real -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_transcript_and_the_ledger_agree(bus):
+    bus.add_agent("nexus", relevance=_keen)
+
+    await bus.user_says("вопрос про метрики")
+
+    assert [entry["from"] for entry in bus.transcript] == ["user", "nexus"]
+    recorded = bus.store.get_recent_messages(chat_id=bus.chat_id, topic_id=bus.topic_id, limit=10)
+    assert {row["sender_type"] for row in recorded} == {"user", "agent"}
+
+
+@pytest.mark.asyncio
+async def test_the_user_id_is_whitelisted_for_every_agent(bus):
+    agent = bus.add_agent("nexus")
+
+    assert USER_ID in agent.router.allowed_user_ids

@@ -50,6 +50,15 @@ MAX_PEER_REPLIES = 2
 # Tier 3: cooldown between peer reactions per agent (seconds).
 PEER_REACTION_COOLDOWN = 300  # 5 minutes
 
+# A peer replying to my message reads as an explicit address, and my answer is
+# itself a reply to them — which is how two agents ping-pong forever. Every
+# other loop guard is bypassed at Tier 1 by design, because Tier 1 exists so the
+# *user's* explicit address is always honoured; a peer's does not earn that.
+# Bounded per window instead: a real exchange gets a couple of turns, a loop
+# cannot outlive the window.
+PEER_EXCHANGE_WINDOW = 600  # 10 minutes
+MAX_PEER_EXCHANGES = 2
+
 # Topic classification is agent-independent and messages repeat (edits, retries),
 # so the lite-tier answer is cached per process for five minutes.
 TOPIC_CACHE_TTL = 300
@@ -221,6 +230,8 @@ class GroupRouter:
         # falsely treat the FIRST reaction as cooled-down and never react.
         self._last_peer_reaction: float = float("-inf")
         self._reacted_to_msgs: set[int] = set()
+        # Monotonic timestamps of Tier-1 replies to peers, for the exchange bound.
+        self._peer_exchanges: list[float] = []
 
         # Ownership map, read once like the alias index above. An empty map is
         # the common case for a registry without `owns`, and it makes every
@@ -272,8 +283,19 @@ class GroupRouter:
 
         # --- Peer bot messages ---
         if is_peer:
-            # Tier 1: explicit @mention from peer → always respond
+            # Tier 1: explicit @mention or reply from a peer → respond, but not
+            # forever: my answer is a reply to them, which reads as an address
+            # back to me on their side.
             if addressing.explicit_to_me:
+                if not self._peer_exchange_allowed():
+                    return RoutingDecision(
+                        False,
+                        0,
+                        0,
+                        f"peer exchange budget spent ({MAX_PEER_EXCHANGES} per {PEER_EXCHANGE_WINDOW}s)",
+                        addressing=addressing,
+                    )
+                self._peer_exchanges.append(time.monotonic())
                 return RoutingDecision(
                     True,
                     random.uniform(3, 8),
@@ -412,6 +434,12 @@ class GroupRouter:
         """
         mine = self._profiles[self.agent_name].max_implicit_replies if self.agent_name in self._profiles else None
         return MAX_PEER_REPLIES if mine is None else mine
+
+    def _peer_exchange_allowed(self) -> bool:
+        """Room left in this window for another Tier-1 reply to a peer."""
+        cutoff = time.monotonic() - PEER_EXCHANGE_WINDOW
+        self._peer_exchanges = [ts for ts in self._peer_exchanges if ts > cutoff]
+        return len(self._peer_exchanges) < MAX_PEER_EXCHANGES
 
     def _quiet_reason(self) -> str:
         """Non-empty when this agent has spent its personal daily budget."""
