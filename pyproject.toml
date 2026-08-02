@@ -37,8 +37,14 @@ dependencies = [
     "langchain-openai>=0.3",        # Kimi K2.5 via OpenAI-compatible API
     "langchain-deepseek>=1.0",
 
-    # MCP integration
+    # MCP integration.
+    # `mcp` is pinned below 2.0 on purpose: mcp 2.0.0 removed
+    # `mcp.shared.context.RequestContext`, which langchain-mcp-adapters 0.3.1 still
+    # imports, so a fresh install of the two latest releases crashes on import of
+    # the gateway. Lift the bound once the adapters release a 2.x-compatible
+    # version — the pairing is what is broken, not either package alone.
     "langchain-mcp-adapters>=0.2",
+    "mcp>=1.9,<2",
 
     # Persistence
     "aiosqlite>=0.20",
