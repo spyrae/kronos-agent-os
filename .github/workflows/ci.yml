@@ -48,6 +48,10 @@ jobs:
       - run: kaos init smoke-agent --role "CI smoke test agent" --dry-run
       - run: kaos connect telegram
       - run: pytest -m "not integration" -v
+      # The durable-execution claim, proved against a real SIGKILL rather than a
+      # simulated one. Marked `integration` because it spawns processes, but it
+      # needs no keys and no network, so it belongs in the gate.
+      - run: pytest tests/test_durable_kill.py -m integration -v
 
   evals:
     runs-on: ubuntu-latest
