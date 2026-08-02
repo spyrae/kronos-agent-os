@@ -17,6 +17,7 @@ What is enforced here, in order:
 """
 
 import logging
+from urllib.parse import urlparse
 
 from langchain_core.tools import tool
 
@@ -24,6 +25,22 @@ from kronos import accounts
 from kronos.security.untrusted import mark_untrusted
 
 log = logging.getLogger("kronos.tools.accounts")
+
+# Best-effort guesses at a login form. A page can name its fields anything, so
+# when these do not match, the answer is "ask the owner to sign in by hand" —
+# never "type the password into whatever looked plausible".
+PASSWORD_FIELD = "input[type='password']"
+LOGIN_FIELDS = (
+    "input[type='email']",
+    "input[name*='email' i]",
+    "input[name*='user' i]",
+    "input[id*='email' i]",
+    "input[id*='user' i]",
+    "input[type='text']",
+)
+SUBMIT_BUTTONS = ("button[type='submit']", "input[type='submit']")
+FIELD_TIMEOUT_MS = 5000
+SETTLE_MS = 3000
 
 
 @tool
@@ -79,14 +96,27 @@ async def open_site_session(site: str, url: str = "") -> str:
             return f"[ERROR] Session opened but navigation failed: {e}"
 
     signed_in = await _looks_signed_in(engine)
+    renewed = False
+    trouble = ""
+
+    if not signed_in and account.has_password:
+        signed_in, trouble = await _sign_in(engine, account)
+        renewed = signed_in
+        if signed_in and url:
+            # The login flow lands wherever the site decides; go back to what
+            # was actually asked for.
+            await engine.navigate(url)
+
     accounts.record_use(site, session_state=accounts.SESSION_OK if signed_in else accounts.SESSION_EXPIRED)
 
     if not signed_in:
+        attempted = f" Tried to sign in automatically and it did not work: {trouble}." if trouble else ""
         return (
-            f"Session for '{site}' is not signed in — the saved browser profile has expired. "
+            f"Session for '{site}' is not signed in — the saved browser profile has expired.{attempted} "
             f"Ask the owner to sign in again in that profile. Do not ask for a password."
         )
-    return f"Signed in as the owner on '{site}'. Allowed here: {account.permission}."
+    renewal = " The session had expired and was renewed automatically." if renewed else ""
+    return f"Signed in as the owner on '{site}'.{renewal} Allowed here: {account.permission}."
 
 
 @tool
@@ -108,6 +138,104 @@ async def check_site_action(site: str, action: str) -> str:
     if accounts.needs_approval(site, action):
         return f"ALLOWED, but '{action}' on '{site}' needs the owner's approval before it happens."
     return f"ALLOWED: '{action}' on '{site}' without further approval."
+
+
+async def _sign_in(engine, account) -> tuple[bool, str]:
+    """Fill the site's own login form from the vault. Returns (signed in, why not).
+
+    The password goes from the vault into the page and nowhere else: not into
+    the return value, not into a log line, not into the session. Signing in sits
+    at read permission because a read-only account with a stored password exists
+    precisely so it can keep its own session alive.
+
+    The domain is re-checked against the live URL immediately before typing —
+    after any redirect the login flow performed. A site that bounces to another
+    host (or a page that was tampered with) gets nothing; the owner signs in by
+    hand instead. Only the main frame is touched, so a third-party iframe cannot
+    present itself as the login form.
+    """
+    page = await engine._ensure_browser(profile_dir=account.profile_dir)
+    if account.login_url:
+        await engine.navigate(account.login_url)
+
+    # Checked before the vault is even opened: nothing to type means nothing to
+    # decrypt, and the login itself is not handed to a foreign host either.
+    if not _on_own_domain(page, account):
+        return False, f"the page is on {_host(page)}, which '{account.site}' does not declare"
+
+    try:
+        secret = accounts.use_password(account.site, purpose="sign in")
+    except accounts.AccountError as e:
+        return False, str(e)
+
+    try:
+        filled, reason = await _fill_login_form(page, account, secret)
+    except Exception as e:
+        log.warning("Sign-in attempt for %s failed: %s", account.site, e)
+        return False, "the login form did not behave as expected"
+    if not filled:
+        return False, reason
+
+    return await _looks_signed_in(engine), "the site did not accept the sign-in"
+
+
+async def _fill_login_form(page, account, secret: str) -> tuple[bool, str]:
+    """Type the credentials into the page. Returns (filled, why not)."""
+    if not await _wait_visible(page, PASSWORD_FIELD):
+        # Two-step form: the password field only appears once the login is in.
+        if not await _fill_first(page, LOGIN_FIELDS, account.login):
+            return False, "could not find the login form on the page"
+        await _submit(page)
+        await page.wait_for_timeout(SETTLE_MS)
+        if not await _wait_visible(page, PASSWORD_FIELD):
+            return False, "the password field never appeared"
+    else:
+        await _fill_first(page, LOGIN_FIELDS, account.login)
+
+    # Again, against the live URL: submitting the login may have redirected, and
+    # where the password goes is decided by where the page ended up.
+    if not _on_own_domain(page, account):
+        log.warning("Refusing to type the password for %s: page is on %s", account.site, _host(page))
+        return False, f"the login flow moved to {_host(page)}, which '{account.site}' does not declare"
+
+    await page.fill(PASSWORD_FIELD, secret, timeout=FIELD_TIMEOUT_MS)
+    await _submit(page)
+    await page.wait_for_timeout(SETTLE_MS)
+    return True, ""
+
+
+def _host(page) -> str:
+    return (urlparse(getattr(page, "url", "") or "").hostname or "unknown").lower()
+
+
+def _on_own_domain(page, account) -> bool:
+    return account.covers(getattr(page, "url", "") or "")
+
+
+async def _wait_visible(page, selector: str) -> bool:
+    try:
+        await page.wait_for_selector(selector, state="visible", timeout=FIELD_TIMEOUT_MS)
+    except Exception:
+        return False
+    return True
+
+
+async def _fill_first(page, selectors: tuple[str, ...], value: str) -> bool:
+    """Fill the first field that is actually there. Nothing found is False."""
+    for selector in selectors:
+        if await _wait_visible(page, selector):
+            await page.fill(selector, value, timeout=FIELD_TIMEOUT_MS)
+            return True
+    return False
+
+
+async def _submit(page) -> None:
+    """Submit however this form wants to be submitted."""
+    for selector in SUBMIT_BUTTONS:
+        if await _wait_visible(page, selector):
+            await page.click(selector, timeout=FIELD_TIMEOUT_MS)
+            return
+    await page.keyboard.press("Enter")
 
 
 async def _looks_signed_in(engine) -> bool:

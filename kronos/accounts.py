@@ -74,6 +74,10 @@ class SiteAccount:
     site: str
     domains: list[str] = field(default_factory=list)
     login: str = ""
+    # Where the sign-in form lives, when the site does not simply show one on the
+    # page the agent landed on. Must be inside `domains` — a login URL pointing
+    # somewhere else is the exact shape of a phishing page.
+    login_url: str = ""
     profile_dir: str = ""
     # Whether a password is in the vault. Never the password, and never a hint
     # about it — this is the only thing any read path says on the subject.
@@ -116,6 +120,7 @@ def _init_schema(conn) -> None:
             site              TEXT PRIMARY KEY,
             domains           TEXT NOT NULL DEFAULT '',
             login             TEXT NOT NULL DEFAULT '',
+            login_url         TEXT NOT NULL DEFAULT '',
             profile_dir       TEXT NOT NULL DEFAULT '',
             -- The password, encrypted by kronos.vault and bound to this row's
             -- site name. Read by exactly one function (use_password); no listing
@@ -130,6 +135,11 @@ def _init_schema(conn) -> None:
         );
         """
     )
+    # login_url arrived with automatic sign-in. Backfill on databases created
+    # before it, the same way session.py does for its own late columns.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(site_accounts)").fetchall()}
+    if "login_url" not in columns:
+        conn.execute("ALTER TABLE site_accounts ADD COLUMN login_url TEXT NOT NULL DEFAULT ''")
 
 
 def _db():
@@ -143,6 +153,7 @@ def _row_to_account(row) -> SiteAccount:
         site=row["site"],
         domains=[d.strip().lower() for d in (row["domains"] or "").split(",") if d.strip()],
         login=row["login"] or "",
+        login_url=row["login_url"] or "",
         profile_dir=row["profile_dir"] or "",
         has_password=bool(row["secret"]),
         permission=row["permission"],
@@ -172,6 +183,7 @@ def save_account(
     site: str,
     domains: list[str],
     login: str = "",
+    login_url: str = "",
     profile_dir: str = "",
     permission: str = PERMISSION_READ,
     approval_required: bool = True,
@@ -194,6 +206,11 @@ def save_account(
         raise AccountError(f"account '{site}' needs at least one domain")
     if password and not login:
         raise AccountError(f"account '{site}' has a password but no login to use it with")
+    if login_url and not SiteAccount(site=site, domains=cleaned).covers(login_url):
+        raise AccountError(
+            f"login_url {login_url} is not one of the domains declared for '{site}' "
+            f"({', '.join(cleaned)}) — that is the shape of a phishing page, not a login"
+        )
 
     has_credential = bool(password) or _stored_secret(site) is not None
     if not profile_dir:
@@ -207,12 +224,13 @@ def save_account(
     _db().write(
         """
         INSERT INTO site_accounts
-            (site, domains, login, profile_dir, permission,
+            (site, domains, login, login_url, profile_dir, permission,
              approval_required, session_state, notes, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(site) DO UPDATE SET
             domains = excluded.domains,
             login = excluded.login,
+            login_url = excluded.login_url,
             profile_dir = excluded.profile_dir,
             permission = excluded.permission,
             approval_required = excluded.approval_required,
@@ -222,6 +240,7 @@ def save_account(
             site,
             ",".join(cleaned),
             login,
+            login_url,
             profile_dir,
             permission,
             1 if approval_required else 0,

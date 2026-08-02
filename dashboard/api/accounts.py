@@ -21,6 +21,7 @@ class AccountPayload(BaseModel):
     site: str
     domains: list[str] = Field(default_factory=list)
     login: str = ""
+    login_url: str = ""
     profile_dir: str = ""
     permission: str = accounts.PERMISSION_READ
     approval_required: bool = True
@@ -43,6 +44,7 @@ def _view(account: accounts.SiteAccount) -> dict:
         # The login identifies the account to its owner, who already knows it;
         # the profile path and the password are deliberately not exposed anywhere.
         "login": account.login,
+        "login_url": account.login_url,
         "has_profile": bool(account.profile_dir),
         "has_password": account.has_password,
         "permission": account.permission,
@@ -74,6 +76,7 @@ async def save_site_account(payload: AccountPayload):
             site=payload.site,
             domains=payload.domains,
             login=payload.login,
+            login_url=payload.login_url,
             profile_dir=payload.profile_dir,
             permission=payload.permission,
             approval_required=payload.approval_required,
