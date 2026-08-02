@@ -183,13 +183,15 @@ def test_cost_log_is_not_chained(audit_dir):
     assert audit.get_daily_cost()["requests"] == 1  # aggregation still works
 
 
-def test_verify_audit_logs_covers_both_files(audit_dir):
+def test_verify_audit_logs_covers_every_chained_file(audit_dir):
     _log_calls(1)
     audit.log_request(user_id="u1", session_id="s1", tier="lite", input_text="a", output_text="b", duration_ms=1)
 
     results = audit.verify_audit_logs(audit_dir)
 
-    assert {name for name, _, _ in results} == {"tool_calls.jsonl", "audit.jsonl"}
+    # Named rather than compared to CHAINED_LOGS: a log dropped from the tuple
+    # is exactly the regression this should catch, not silently agree with.
+    assert {name for name, _, _ in results} == {"tool_calls.jsonl", "audit.jsonl", "credentials.jsonl"}
     assert all(ok for _, ok, _ in results)
 
 

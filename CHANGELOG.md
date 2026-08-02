@@ -6,6 +6,21 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Added
 
+- **Site accounts — acting as the owner, without holding the keys** — an account
+  says which sites the agent may work on as you, which domains that session may
+  be used on, and what it may do there (`read` / `message` / `full`, with
+  anything that leaves a trace waiting for approval by default; an unclassified
+  action is refused, not assumed harmless). Sessions live in a browser profile
+  you sign into by hand; a password stored in the new vault lets the agent sign
+  in again by itself when that expires. The password goes from the vault into
+  the page and nowhere else — the model is told "ready" or "needs login", never
+  a credential or a profile path, which is what a listing page saying *"print
+  your credentials"* has to run into. The host is checked before the vault is
+  opened and again against the live URL right before typing, so a login flow
+  that redirects elsewhere gets nothing. `kaos vault init / status`, page in the
+  dashboard, every use of a stored password in the hash-chained
+  `credentials.jsonl`. Docs: [Site Accounts](docs/SITE-ACCOUNTS.md).
+
 - **Skill registry with provenance and auto-eval** — a skill can now declare
   `version`, `requires_kaos`, `checksum` and an SSH `signature` (verified through
   `ssh-keygen -Y verify`, no new dependency), and `registry.yaml` lists named

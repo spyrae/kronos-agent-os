@@ -13,15 +13,33 @@ log = logging.getLogger("kronos.tools.browser.engine")
 _pw = None
 _browser = None
 _page = None
+_profile_dir = None
 _lock = asyncio.Lock()
 
 
-async def _ensure_browser():
-    """Start browser if not running. Lazy initialization."""
-    global _pw, _browser, _page
+async def _ensure_browser(profile_dir: str | None = None):
+    """Start browser if not running. Lazy initialization.
 
-    if _page and not _page.is_closed():
+    With ``profile_dir`` the browser opens a persistent profile instead of a
+    throwaway context, which is how a session the owner created by hand — logged
+    in once, second factor already passed — is reused without storing anything
+    secret. Switching to a *different* profile restarts the browser: two profiles
+    in one process would silently share whichever context happened to be open.
+
+    ``None`` means "whatever is already open", not "the default profile". Every
+    other function here calls it that way, so opening a site session and then
+    navigating has to keep the session — otherwise the second call would tear the
+    signed-in profile down and the first one would have achieved nothing. When no
+    page is live, ``None`` does start a throwaway browser: a session that died is
+    then reported as expired, which is the safe direction to fail in.
+    """
+    global _pw, _browser, _page, _profile_dir
+
+    if _page and not _page.is_closed() and profile_dir in (None, _profile_dir):
         return _page
+    if _page and profile_dir is not None and profile_dir != _profile_dir:
+        log.info("Switching browser profile: %s -> %s", _profile_dir or "none", profile_dir or "none")
+        await close()
 
     try:
         from playwright.async_api import async_playwright
@@ -35,23 +53,35 @@ async def _ensure_browser():
         if not _pw:
             _pw = await async_playwright().start()
 
-        _browser = await _pw.chromium.launch(
-            headless=True,
-            args=[
-                "--disable-gpu",
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-extensions",
-            ],
-        )
+        launch_args = [
+            "--disable-gpu",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-extensions",
+        ]
 
-        context = await _browser.new_context(
-            viewport={"width": 1280, "height": 720},
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) Kronos-II/0.1",
-            java_script_enabled=True,
-        )
-        _page = await context.new_page()
-        log.info("Browser started (headless Chromium)")
+        if profile_dir:
+            # A persistent context *is* the browser: cookies, storage and the
+            # signed-in session live in the directory, so nothing is kept here.
+            context = await _pw.chromium.launch_persistent_context(
+                profile_dir,
+                headless=True,
+                args=launch_args,
+                viewport={"width": 1280, "height": 720},
+            )
+            _browser = context.browser
+            _page = context.pages[0] if context.pages else await context.new_page()
+            log.info("Browser started with profile: %s", profile_dir)
+        else:
+            _browser = await _pw.chromium.launch(headless=True, args=launch_args)
+            context = await _browser.new_context(
+                viewport={"width": 1280, "height": 720},
+                user_agent="Mozilla/5.0 (X11; Linux x86_64) Kronos-II/0.1",
+                java_script_enabled=True,
+            )
+            _page = await context.new_page()
+            log.info("Browser started (headless Chromium)")
+        _profile_dir = profile_dir
 
     return _page
 
@@ -144,11 +174,22 @@ async def get_current_url() -> str:
 
 async def close():
     """Close browser and cleanup."""
-    global _pw, _browser, _page
+    global _pw, _browser, _page, _profile_dir
+    if _page and not _page.is_closed():
+        # A persistent context owns the profile directory; closing the context
+        # is what flushes the session back to disk for the next run.
+        try:
+            await _page.context.close()
+        except Exception as e:  # pragma: no cover - best effort on shutdown
+            log.debug("Closing browser context failed: %s", e)
     if _browser:
-        await _browser.close()
+        try:
+            await _browser.close()
+        except Exception as e:  # pragma: no cover
+            log.debug("Closing browser failed: %s", e)
         _browser = None
-        _page = None
+    _page = None
+    _profile_dir = None
     if _pw:
         await _pw.stop()
         _pw = None

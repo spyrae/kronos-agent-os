@@ -126,7 +126,7 @@ def test_audit_verify_json_output(clean, capsys):
     assert main(["audit", "verify", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
 
-    assert {row["log"] for row in payload} == {"tool_calls.jsonl", "audit.jsonl"}
+    assert {row["log"] for row in payload} == {"tool_calls.jsonl", "audit.jsonl", "credentials.jsonl"}
     assert all(row["ok"] for row in payload)
 
 
