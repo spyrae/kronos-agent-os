@@ -50,7 +50,7 @@ _SECRET_PATTERNS = (
 # This does not prevent tampering — a local attacker can rewrite the whole file —
 # it makes silent tampering detectable, which is what an audit trail is for.
 GENESIS_HASH = "genesis"
-CHAINED_LOGS = ("tool_calls.jsonl", "audit.jsonl")
+CHAINED_LOGS = ("tool_calls.jsonl", "audit.jsonl", "credentials.jsonl")
 
 _chain_tips: dict[str, str] = {}
 _chain_lock = threading.Lock()
@@ -323,6 +323,34 @@ def log_tool_event(event: str, payload: dict[str, Any]) -> None:
         append_chained(_get_audit_dir() / "tool_calls.jsonl", entry)
     except Exception as e:
         log.debug("Tool audit logging failed: %s", e)
+
+
+def log_credential_event(*, site: str, event: str, ok: bool, purpose: str = "", detail: str = "") -> None:
+    """Record that a stored credential was written, used, or removed.
+
+    The value is never here — that is the point. A reader gets which site, what
+    happened and whether it worked, chained so that removing a line shows up.
+    Answering "when did it use my password, and what for" is the whole job.
+
+    A failure to write is logged loudly but does not block the caller: the
+    alternative is that a full disk locks the owner out of their own accounts.
+    """
+    try:
+        context = _tool_audit_context.get()
+        entry = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "event": event,
+            "site": site,
+            "purpose": purpose,
+            "ok": ok,
+            "detail": _redact_string(detail, max_len=200) if detail else "",
+            "agent": context.get("agent", settings.agent_name),
+            "thread_id": context.get("thread_id", ""),
+            "session_id": context.get("session_id", ""),
+        }
+        append_chained(_get_audit_dir() / "credentials.jsonl", entry)
+    except Exception as e:
+        log.warning("Credential audit logging failed for %s/%s: %s", site, event, e)
 
 
 def log_request(

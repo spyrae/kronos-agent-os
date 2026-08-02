@@ -63,9 +63,6 @@ async def open_site_session(site: str, url: str = "") -> str:
     except accounts.AccountError as e:
         return f"[ERROR] {e}"
 
-    if account.method != accounts.METHOD_PROFILE:
-        return f"[ERROR] Account '{site}' is not usable yet: only browser-profile accounts are supported."
-
     from kronos.tools.browser import engine
 
     try:

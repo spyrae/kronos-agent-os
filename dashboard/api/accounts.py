@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from dashboard.auth import verify_token
-from kronos import accounts
+from kronos import accounts, vault
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"], dependencies=[Depends(verify_token)])
 log = logging.getLogger("kronos.dashboard.accounts")
@@ -20,12 +20,19 @@ log = logging.getLogger("kronos.dashboard.accounts")
 class AccountPayload(BaseModel):
     site: str
     domains: list[str] = Field(default_factory=list)
-    method: str = accounts.METHOD_PROFILE
     login: str = ""
     profile_dir: str = ""
     permission: str = accounts.PERMISSION_READ
     approval_required: bool = True
     notes: str = ""
+    # Write-only. Sent when the owner types one, absent on every other save —
+    # so editing a permission cannot silently wipe the credentials, and nothing
+    # ever has to round-trip a password back through the browser to save a form.
+    password: str = ""
+
+
+class PasswordPayload(BaseModel):
+    password: str
 
 
 def _view(account: accounts.SiteAccount) -> dict:
@@ -33,11 +40,11 @@ def _view(account: accounts.SiteAccount) -> dict:
     return {
         "site": account.site,
         "domains": account.domains,
-        "method": account.method,
         # The login identifies the account to its owner, who already knows it;
-        # the profile path is deliberately not exposed anywhere.
+        # the profile path and the password are deliberately not exposed anywhere.
         "login": account.login,
         "has_profile": bool(account.profile_dir),
+        "has_password": account.has_password,
         "permission": account.permission,
         "approval_required": account.approval_required,
         "session_state": account.session_state,
@@ -52,9 +59,11 @@ async def list_site_accounts():
         "accounts": [_view(account) for account in accounts.list_accounts()],
         "permissions": list(accounts.PERMISSIONS),
         "actions": sorted(accounts.ACTION_PERMISSION),
-        # Surfaced so the UI can explain why the password option is disabled
-        # rather than offering a field that quietly does nothing.
-        "password_vault_enabled": False,
+        # So the UI can explain why storing a password is unavailable, and where
+        # the key is held, instead of offering a field that quietly fails.
+        "password_vault_enabled": vault.available(),
+        "vault_key_source": vault.key_source(),
+        "vault_hint": vault.NO_KEY_HINT,
     }
 
 
@@ -64,16 +73,33 @@ async def save_site_account(payload: AccountPayload):
         account = accounts.save_account(
             site=payload.site,
             domains=payload.domains,
-            method=payload.method,
             login=payload.login,
             profile_dir=payload.profile_dir,
             permission=payload.permission,
             approval_required=payload.approval_required,
             notes=payload.notes,
+            password=payload.password,
         )
     except accounts.AccountError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return _view(account)
+
+
+@router.put("/{site}/password")
+async def set_site_password(site: str, payload: PasswordPayload):
+    """Store a password for an existing account. There is no endpoint to read one."""
+    try:
+        accounts.set_password(site, payload.password)
+    except accounts.AccountError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return _view(accounts.get_account(site))
+
+
+@router.delete("/{site}/password")
+async def clear_site_password(site: str):
+    if not accounts.clear_password(site):
+        raise HTTPException(status_code=404, detail=f"no password stored for '{site}'")
+    return _view(accounts.get_account(site))
 
 
 @router.delete("/{site}")

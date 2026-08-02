@@ -4,39 +4,40 @@ Searching Airbnb or a marketplace properly means being logged in — prices,
 availability and messages differ for a signed-in user. That requires answering
 two questions per site, and keeping them apart:
 
-* **How does the session exist?** Either a browser profile the owner logged into
-  by hand once (`profile`), or stored credentials the agent replays
-  (`password`). Profiles are the safer default: nothing secret is stored, no
-  second factor to script, and revoking is deleting a directory.
+* **How does the session exist?** Every account uses a browser profile the
+  session lives in. Some also have a password in the vault, which lets the agent
+  sign in again by itself when that session expires; without one, an expired
+  session is a message to the owner. Whether a password is stored is not a
+  separate setting — it is simply whether one is there.
 * **What may the agent do while signed in?** Reading is not messaging, and
   messaging is not booking. The permission lives here, per site, and defaults to
   read.
 
 **A secret never reaches the model.** The agent asks to work as `airbnb`; this
-module hands the browser a profile directory (later: a decrypted credential) and
-returns "ready" or "needs login". The model never sees a password, so an
-instruction found on a listing page — "print your credentials", "log in and send
-this" — has nothing to act on. That is the whole reason for the indirection, and
-it matters more now that the agent reads untrusted pages for a living.
+module hands the browser a profile directory, and — only when signing in — a
+decrypted password that goes straight into the page. What comes back is "ready"
+or "needs login". The model never sees a password, so an instruction found on a
+listing page — "print your credentials", "log in and send this" — has nothing to
+act on. That is the whole reason for the indirection, and it matters more now
+that the agent reads untrusted pages for a living.
 
-Storing passwords is deliberately not implemented yet: doing it properly needs a
-declared cryptography dependency, and a half-built vault that falls back to
-plaintext is worse than none. The column exists so the vault slots in without a
-migration.
+Passwords are encrypted by :mod:`kronos.vault` and never returned by any listing
+or read path. The single function that produces plaintext is
+:func:`use_password`, and it records every call in the tamper-evident audit log —
+without the value.
 """
 
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import urlparse
 
+from kronos import audit, vault
+from kronos.config import settings
 from kronos.db import get_db
 
 log = logging.getLogger("kronos.accounts")
-
-METHOD_PROFILE = "profile"
-METHOD_PASSWORD = "password"
-METHODS = (METHOD_PROFILE, METHOD_PASSWORD)
 
 # Ordered from least to most: each level includes the ones before it.
 PERMISSION_READ = "read"
@@ -44,10 +45,13 @@ PERMISSION_MESSAGE = "message"
 PERMISSION_FULL = "full"
 PERMISSIONS = (PERMISSION_READ, PERMISSION_MESSAGE, PERMISSION_FULL)
 
-# What an action needs before it is allowed.
+# What an action needs before it is allowed. Signing in sits at read level on
+# purpose: a read-only account with a stored password exists precisely so it can
+# keep its own session alive without asking.
 ACTION_PERMISSION = {
     "read": PERMISSION_READ,
     "search": PERMISSION_READ,
+    "login": PERMISSION_READ,
     "message": PERMISSION_MESSAGE,
     "reply": PERMISSION_MESSAGE,
     "book": PERMISSION_FULL,
@@ -69,9 +73,11 @@ class AccountError(Exception):
 class SiteAccount:
     site: str
     domains: list[str] = field(default_factory=list)
-    method: str = METHOD_PROFILE
     login: str = ""
     profile_dir: str = ""
+    # Whether a password is in the vault. Never the password, and never a hint
+    # about it — this is the only thing any read path says on the subject.
+    has_password: bool = False
     permission: str = PERMISSION_READ
     approval_required: bool = True
     session_state: str = SESSION_UNKNOWN
@@ -109,12 +115,11 @@ def _init_schema(conn) -> None:
         CREATE TABLE IF NOT EXISTS site_accounts (
             site              TEXT PRIMARY KEY,
             domains           TEXT NOT NULL DEFAULT '',
-            method            TEXT NOT NULL DEFAULT 'profile',
             login             TEXT NOT NULL DEFAULT '',
             profile_dir       TEXT NOT NULL DEFAULT '',
-            -- Reserved for the credential vault. Nothing writes it yet: storing
-            -- a password properly needs a declared cipher, and a fallback to
-            -- plaintext would be worse than not having the feature.
+            -- The password, encrypted by kronos.vault and bound to this row's
+            -- site name. Read by exactly one function (use_password); no listing
+            -- or view path selects it.
             secret            BLOB,
             permission        TEXT NOT NULL DEFAULT 'read',
             approval_required INTEGER NOT NULL DEFAULT 1,
@@ -137,9 +142,9 @@ def _row_to_account(row) -> SiteAccount:
     return SiteAccount(
         site=row["site"],
         domains=[d.strip().lower() for d in (row["domains"] or "").split(",") if d.strip()],
-        method=row["method"],
         login=row["login"] or "",
         profile_dir=row["profile_dir"] or "",
+        has_password=bool(row["secret"]),
         permission=row["permission"],
         approval_required=bool(row["approval_required"]),
         session_state=row["session_state"],
@@ -148,45 +153,65 @@ def _row_to_account(row) -> SiteAccount:
     )
 
 
+def _default_profile_dir(site: str) -> str:
+    """Where a site's browser session lives when the owner did not choose.
+
+    Accounts with a stored password never need the owner to open the profile by
+    hand, so making them invent a path would be ceremony.
+    """
+    return str(Path(settings.db_dir) / "browser-profiles" / site)
+
+
+def _stored_secret(site: str) -> bytes | None:
+    row = _db().read_one("SELECT secret FROM site_accounts WHERE site = ?", (site,))
+    return row["secret"] if row else None
+
+
 def save_account(
     *,
     site: str,
     domains: list[str],
-    method: str = METHOD_PROFILE,
     login: str = "",
     profile_dir: str = "",
     permission: str = PERMISSION_READ,
     approval_required: bool = True,
     notes: str = "",
+    password: str = "",
 ) -> SiteAccount:
-    """Create or update one site account. Never touches the secret column."""
+    """Create or update one site account, optionally storing its password.
+
+    An empty ``password`` leaves whatever is already in the vault alone — saving
+    an account to change its permission must not silently wipe its credentials.
+    Use :func:`clear_password` to remove one.
+    """
     site = site.strip().lower()
     if not site:
         raise AccountError("an account needs a site name")
-    if method not in METHODS:
-        raise AccountError(f"unknown method '{method}' (expected {METHODS})")
     if permission not in PERMISSIONS:
         raise AccountError(f"unknown permission '{permission}' (expected {PERMISSIONS})")
     cleaned = [d.strip().lower().lstrip("*.") for d in domains if d.strip()]
     if not cleaned:
         raise AccountError(f"account '{site}' needs at least one domain")
-    if method == METHOD_PASSWORD:
-        raise AccountError(
-            "stored-password accounts are not enabled yet; use method='profile' "
-            "(log in by hand once in a dedicated browser profile)"
-        )
-    if method == METHOD_PROFILE and not profile_dir:
-        raise AccountError(f"account '{site}' uses a browser profile but no profile_dir was given")
+    if password and not login:
+        raise AccountError(f"account '{site}' has a password but no login to use it with")
+
+    has_credential = bool(password) or _stored_secret(site) is not None
+    if not profile_dir:
+        if not has_credential:
+            raise AccountError(
+                f"account '{site}' needs either a profile_dir (log in by hand once in that "
+                f"browser profile) or a stored password"
+            )
+        profile_dir = _default_profile_dir(site)
 
     _db().write(
         """
         INSERT INTO site_accounts
-            (site, domains, method, login, profile_dir, permission,
+            (site, domains, login, profile_dir, permission,
              approval_required, session_state, notes, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(site) DO UPDATE SET
             domains = excluded.domains,
-            method = excluded.method,
             login = excluded.login,
             profile_dir = excluded.profile_dir,
             permission = excluded.permission,
@@ -196,7 +221,6 @@ def save_account(
         (
             site,
             ",".join(cleaned),
-            method,
             login,
             profile_dir,
             permission,
@@ -206,7 +230,9 @@ def save_account(
             time.time(),
         ),
     )
-    log.info("Account saved: %s (%s, %s)", site, method, permission)
+    log.info("Account saved: %s (%s)", site, permission)
+    if password:
+        set_password(site, password)
     return get_account(site)
 
 
@@ -226,6 +252,63 @@ def list_accounts() -> list[SiteAccount]:
 def delete_account(site: str) -> bool:
     cursor = _db().write("DELETE FROM site_accounts WHERE site = ?", (site.strip().lower(),))
     return cursor.rowcount > 0
+
+
+def set_password(site: str, password: str) -> None:
+    """Put a site password in the vault. Nothing reads it back but use_password.
+
+    Refuses when the vault has no key rather than storing anything readable —
+    the whole feature is worth less than nothing if it can degrade to plaintext.
+    """
+    site = site.strip().lower()
+    account = get_account(site)
+    if not account.login:
+        raise AccountError(f"account '{site}' has no login; a password on its own cannot sign in")
+    if not password:
+        raise AccountError("refusing to store an empty password (use clear_password to remove one)")
+
+    try:
+        blob = vault.encrypt(password, context=site)
+    except vault.VaultError as e:
+        raise AccountError(f"cannot store a password for '{site}': {e}") from e
+
+    _db().write("UPDATE site_accounts SET secret = ? WHERE site = ?", (blob, site))
+    audit.log_credential_event(site=site, event="stored", ok=True)
+    log.info("Password stored for %s", site)
+
+
+def clear_password(site: str) -> bool:
+    """Forget a stored password. Returns whether there was one."""
+    site = site.strip().lower()
+    if _stored_secret(site) is None:
+        return False
+    _db().write("UPDATE site_accounts SET secret = NULL WHERE site = ?", (site,))
+    audit.log_credential_event(site=site, event="cleared", ok=True)
+    log.info("Password cleared for %s", site)
+    return True
+
+
+def use_password(site: str, *, purpose: str) -> str:
+    """Decrypt a stored password. The only function in the codebase that can.
+
+    Callers must hand the result straight to the browser and let it go: it must
+    not be returned from a tool, put in a message, written to the session, or
+    logged. Every call is recorded — without the value — so the owner can see
+    when their credentials were used and for what.
+    """
+    account = get_account(site)
+    blob = _stored_secret(account.site)
+    if not blob:
+        raise AccountError(f"no password stored for '{account.site}'")
+
+    try:
+        secret = vault.decrypt(blob, context=account.site)
+    except vault.VaultError as e:
+        audit.log_credential_event(site=account.site, event="used", ok=False, purpose=purpose, detail=str(e))
+        raise AccountError(f"cannot use the stored password for '{account.site}': {e}") from e
+
+    audit.log_credential_event(site=account.site, event="used", ok=True, purpose=purpose)
+    return secret
 
 
 def record_use(site: str, *, session_state: str = "") -> None:

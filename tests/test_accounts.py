@@ -8,9 +8,8 @@ secret or a profile path reaching the model.
 
 import pytest
 
+from kronos import vault
 from kronos.accounts import (
-    METHOD_PASSWORD,
-    METHOD_PROFILE,
     PERMISSION_FULL,
     PERMISSION_MESSAGE,
     PERMISSION_READ,
@@ -19,12 +18,15 @@ from kronos.accounts import (
     AccountError,
     SiteAccount,
     authorise,
+    clear_password,
     delete_account,
     get_account,
     list_accounts,
     needs_approval,
     record_use,
     save_account,
+    set_password,
+    use_password,
 )
 from kronos.config import settings
 
@@ -33,6 +35,10 @@ from kronos.config import settings
 def store(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "db_dir", str(tmp_path))
     monkeypatch.setattr(settings, "db_path", str(tmp_path / "session.db"))
+    # A vault key by default: the interesting password tests are the ones that
+    # take it away, and they say so explicitly.
+    monkeypatch.setattr(settings, "vault_key", vault.generate_key())
+    monkeypatch.setattr(settings, "vault_key_path", str(tmp_path / "vault.key"))
     import kronos.db as _db
 
     _db._instances.clear()
@@ -44,7 +50,6 @@ def _airbnb(**overrides):
     payload = {
         "site": "airbnb",
         "domains": ["airbnb.com", "airbnb.ru"],
-        "method": METHOD_PROFILE,
         "login": "roman@example.com",
         "profile_dir": "/tmp/profiles/airbnb",
         "permission": PERMISSION_READ,
@@ -80,7 +85,7 @@ def test_an_account_needs_domains():
         save_account(site="airbnb", domains=[], profile_dir="/tmp/p")
 
 
-def test_a_profile_account_needs_a_profile_directory():
+def test_an_account_without_a_password_needs_a_profile_directory():
     with pytest.raises(AccountError, match="profile_dir"):
         save_account(site="airbnb", domains=["airbnb.com"], profile_dir="")
 
@@ -88,12 +93,6 @@ def test_a_profile_account_needs_a_profile_directory():
 def test_an_unknown_permission_is_refused():
     with pytest.raises(AccountError, match="unknown permission"):
         save_account(site="a", domains=["a.com"], profile_dir="/tmp/p", permission="root")
-
-
-def test_stored_passwords_are_refused_until_the_vault_exists():
-    """A half-built vault that falls back to plaintext is worse than none."""
-    with pytest.raises(AccountError, match="not enabled yet"):
-        save_account(site="airbnb", domains=["airbnb.com"], method=METHOD_PASSWORD, login="x")
 
 
 def test_a_missing_account_lists_what_is_configured():
@@ -109,6 +108,102 @@ def test_deleting_an_account_removes_it():
     assert delete_account("airbnb") is True
     assert list_accounts() == []
     assert delete_account("airbnb") is False
+
+
+# --- the stored password ------------------------------------------------------
+
+
+def test_an_account_with_a_password_gets_a_profile_of_its_own(tmp_path):
+    """Nobody opens that profile by hand, so asking for a path would be ceremony."""
+    account = save_account(site="airbnb", domains=["airbnb.com"], login="roman@example.com", password="hunter2")
+
+    assert account.has_password is True
+    assert account.profile_dir.startswith(str(tmp_path))
+
+
+def test_a_password_without_a_login_cannot_sign_in():
+    with pytest.raises(AccountError, match="no login"):
+        save_account(site="airbnb", domains=["airbnb.com"], password="hunter2")
+
+
+def test_the_password_is_not_stored_anywhere_readable(tmp_path):
+    _airbnb(password="hunter2")
+
+    # Every file the database spans, not just the main one: in WAL mode a fresh
+    # write lives in accounts.db-wal, so checking one file proves nothing.
+    written = list(tmp_path.glob("accounts.db*"))
+
+    assert written, "expected the accounts database to exist"
+    for path in written:
+        assert b"hunter2" not in path.read_bytes(), f"plaintext password found in {path.name}"
+
+
+def test_the_password_comes_back_only_through_use_password():
+    _airbnb(password="hunter2")
+
+    assert use_password("airbnb", purpose="sign in") == "hunter2"
+    assert "hunter2" not in repr(get_account("airbnb"))
+    assert "hunter2" not in repr(list_accounts())
+
+
+def test_saving_the_account_again_keeps_its_password():
+    """Changing a permission must not silently sign the owner out everywhere."""
+    _airbnb(password="hunter2")
+
+    _airbnb(permission=PERMISSION_MESSAGE)
+
+    assert get_account("airbnb").has_password is True
+    assert use_password("airbnb", purpose="sign in") == "hunter2"
+
+
+def test_clearing_the_password_forgets_it():
+    _airbnb(password="hunter2")
+
+    assert clear_password("airbnb") is True
+    assert get_account("airbnb").has_password is False
+    assert clear_password("airbnb") is False
+    with pytest.raises(AccountError, match="no password stored"):
+        use_password("airbnb", purpose="sign in")
+
+
+def test_an_empty_password_is_refused_rather_than_clearing_one():
+    _airbnb(password="hunter2")
+
+    with pytest.raises(AccountError, match="empty password"):
+        set_password("airbnb", "")
+    assert get_account("airbnb").has_password is True
+
+
+def test_without_a_vault_key_nothing_is_stored(monkeypatch):
+    """No key, no write — never a plaintext fallback."""
+    _airbnb()
+    monkeypatch.setattr(settings, "vault_key", "")
+
+    with pytest.raises(AccountError, match="kaos vault init"):
+        set_password("airbnb", "hunter2")
+    assert get_account("airbnb").has_password is False
+
+
+def test_a_password_written_under_a_lost_key_fails_loudly(monkeypatch):
+    """Silently treating it as "no password" would hide that a key was replaced."""
+    _airbnb(password="hunter2")
+
+    monkeypatch.setattr(settings, "vault_key", vault.generate_key())
+
+    with pytest.raises(AccountError, match="cannot use the stored password"):
+        use_password("airbnb", purpose="sign in")
+
+
+def test_using_a_password_is_recorded_without_the_value(tmp_path):
+    _airbnb(password="hunter2")
+
+    use_password("airbnb", purpose="sign in to search")
+
+    trail = (tmp_path / "logs" / "credentials.jsonl").read_text()
+    assert "hunter2" not in trail
+    assert "sign in to search" in trail
+    assert '"site": "airbnb"' in trail
+    assert '"event": "used"' in trail
 
 
 # --- which URLs the session may be used on ------------------------------------
