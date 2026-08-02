@@ -106,6 +106,14 @@ class Settings(BaseSettings):
     # agents in the same deployment.
     swarm_db_path: str = "./data/swarm.db"
 
+    # Credential vault (kronos.vault) — encrypts the owner's site passwords.
+    # The key comes from VAULT_KEY when set, otherwise from the key file. An
+    # environment-held key keeps the key and the database apart, which is the
+    # whole point; the file default (./data/<agent>/vault.key, mode 0600) only
+    # protects a database that travels without its directory.
+    vault_key: str = ""
+    vault_key_path: str = ""
+
     # NTFY push notifications
     ntfy_url: str = "https://ntfy.sh"
     ntfy_token: str = ""

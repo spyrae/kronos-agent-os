@@ -69,6 +69,12 @@ dependencies = [
     "pydantic-settings>=2.0",
     "python-dotenv>=1.0",
 
+    # Credential vault (kronos.vault). Declared rather than relied on
+    # transitively on purpose: it encrypts the owner's site passwords, and a
+    # resolver that drops it must fail the install, not tempt anyone into a
+    # plaintext fallback.
+    "cryptography>=42",
+
     # Observability
     "langfuse>=2.0",
 ]
