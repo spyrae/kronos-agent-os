@@ -1527,6 +1527,70 @@ def run_audit_verify(as_json: bool) -> int:
     return 0
 
 
+def run_vault_init(overwrite: bool) -> int:
+    """Create the key that encrypts stored site passwords."""
+    from kronos import vault
+
+    if (settings.vault_key or "").strip():
+        print("VAULT_KEY is already set in the environment — that key is used, and no file is needed.")
+        return 0
+
+    try:
+        path = vault.create_key_file(overwrite=overwrite)
+    except vault.VaultError as e:
+        print(f"[FAIL] {e}")
+        print("Pass --replace only if you accept that every stored password becomes unreadable.")
+        return 1
+
+    print(f"Vault key written to {path} (mode 0600).")
+    print("Back it up somewhere safe: without it, every stored password is lost.")
+    print("Keeping the key off this machine is stronger — put its contents in VAULT_KEY instead,")
+    print("since a key sitting next to the database does not survive the database being copied.")
+    return 0
+
+
+def run_vault_status(as_json: bool) -> int:
+    """Where the vault key lives, and which accounts rely on it."""
+    from kronos import accounts, vault
+
+    source = vault.key_source()
+    usable = vault.available()
+    try:
+        with_password = [a.site for a in accounts.list_accounts() if a.has_password]
+    except Exception as e:  # a missing/locked database must not hide the key status
+        print(f"[WARN] cannot read site accounts: {e}")
+        with_password = []
+
+    if as_json:
+        print(
+            json.dumps(
+                {
+                    "key_source": source or "none",
+                    "usable": usable,
+                    "key_path": str(vault.default_key_path()),
+                    "accounts_with_password": with_password,
+                },
+                indent=2,
+            )
+        )
+        return 0 if usable else 1
+
+    if not source:
+        print(f"[FAIL] {vault.NO_KEY_HINT}")
+    elif not usable:
+        print(f"[FAIL] a key is configured ({source}) but cannot be used — run `kaos vault status --json` for details")
+    elif source == vault.SOURCE_ENV:
+        print("[OK] key from VAULT_KEY (environment)")
+    else:
+        print(f"[OK] key from {vault.default_key_path()}")
+
+    if with_password:
+        print(f"Accounts with a stored password: {', '.join(with_password)}")
+    else:
+        print("No account has a stored password yet.")
+    return 0 if usable else 1
+
+
 def run_swarm_report(period: str, as_json: bool) -> int:
     """Post-mortem of the swarm's period: who answered, how well, at what cost."""
     from kronos.swarm_report import build_report, render_markdown
@@ -1901,6 +1965,18 @@ def build_parser() -> argparse.ArgumentParser:
     audit_verify = audit_sub.add_parser("verify", help="verify the audit log hash chain")
     audit_verify.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
 
+    vault_cmd = sub.add_parser("vault", help="the key that encrypts stored site passwords")
+    vault_sub = vault_cmd.add_subparsers(dest="vault_command")
+    vault_init = vault_sub.add_parser("init", help="create the vault key")
+    vault_init.add_argument(
+        "--replace",
+        dest="overwrite",
+        action="store_true",
+        help="replace an existing key — every stored password becomes unreadable",
+    )
+    vault_status = vault_sub.add_parser("status", help="where the key lives and who relies on it")
+    vault_status.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+
     evals = sub.add_parser("eval", help="golden scenarios: capture, replay, diff")
     evals_sub = evals.add_subparsers(dest="eval_command")
 
@@ -2079,6 +2155,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.audit_command == "verify":
             return run_audit_verify(args.as_json)
         parser.parse_args(["audit", "--help"])
+        return 0
+    if args.command == "vault":
+        if args.vault_command == "init":
+            return run_vault_init(args.overwrite)
+        if args.vault_command == "status":
+            return run_vault_status(args.as_json)
+        parser.parse_args(["vault", "--help"])
         return 0
     if args.command == "eval":
         if args.eval_command == "run":
