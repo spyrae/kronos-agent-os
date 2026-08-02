@@ -106,6 +106,12 @@ class KronosAgent:
 
         self._tools.extend(ACQUIRE_TOOLS)
 
+        # Working as the owner on configured sites. The tools hand out sessions,
+        # never secrets.
+        from kronos.tools.accounts_tools import ACCOUNT_TOOLS
+
+        self._tools.extend(ACCOUNT_TOOLS)
+
         # Browser tools (stateful session; the acquire tools cover one-off reads)
         from kronos.tools.browser.tools import get_browser_tools
 

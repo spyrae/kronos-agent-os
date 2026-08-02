@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from dashboard.api.accounts import router as accounts_router
 from dashboard.api.agents import router as agents_router
 from dashboard.api.anomalies import router as anomalies_router
 from dashboard.api.audit_trail import router as audit_trail_router
@@ -81,6 +82,7 @@ def create_app(scheduler=None, agent=None) -> FastAPI:
     app.include_router(performance_router)
     app.include_router(audit_trail_router)
     app.include_router(turns_router)
+    app.include_router(accounts_router)
     app.include_router(anomalies_router)
     app.include_router(persona_router)
     app.include_router(monitoring_router)
