@@ -14,7 +14,8 @@
 #         "author": "acme",
 #         "requires_kaos": ">=0.2",
 #         "checksum": "sha256:…",
-#         "signed": true
+#         "signed": true,
+#         "references": ["template", "checklist"]
 #       }
 #     ]
 #   }
