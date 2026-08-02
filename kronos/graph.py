@@ -100,7 +100,13 @@ class KronosAgent:
             self._tools.extend([load_skill, load_skill_reference, approve_skill, import_skill_from_source])
             log.info("Skill tools added: %d skills", len(self._skill_store.list_skills()))
 
-        # Browser tools
+        # Reading the web: one-shot fetch + field extraction. Always available —
+        # they need no browser install and degrade to a plain fetch.
+        from kronos.tools.acquire import ACQUIRE_TOOLS
+
+        self._tools.extend(ACQUIRE_TOOLS)
+
+        # Browser tools (stateful session; the acquire tools cover one-off reads)
         from kronos.tools.browser.tools import get_browser_tools
 
         browser_tools = get_browser_tools()

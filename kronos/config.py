@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     google_oauth_client_secret: str = ""
     notion_api_key: str = ""
     exa_api_key: str = ""
+
+    # Optional shell command for fetching pages that block ordinary requests.
+    # Must contain {url}. The working stack (CloakBrowser + Scrapling) lives
+    # outside this repo and its path differs per machine, so it is configured
+    # rather than vendored. Empty = that escalation tier is skipped and said so.
+    stealth_fetch_command: str = ""
     composio_api_key: str = ""
 
     # Capability gates — public-safe defaults.
