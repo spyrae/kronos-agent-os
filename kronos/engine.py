@@ -10,6 +10,7 @@ No LangGraph dependency. Uses langchain_core messages and tools directly.
 
 import asyncio
 import inspect
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -448,6 +449,19 @@ async def execute_tool(
 
 SIDE_EFFECT_METADATA_KEY = "side_effect"
 IDEMPOTENCY_KEY_METADATA = "idempotency_key"
+DELEGATION_METADATA_KEY = "delegates"
+
+# A model asking for several independent lookups in one message is the common
+# shape of research work ("check both marketplaces", "read all three sources").
+# Running them one after another makes such a turn cost the sum of the calls
+# instead of the slowest one.
+#
+# Only calls that cannot observe each other run together. Everything else keeps
+# the sequential path exactly as it was, because the ordering there is load
+# bearing: an approval pauses the turn and defers the rest, a side effect is
+# recorded in a ledger, and a delegating tool reads a context variable set
+# immediately before it runs.
+PARALLEL_MIN_CALLS = 2
 
 
 def tool_has_side_effect(tool: BaseTool) -> bool:
@@ -457,6 +471,22 @@ def tool_has_side_effect(tool: BaseTool) -> bool:
     if declared is None:
         declared = getattr(tool, SIDE_EFFECT_METADATA_KEY, None)
     return bool(declared)
+
+
+def tool_delegates(tool: BaseTool) -> bool:
+    """Whether this tool hands the turn to a sub-agent."""
+    metadata = getattr(tool, "metadata", None) or {}
+    return bool(metadata.get(DELEGATION_METADATA_KEY))
+
+
+def tool_runs_in_parallel(tool: BaseTool) -> bool:
+    """Whether this tool may run concurrently with its siblings.
+
+    Read-only by declaration: no side effect to order, no sub-agent to hand the
+    turn to. Approval and memoization are checked separately because they depend
+    on the call, not the tool.
+    """
+    return not tool_has_side_effect(tool) and not tool_delegates(tool)
 
 
 def side_effect_key(tool: BaseTool, args: dict, turn_id: str = "") -> str:
@@ -495,6 +525,85 @@ def _build_tool_message(content: str, raw_content: str, tool_call_id: str) -> To
         tool_call_id=tool_call_id,
         additional_kwargs=additional_kwargs,
     )
+
+
+async def _run_parallel_calls(
+    tool_calls: list[dict],
+    *,
+    tool_map: dict,
+    error_handler,
+    requires_approval,
+    read_cached_tool_result,
+    get_external_effect,
+    record_external_effect,
+    turn_id: str,
+) -> dict[str, "ToolMessage"]:
+    """Execute the independent calls of one model message concurrently.
+
+    Returns results keyed by tool_call_id for the sequential pass to pick up;
+    calls not in the returned map are executed there as they always were.
+
+    Eligibility is deliberately narrow — a call joins only when nothing about it
+    can depend on, or be depended on by, a sibling:
+
+      * the tool is known, declares no side effect and is not a delegation tool;
+      * the call needs no approval (an approval pauses the whole turn);
+      * the result is not already memoized from a previous attempt;
+      * no other call in the batch names the same tool with the same arguments,
+        because two identical side-effect-free calls still hit the same remote
+        rate limit and the same idempotency key.
+
+    Failures are not raised here. `execute_tool` already turns an exception into
+    an `[ERROR]` ToolMessage, and anything it does let through is re-raised in
+    the sequential pass, at the position where the existing handling expects it.
+    """
+    if len(tool_calls) < PARALLEL_MIN_CALLS:
+        return {}
+
+    seen: set[tuple] = set()
+    eligible: list[dict] = []
+    for tc in tool_calls:
+        tool = tool_map.get(tc.get("name", ""))
+        if tool is None or not tool_runs_in_parallel(tool):
+            continue
+        fingerprint = (tc.get("name", ""), json.dumps(tc.get("args") or {}, sort_keys=True, default=str))
+        if fingerprint in seen:
+            continue
+        if await read_cached_tool_result(tc.get("id", "")) is not None:
+            continue
+        if await requires_approval(tool, tc):
+            continue
+        seen.add(fingerprint)
+        eligible.append(tc)
+
+    if len(eligible) < PARALLEL_MIN_CALLS:
+        return {}
+
+    log.info("Running %d independent tool calls in parallel", len(eligible))
+    results = await asyncio.gather(
+        *(
+            execute_tool(
+                tool_map[tc["name"]],
+                tc,
+                error_handler,
+                get_external_effect=get_external_effect,
+                record_external_effect=record_external_effect,
+                turn_id=turn_id,
+            )
+            for tc in eligible
+        ),
+        return_exceptions=True,
+    )
+
+    ready: dict[str, ToolMessage] = {}
+    for tc, result in zip(eligible, results, strict=True):
+        if isinstance(result, BaseException):
+            # Leave it to the sequential pass, which re-runs the call inside the
+            # existing try/except — including the sub-agent approval pause.
+            log.debug("Parallel call %s raised, falling back to sequential: %s", tc.get("name"), result)
+            continue
+        ready[tc.get("id", "")] = result
+    return ready
 
 
 def _deferred_tool_messages(tool_calls: list[dict], awaiting: dict) -> list["ToolMessage"]:
@@ -668,6 +777,20 @@ async def react_loop(
                 tool_calls_count=total_tool_calls,
             )
 
+        # Run the independent calls of this message together, then walk the
+        # calls in order as before. The sequential pass below is unchanged; it
+        # just finds some results already computed.
+        precomputed = await _run_parallel_calls(
+            response.tool_calls,
+            tool_map=tool_map,
+            error_handler=error_handler,
+            requires_approval=requires_approval,
+            read_cached_tool_result=read_cached_tool_result,
+            get_external_effect=get_external_effect,
+            record_external_effect=record_external_effect,
+            turn_id=turn_id,
+        )
+
         # Execute tool calls
         tool_messages = []
         for tc in response.tool_calls:
@@ -777,14 +900,18 @@ async def react_loop(
                             }
                         )
                         try:
-                            tm = await execute_tool(
-                                tool,
-                                tc,
-                                error_handler,
-                                get_external_effect=get_external_effect,
-                                record_external_effect=record_external_effect,
-                                turn_id=turn_id,
-                            )
+                            ready = precomputed.pop(tool_call_id, None)
+                            if ready is not None:
+                                tm = ready
+                            else:
+                                tm = await execute_tool(
+                                    tool,
+                                    tc,
+                                    error_handler,
+                                    get_external_effect=get_external_effect,
+                                    record_external_effect=record_external_effect,
+                                    turn_id=turn_id,
+                                )
                         except SubAgentApprovalPause as pause:
                             # A delegated sub-agent paused for approval: bubble it
                             # up as a top-level pause. The delegate_to_X call (tc)

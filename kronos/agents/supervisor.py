@@ -33,6 +33,7 @@ from kronos.agents.telegram_channels import create_telegram_channels_agent
 from kronos.agents.topic_research.graph import create_topic_research_agent
 from kronos.config import settings
 from kronos.engine import (
+    DELEGATION_METADATA_KEY,
     AgentResult,
     SubAgentApprovalPause,
     delegation_ctx,
@@ -175,6 +176,10 @@ def _make_delegation_tool(agent_name: str, description: str, agent_fn: Callable)
         coroutine=delegate,
         name=tool_name,
         description=description,
+        # Marked so the engine never runs it concurrently with siblings: it reads
+        # the delegation context set right before the call, and it can pause the
+        # whole turn for an approval inside a sub-agent.
+        metadata={DELEGATION_METADATA_KEY: True},
     )
 
 
