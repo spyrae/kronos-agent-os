@@ -1143,11 +1143,19 @@ async def run_bridge(agent: KronosAgent) -> None:
                 )
 
                 # Resolve root user message id for claim bookkeeping. For
-                # user-triggered messages, root = the user's message itself.
-                # For peer reactions (Tier 3) we look up the reply parent.
-                reply_to = getattr(event.message, "reply_to", None)
-                parent_msg_id = getattr(reply_to, "reply_to_msg_id", None) if reply_to else None
-                root_msg_id = parent_msg_id if decision.tier == 3 and parent_msg_id else event.message.id
+                # user-triggered messages, root = the user's message itself. For
+                # anything a peer sent, walk the reply chain in the ledger to the
+                # user message it descends from — otherwise every hop of an
+                # agent↔agent exchange is its own root and no per-root budget
+                # can bind.
+                if _group_router._is_peer(user_id):
+                    root_msg_id = swarm.resolve_user_root(
+                        chat_id=event.chat_id,
+                        topic_id=topic_id_inbound,
+                        msg_id=event.message.id,
+                    )
+                else:
+                    root_msg_id = event.message.id
 
                 eta_ts = time.time() + max(decision.delay, 0.0)
                 swarm.claim_reply(

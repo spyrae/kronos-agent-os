@@ -54,10 +54,19 @@ PEER_REACTION_COOLDOWN = 300  # 5 minutes
 # itself a reply to them — which is how two agents ping-pong forever. Every
 # other loop guard is bypassed at Tier 1 by design, because Tier 1 exists so the
 # *user's* explicit address is always honoured; a peer's does not earn that.
-# Bounded per window instead: a real exchange gets a couple of turns, a loop
-# cannot outlive the window.
+#
+# Two bounds, and they are not redundant:
+#
+#   * MAX_AGENT_REPLIES_PER_ROOT is the exact one — a ceiling on everything the
+#     swarm says about one user message, counted in the shared ledger, so it
+#     binds across agents and across process restarts. A normal exchange is
+#     1-3 replies; a loop hits the ceiling and stops.
+#   * MAX_PEER_EXCHANGES per window is the fallback. Ledger reads fail open
+#     (a locked database must not mute an agent), so without a local bound a
+#     ledger outage would restore the unbounded loop.
 PEER_EXCHANGE_WINDOW = 600  # 10 minutes
 MAX_PEER_EXCHANGES = 2
+MAX_AGENT_REPLIES_PER_ROOT = 6
 
 # Topic classification is agent-independent and messages repeat (edits, retries),
 # so the lite-tier answer is cached per process for five minutes.
@@ -137,11 +146,25 @@ class EventFacts:
     text: str = ""
     sender_id: int = 0
     msg_id: int = 0
+    # Where the message lives, so the router can ask the ledger about the
+    # exchange this message belongs to.
+    chat_id: int = 0
+    topic_id: int = 0
     is_reply: bool = False
     reply_sender_id: int | None = None
     mentioned_usernames: set[str] = field(default_factory=set)
     mentioned_user_ids: set[int] = field(default_factory=set)
     topic_label: str = ""
+
+
+def _topic_id_of(event) -> int:
+    """Forum topic id, or 0. Same extraction the transport uses for the ledger."""
+    try:
+        from kronos.bridge_topics import _extract_topic_id_from_message
+
+        return int(_extract_topic_id_from_message(getattr(event, "message", None), is_private=False) or 0)
+    except Exception:
+        return 0
 
 
 async def event_facts(event) -> EventFacts:
@@ -153,6 +176,8 @@ async def event_facts(event) -> EventFacts:
         text=event.raw_text or "",
         sender_id=getattr(event, "sender_id", 0) or 0,
         msg_id=getattr(getattr(event, "message", None), "id", 0) or 0,
+        chat_id=int(getattr(event, "chat_id", 0) or 0),
+        topic_id=_topic_id_of(event),
         is_reply=bool(getattr(event, "is_reply", False)),
         topic_label=str(getattr(event, "topic_label", "") or ""),
     )
@@ -195,7 +220,12 @@ class GroupRouter:
         my_id: int,
         my_username: str | None,
         allowed_user_ids: set[int],
+        swarm=None,
     ):
+        # Explicit ledger beats the process singleton: the local bus and tests
+        # hold their own store, and a router silently reading a different
+        # database would report an empty exchange and never reach its ceiling.
+        self._swarm = swarm
         self.agent_name = agent_name
         self.my_id = my_id
         self.my_username = (my_username or "").lower().lstrip("@")
@@ -287,14 +317,9 @@ class GroupRouter:
             # forever: my answer is a reply to them, which reads as an address
             # back to me on their side.
             if addressing.explicit_to_me:
-                if not self._peer_exchange_allowed():
-                    return RoutingDecision(
-                        False,
-                        0,
-                        0,
-                        f"peer exchange budget spent ({MAX_PEER_EXCHANGES} per {PEER_EXCHANGE_WINDOW}s)",
-                        addressing=addressing,
-                    )
+                exhausted = self._exchange_budget_spent(facts)
+                if exhausted:
+                    return RoutingDecision(False, 0, 0, exhausted, addressing=addressing)
                 self._peer_exchanges.append(time.monotonic())
                 return RoutingDecision(
                     True,
@@ -440,6 +465,45 @@ class GroupRouter:
         cutoff = time.monotonic() - PEER_EXCHANGE_WINDOW
         self._peer_exchanges = [ts for ts in self._peer_exchanges if ts > cutoff]
         return len(self._peer_exchanges) < MAX_PEER_EXCHANGES
+
+    def _exchange_budget_spent(self, facts: "EventFacts") -> str:
+        """Why this peer exchange must stop, or "" while it may continue.
+
+        The ledger answer is the real one: it counts what the whole swarm said
+        about the user message this chain descends from, so it binds across
+        agents and survives a restart. The per-process window is checked too,
+        because the ledger read fails open and something has to hold if it does.
+        """
+        replies = self._replies_to_root(facts)
+        if replies >= MAX_AGENT_REPLIES_PER_ROOT:
+            return f"exchange ceiling reached ({replies} agent replies to this user message)"
+        if not self._peer_exchange_allowed():
+            return f"peer exchange budget spent ({MAX_PEER_EXCHANGES} per {PEER_EXCHANGE_WINDOW}s)"
+        return ""
+
+    def _replies_to_root(self, facts: "EventFacts") -> int:
+        """How much the swarm has already said about this exchange's user root."""
+        if not facts.chat_id:
+            return 0
+        try:
+            from kronos.swarm_store import get_swarm
+
+            swarm = self._swarm or get_swarm()
+            root = swarm.resolve_user_root(
+                chat_id=facts.chat_id,
+                topic_id=facts.topic_id,
+                msg_id=facts.msg_id,
+            )
+            return swarm.count_replies_to_root(
+                chat_id=facts.chat_id,
+                topic_id=facts.topic_id,
+                root_msg_id=root,
+            )
+        except Exception as e:
+            # Fail open: an unreadable ledger must not mute an agent. The window
+            # bound above is what keeps a loop finite while this is broken.
+            log.debug("[GroupRouter] Could not measure the exchange: %s", e)
+            return 0
 
     def _quiet_reason(self) -> str:
         """Non-empty when this agent has spent its personal daily budget."""

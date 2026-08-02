@@ -587,3 +587,86 @@ class TestSchemaMigration:
 
         _db._instances.clear()
         ss._singleton = None
+
+
+# --- exchange attribution (moat 11.5 follow-up) --------------------------------
+
+
+def test_resolve_user_root_walks_the_reply_chain(swarm):
+    """An agent↔agent chain leads back to the user message it descends from."""
+    swarm.record_inbound_message(
+        chat_id=-1,
+        topic_id=0,
+        msg_id=100,
+        reply_to_msg_id=None,
+        sender_id=42,
+        sender_type="user",
+        agent_name=None,
+        text="вопрос",
+    )
+    swarm.record_outbound_message(
+        chat_id=-1,
+        topic_id=0,
+        msg_id=101,
+        reply_to_msg_id=100,
+        agent_name="nexus",
+        text="ответ",
+    )
+    swarm.record_outbound_message(
+        chat_id=-1,
+        topic_id=0,
+        msg_id=102,
+        reply_to_msg_id=101,
+        agent_name="kronos",
+        text="возражение",
+    )
+
+    assert swarm.resolve_user_root(chat_id=-1, topic_id=0, msg_id=102) == 100
+    assert swarm.resolve_user_root(chat_id=-1, topic_id=0, msg_id=100) == 100
+
+
+def test_an_unknown_message_is_its_own_root(swarm):
+    """The conservative reading: nothing known, nothing to attribute it to."""
+    assert swarm.resolve_user_root(chat_id=-1, topic_id=0, msg_id=999) == 999
+
+
+def test_a_cycle_cannot_loop_forever(swarm):
+    """A malformed chain must terminate, not spin."""
+    swarm.record_outbound_message(chat_id=-1, topic_id=0, msg_id=1, reply_to_msg_id=2, agent_name="a", text="x")
+    swarm.record_outbound_message(chat_id=-1, topic_id=0, msg_id=2, reply_to_msg_id=1, agent_name="b", text="y")
+
+    assert swarm.resolve_user_root(chat_id=-1, topic_id=0, msg_id=1, max_hops=4) in (1, 2)
+
+
+def test_count_replies_to_root_counts_every_tier(swarm):
+    """Unlike the implicit cap, the exchange ceiling counts tier 1 as well."""
+    for msg_id, tier in ((10, 1), (11, 2), (12, 3)):
+        swarm.claim_reply(
+            chat_id=-1,
+            topic_id=0,
+            root_msg_id=100,
+            trigger_msg_id=msg_id,
+            agent_name=f"agent{msg_id}",
+            tier=tier,
+            eta_ts=0.0,
+        )
+        swarm.mark_sent(chat_id=-1, topic_id=0, trigger_msg_id=msg_id, agent_name=f"agent{msg_id}", reply_msg_id=None)
+
+    assert swarm.count_replies_to_root(chat_id=-1, topic_id=0, root_msg_id=100) == 3
+    assert swarm.count_replies_to_root(chat_id=-1, topic_id=0, root_msg_id=999) == 0
+
+
+def test_a_cancelled_claim_does_not_spend_the_exchange(swarm):
+    """Standing down must not count against the budget."""
+    swarm.claim_reply(
+        chat_id=-1,
+        topic_id=0,
+        root_msg_id=100,
+        trigger_msg_id=10,
+        agent_name="nexus",
+        tier=2,
+        eta_ts=0.0,
+    )
+    swarm.cancel_claim(chat_id=-1, topic_id=0, trigger_msg_id=10, agent_name="nexus")
+
+    assert swarm.count_replies_to_root(chat_id=-1, topic_id=0, root_msg_id=100) == 0

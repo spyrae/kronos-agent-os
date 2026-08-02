@@ -104,6 +104,7 @@ class LocalSwarmBus:
             my_id=sender_id,
             my_username=username or f"{name}agnt",
             allowed_user_ids={USER_ID},
+            swarm=self.store,
         )
         agent = LocalAgent(
             name=name,
@@ -147,6 +148,8 @@ class LocalSwarmBus:
             text=text,
             sender_id=sender_id,
             msg_id=msg_id,
+            chat_id=self.chat_id,
+            topic_id=self.topic_id,
             is_reply=reply_to is not None,
             reply_sender_id=self._sender_of(reply_to),
             topic_label=topic_label,
@@ -259,8 +262,12 @@ class LocalSwarmBus:
         return None
 
     def _root_msg_id(self, facts: EventFacts, tier: int) -> int:
-        """Tier 3 claims attach to the user message the peer replied to."""
-        if tier == 3:
+        """Anything a peer sent attaches to the user message it descends from.
+
+        Same rule as the bridge: without it every hop of an agent↔agent exchange
+        is its own root and the per-root ceiling never binds.
+        """
+        if facts.sender_id != USER_ID:
             return self._root_of.get(facts.msg_id, facts.msg_id)
         return facts.msg_id
 
