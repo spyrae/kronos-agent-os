@@ -23,14 +23,21 @@ async def _ensure_browser(profile_dir: str | None = None):
     With ``profile_dir`` the browser opens a persistent profile instead of a
     throwaway context, which is how a session the owner created by hand — logged
     in once, second factor already passed — is reused without storing anything
-    secret. Switching profiles restarts the browser: two profiles in one process
-    would silently share whichever context happened to be open.
+    secret. Switching to a *different* profile restarts the browser: two profiles
+    in one process would silently share whichever context happened to be open.
+
+    ``None`` means "whatever is already open", not "the default profile". Every
+    other function here calls it that way, so opening a site session and then
+    navigating has to keep the session — otherwise the second call would tear the
+    signed-in profile down and the first one would have achieved nothing. When no
+    page is live, ``None`` does start a throwaway browser: a session that died is
+    then reported as expired, which is the safe direction to fail in.
     """
     global _pw, _browser, _page, _profile_dir
 
-    if _page and not _page.is_closed() and profile_dir == _profile_dir:
+    if _page and not _page.is_closed() and profile_dir in (None, _profile_dir):
         return _page
-    if _page and profile_dir != _profile_dir:
+    if _page and profile_dir is not None and profile_dir != _profile_dir:
         log.info("Switching browser profile: %s -> %s", _profile_dir or "none", profile_dir or "none")
         await close()
 
