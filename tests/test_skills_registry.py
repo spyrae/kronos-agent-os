@@ -466,3 +466,93 @@ def test_a_signature_from_an_unconfigured_key_does_not_activate(store, served, t
 
     assert result.status == "draft"
     assert "no trusted keys" in result.reason
+
+
+# --- reference files (phase 12 follow-up) --------------------------------------
+
+REFERENCE_MD = "# Memo template\n\n- Decision:\n- Alternatives:\n"
+
+
+@pytest.fixture
+def served_with_reference(monkeypatch):
+    """Serve SKILL.md and one reference, addressed by URL."""
+    payloads = {
+        "https://example.invalid/decision-memo/SKILL.md": SKILL_MD,
+        "https://example.invalid/decision-memo/references/template.md": REFERENCE_MD,
+    }
+    requested: list[str] = []
+
+    def fake_fetch(url: str, timeout: int = 15) -> str:
+        requested.append(url)
+        if url in payloads:
+            return payloads[url]
+        raise OSError("HTTP Error 404: Not Found")
+
+    monkeypatch.setattr("kronos.skills.hub._fetch_url", fake_fetch)
+    return payloads, requested
+
+
+def test_declared_references_are_installed(store, served_with_reference):
+    _, requested = served_with_reference
+
+    result = install("decision-memo", store=store, entries=[_entry(trust="none", references=["template"])])
+
+    assert result.installed is True
+    reference = store.get("decision-memo").path.parent / "references" / "template.md"
+    assert reference.is_file()
+    assert "Memo template" in reference.read_text(encoding="utf-8")
+    assert "references/template.md" in " ".join(requested)
+
+
+def test_a_reference_is_usable_without_a_restart(store, served_with_reference):
+    """load_skill_reference reads the loaded skill, not the directory."""
+    install("decision-memo", store=store, entries=[_entry(trust="none", references=["template"])])
+
+    assert "Memo template" in store.get_reference("decision-memo", "template")
+
+
+def test_a_skill_with_references_can_verify_its_checksum(store, served_with_reference, tmp_path):
+    """The checksum covers reference files, so leaving them behind broke it."""
+    published = tmp_path / "published" / "decision-memo"
+    (published / "references").mkdir(parents=True)
+    (published / "SKILL.md").write_text(SKILL_MD, encoding="utf-8")
+    (published / "references" / "template.md").write_text(REFERENCE_MD, encoding="utf-8")
+    checksum = compute_checksum(published)
+
+    payloads, _ = served_with_reference
+    payloads["https://example.invalid/decision-memo/SKILL.md"] = SKILL_MD.replace(
+        "author: publisher", f"author: publisher\nchecksum: {checksum}"
+    )
+
+    result = install(
+        "decision-memo",
+        store=store,
+        entries=[_entry(checksum=checksum, trust="checksum", references=["template"])],
+    )
+
+    assert result.report["checksum_ok"] is True, result.reason
+
+
+def test_a_missing_reference_is_reported_and_blocks_activation(store, served_with_reference):
+    result = install("decision-memo", store=store, entries=[_entry(trust="none", references=["absent"])])
+
+    assert result.installed is True
+    assert result.status == "draft"
+    assert "reference 'absent.md' could not be fetched" in result.reason
+
+
+@pytest.mark.parametrize("hostile", ["../../etc/passwd", "sub/dir.md", "..", ".hidden"])
+def test_a_hostile_reference_name_is_refused(store, served_with_reference, hostile):
+    """The index is remote input; a name with a separator would write anywhere."""
+    result = install("decision-memo", store=store, entries=[_entry(trust="none", references=[hostile])])
+
+    assert f"refused unsafe reference name '{hostile}'" in result.reason
+    assert not (store.get("decision-memo").path.parent.parent / "passwd").exists()
+
+
+def test_a_skill_without_references_fetches_nothing_extra(store, served_with_reference):
+    _, requested = served_with_reference
+
+    install("decision-memo", store=store, entries=[_entry(trust="none")])
+
+    assert not any("references/" in url for url in requested)

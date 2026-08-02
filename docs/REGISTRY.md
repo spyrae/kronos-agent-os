@@ -146,7 +146,8 @@ repository root; `github:user/repo/subdir` reads that subdirectory):
       "author": "you@example.com",
       "requires_kaos": ">=0.2",
       "checksum": "sha256:…",
-      "signed": true
+      "signed": true,
+      "references": ["template", "checklist"]
     }
   ]
 }
@@ -154,6 +155,13 @@ repository root; `github:user/repo/subdir` reads that subdirectory):
 
 An entry advertising a different checksum than the skill declares keeps the skill a
 draft — two sources of truth disagreeing is worth stopping on.
+
+**`references` is not optional if your skill has any.** Raw HTTP offers no
+directory listing, so the installer fetches exactly the names you declare from
+`<skill>/references/<name>.md` and nothing else. Leave them out and the skill
+installs with dangling pointers *and* fails its own checksum, because the checksum
+covers reference files. A name containing a path separator is refused rather than
+fetched — the index is remote input.
 
 ## Trust levels
 

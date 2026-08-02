@@ -204,6 +204,65 @@ async def test_a_peer_chain_does_not_start_new_reactions(bus):
 
 
 @pytest.mark.asyncio
+async def test_a_peer_ping_pong_stops_at_the_root_ceiling(bus):
+    """The exact bound: everything said about one user message is counted.
+
+    The per-window bound alone let a slow loop resume every ten minutes. The
+    ledger ceiling is absolute per user message, so the exchange ends and stays
+    ended until the user says something new.
+    """
+    from kronos.group_router import MAX_AGENT_REPLIES_PER_ROOT
+
+    bus.add_agent("nexus", relevance=_keen, react=lambda agent, text: True)
+    bus.add_agent("kronos", relevance=lambda agent, text: 1, react=lambda agent, text: True)
+
+    facts = (await bus.user_says("что с метриками?"))[0]["reply_facts"]
+    for _ in range(20):
+        sent = await bus.run_round(facts)
+        if not sent:
+            break
+        facts = sent[0]["reply_facts"]
+    else:
+        pytest.fail("the exchange never ended")
+
+    replies = bus.store.count_replies_to_root(chat_id=bus.chat_id, topic_id=bus.topic_id, root_msg_id=1001)
+    assert replies == MAX_AGENT_REPLIES_PER_ROOT
+    # And it stays ended: a further round adds nothing.
+    assert await bus.run_round(facts) == []
+
+
+@pytest.mark.asyncio
+async def test_every_hop_is_attributed_to_the_user_message(bus):
+    """Without this the ceiling cannot bind: each hop would be its own root."""
+    bus.add_agent("nexus", relevance=_keen, react=lambda agent, text: True)
+    bus.add_agent("kronos", relevance=lambda agent, text: 1, react=lambda agent, text: True)
+
+    first = await bus.user_says("что с метриками?")
+    reaction = await bus.run_round(first[0]["reply_facts"])
+    chain = await bus.run_round(reaction[0]["reply_facts"])
+
+    assert chain, "the exchange should still be within budget here"
+    # Three agent replies, one root: the user's message.
+    assert bus.store.count_replies_to_root(chat_id=bus.chat_id, topic_id=bus.topic_id, root_msg_id=1001) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_new_user_message_gets_a_fresh_budget(bus):
+    """The ceiling bounds one exchange, it does not silence the swarm."""
+    bus.add_agent("nexus", relevance=_keen, react=lambda agent, text: True)
+    bus.add_agent("kronos", relevance=lambda agent, text: 1, react=lambda agent, text: True)
+
+    facts = (await bus.user_says("первый вопрос"))[0]["reply_facts"]
+    for _ in range(20):
+        sent = await bus.run_round(facts)
+        if not sent:
+            break
+        facts = sent[0]["reply_facts"]
+
+    assert await bus.user_says("второй вопрос"), "a new question must still be answered"
+
+
+@pytest.mark.asyncio
 async def test_a_peer_ping_pong_runs_out_of_budget(bus):
     """Found by this bus: Tier 1 bypasses every cap, so two agents looped forever.
 

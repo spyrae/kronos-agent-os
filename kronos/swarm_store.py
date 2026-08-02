@@ -693,6 +693,60 @@ class SwarmStore:
             (reason, chat_id, topic_id or 0, trigger_msg_id, agent_name),
         )
 
+    def resolve_user_root(
+        self,
+        *,
+        chat_id: int,
+        topic_id: int | None,
+        msg_id: int,
+        max_hops: int = 8,
+    ) -> int:
+        """Walk reply links up to the user message that started this exchange.
+
+        Every agent reply is recorded with the message it answered, so an
+        agent↔agent chain leads back to a user message in a few hops. Without
+        this, each hop of a peer exchange looks like its own root and any
+        per-root budget silently never binds.
+
+        Falls back to the message itself: an unknown or unlinked message is its
+        own root, which is the conservative reading.
+        """
+        current = msg_id
+        for _ in range(max_hops):
+            row = self._db.read_one(
+                """
+                SELECT sender_type, reply_to_msg_id FROM swarm_messages
+                WHERE chat_id = ? AND topic_id = ? AND msg_id = ?
+                """,
+                (chat_id, topic_id or 0, current),
+            )
+            if row is None or row["sender_type"] == "user" or not row["reply_to_msg_id"]:
+                return current
+            current = int(row["reply_to_msg_id"])
+        return current
+
+    def count_replies_to_root(
+        self,
+        *,
+        chat_id: int,
+        topic_id: int | None,
+        root_msg_id: int,
+    ) -> int:
+        """Everything the swarm has said about one user message, any tier.
+
+        Unlike the implicit cap in ``can_send_claim`` this counts tier 1 too —
+        it is a ceiling on the whole exchange, not on volunteering.
+        """
+        row = self._db.read_one(
+            """
+            SELECT COUNT(*) AS c FROM reply_claims
+            WHERE chat_id = ? AND topic_id = ? AND root_msg_id = ?
+              AND state IN ('executing', 'sent')
+            """,
+            (chat_id, topic_id or 0, root_msg_id),
+        )
+        return int(row["c"]) if row else 0
+
     def count_sent_replies(
         self,
         *,

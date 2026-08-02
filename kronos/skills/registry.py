@@ -79,6 +79,10 @@ class RegistryEntry:
     trust: str = "checksum"
     # Optional override; by default the scenario is a sibling of SKILL.md.
     scenario_url: str = ""
+    # Reference files that belong to the skill. Declared, not discovered: raw
+    # HTTP has no directory listing, and guessing would mean either missing files
+    # or probing a publisher's host.
+    references: list[str] = field(default_factory=list)
 
     def matches(self, query: str) -> bool:
         needle = query.strip().lower()
@@ -214,6 +218,7 @@ def parse_index(source: RegistrySource, payload: str) -> list[RegistryEntry]:
                 checksum=str(item.get("checksum", "")).strip(),
                 signed=bool(item.get("signed", False)),
                 scenario_url=str(item.get("scenario_url", "")).strip(),
+                references=[str(name).strip() for name in (item.get("references") or []) if str(name).strip()],
                 source=source.name,
                 trust=source.trust,
             )
@@ -345,8 +350,79 @@ def install(
     if "imported successfully" not in message:
         return InstallResult(skill=name, installed=False, reason=message)
 
+    # Before verification, not after: the checksum covers reference files, so a
+    # skill whose references were still missing would fail its own checksum.
+    reference_problems = fetch_references(entry, store=store)
+
     outcome = evaluate_installed(entry, store=store) if run_eval else None
-    return finish_install(entry, store=store, allow_activate=allow_activate, outcome=outcome)
+    return finish_install(
+        entry,
+        store=store,
+        allow_activate=allow_activate,
+        outcome=outcome,
+        problems=reference_problems,
+    )
+
+
+def _reference_filename(name: str) -> str:
+    """A safe file name under `references/`, or "" if the index is hostile.
+
+    An index is remote input: a name with a separator or `..` would write
+    wherever it liked. Only a plain `*.md` basename is accepted.
+    """
+    cleaned = name.strip()
+    if not cleaned or "/" in cleaned or "\\" in cleaned or cleaned.startswith("."):
+        return ""
+    if Path(cleaned).name != cleaned:
+        return ""
+    if not cleaned.endswith(".md"):
+        cleaned = f"{cleaned}.md"
+    return cleaned
+
+
+def fetch_references(entry: RegistryEntry, *, store: SkillStore) -> list[str]:
+    """Fetch the skill's reference files. Returns one message per problem.
+
+    Not cosmetic: a SKILL.md that points at `references/checklist.md` is broken
+    without it, and — because the checksum covers reference files — a published
+    skill with references could never verify after install while they were left
+    behind.
+    """
+    if not entry.references:
+        return []
+
+    skill = store.get(entry.name)
+    if skill is None:  # pragma: no cover - import reported success
+        return ["skill vanished before its references could be fetched"]
+
+    base = entry.url.removesuffix("/SKILL.md").rstrip("/")
+    refs_dir = skill.path.parent / "references"
+    problems: list[str] = []
+
+    from kronos.skills.hub import _fetch_url, _resolve_source
+
+    for raw_name in entry.references:
+        filename = _reference_filename(raw_name)
+        if not filename:
+            problems.append(f"refused unsafe reference name '{raw_name}'")
+            continue
+
+        source = f"{base}/references/{filename}"
+        resolved = _resolve_source(source) if source.startswith("github:") else source
+        try:
+            payload = _fetch_url(resolved)
+        except Exception as e:
+            problems.append(f"reference '{filename}' could not be fetched: {e}")
+            continue
+
+        refs_dir.mkdir(parents=True, exist_ok=True)
+        target = refs_dir / filename
+        target.write_text(payload, encoding="utf-8")
+        # Register it on the loaded skill too, so `load_skill_reference` works
+        # without waiting for a restart.
+        skill.references[target.stem] = target
+
+    return problems
 
 
 def evaluate_installed(entry: RegistryEntry, *, store: SkillStore):
@@ -386,6 +462,7 @@ def finish_install(
     store: SkillStore,
     allow_activate: bool = True,
     outcome=None,
+    problems: list[str] | None = None,
 ) -> InstallResult:
     """Verify a freshly imported skill and set its status accordingly."""
     from kronos.skills.autoeval import EVAL_ERROR, EVAL_FAILED, EVAL_MISSING
@@ -399,7 +476,9 @@ def finish_install(
     report["source"] = entry.source
     report["trust"] = entry.trust
 
-    reasons: list[str] = []
+    # A skill missing part of itself is not ready to activate, whatever else
+    # checks out.
+    reasons: list[str] = list(problems or [])
     if entry.checksum and skill.checksum and entry.checksum.strip() != skill.checksum.strip():
         reasons.append("the index advertises a different checksum than the skill declares")
     if not report["compatible"]:
