@@ -44,7 +44,7 @@ dependencies = [
     # the gateway. Lift the bound once the adapters release a 2.x-compatible
     # version — the pairing is what is broken, not either package alone.
     "langchain-mcp-adapters>=0.2",
-    "mcp>=1.9,<2",
+    "mcp>=1.9,<3",
 
     # Persistence
     "aiosqlite>=0.20",
