@@ -1527,6 +1527,128 @@ def run_audit_verify(as_json: bool) -> int:
     return 0
 
 
+def _plan_row(plan: dict) -> dict:
+    from kronos import plan_conditions, plans
+
+    steps = plans.steps_of(plan["id"])
+    return {
+        "id": plan["id"],
+        "goal": plan["goal"],
+        "state": plan["state"],
+        "steps": len(steps),
+        "done": sum(1 for s in steps if s["state"] == plans.STEP_DONE),
+        "waiting": [
+            {"step": s["id"], "for": plan_conditions.describe(plans.wait_spec(s))}
+            for s in steps
+            if s["state"] == plans.STEP_WAITING
+        ],
+        "summary": plan["summary"],
+    }
+
+
+def run_plans_list(show_all: bool, as_json: bool) -> int:
+    """Plans that are still running, or every plan there has been."""
+    from kronos import plans
+
+    rows = []
+    states = ("", *plans.PLAN_TERMINAL) if show_all else ("",)
+    seen = set()
+    for state in states:
+        for plan in plans.list_plans(settings.agent_name, state=state):
+            if plan["id"] in seen:
+                continue
+            seen.add(plan["id"])
+            rows.append(_plan_row(plan))
+    rows.sort(key=lambda row: row["id"], reverse=True)
+
+    if as_json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+    if not rows:
+        print("No plans." if show_all else "No plans running. `kaos plans list --all` for finished ones.")
+        return 0
+    for row in rows:
+        print(f"#{row['id']} [{row['state']}] {row['goal']}  ({row['done']}/{row['steps']} steps)")
+        for waiting in row["waiting"]:
+            print(f"    step #{waiting['step']} waits {waiting['for']}")
+    return 0
+
+
+def run_plans_show(plan_id: int, as_json: bool) -> int:
+    from kronos import plan_conditions, plans
+
+    plan = plans.get_plan(plan_id)
+    if not plan:
+        print(f"No plan #{plan_id}")
+        return 1
+
+    steps = plans.steps_of(plan_id)
+    if as_json:
+        print(json.dumps({"plan": plan, "steps": steps}, ensure_ascii=False, indent=2, default=str))
+        return 0
+
+    print(f"#{plan['id']} [{plan['state']}] {plan['goal']}")
+    if plan["summary"]:
+        print(f"\n{plan['summary']}\n")
+    for step in steps:
+        label = step["title"] or f"step {step['seq']}"
+        line = f"  #{step['id']} {label}: {step['state']}"
+        spec = plans.wait_spec(step)
+        if spec:
+            line += f" — waits {plan_conditions.describe(spec)} (checked {step['checks']}x)"
+        deps = plans.dependency_ids(step)
+        if deps:
+            line += f" — after {', '.join(f'#{d}' for d in deps)}"
+        print(line)
+        if step["result"]:
+            print(f"      {step['result'][:500]}")
+    return 0
+
+
+def run_plans_resume(plan_id: int, step_id: int) -> int:
+    """Release waiting steps so the next poller cycle runs them.
+
+    This is the other half of a `manual` condition: the plan parked itself
+    because only the owner knows when to carry on.
+    """
+    from kronos import plans
+
+    plan = plans.get_plan(plan_id)
+    if not plan:
+        print(f"No plan #{plan_id}")
+        return 1
+    if plan["state"] != plans.PLAN_ACTIVE:
+        print(f"Plan #{plan_id} is {plan['state']} — nothing to resume.")
+        return 1
+
+    waiting = [s for s in plans.steps_of(plan_id) if s["state"] == plans.STEP_WAITING]
+    if step_id:
+        waiting = [s for s in waiting if s["id"] == step_id]
+        if not waiting:
+            print(f"Step #{step_id} of plan #{plan_id} is not waiting.")
+            return 1
+    if not waiting:
+        print(f"Plan #{plan_id} has no waiting steps.")
+        return 1
+
+    for step in waiting:
+        plans.release_step(step["id"])
+        label = step["title"] or f"step {step['seq']}"
+        print(f"Released step #{step['id']} ({label})")
+    print("The next poller cycle picks them up.")
+    return 0
+
+
+def run_plans_cancel(plan_id: int) -> int:
+    from kronos import plans
+
+    if not plans.cancel_plan(plan_id, settings.agent_name):
+        print(f"No active plan #{plan_id} for {settings.agent_name}")
+        return 1
+    print(f"Plan #{plan_id} cancelled.")
+    return 0
+
+
 def run_vault_init(overwrite: bool) -> int:
     """Create the key that encrypts stored site passwords."""
     from kronos import vault
@@ -1965,6 +2087,20 @@ def build_parser() -> argparse.ArgumentParser:
     audit_verify = audit_sub.add_parser("verify", help="verify the audit log hash chain")
     audit_verify.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
 
+    plans_cmd = sub.add_parser("plans", help="long-lived plans: what is running and what it waits for")
+    plans_sub = plans_cmd.add_subparsers(dest="plans_command")
+    plans_list = plans_sub.add_parser("list", help="plans still running")
+    plans_list.add_argument("--all", dest="show_all", action="store_true", help="include finished plans")
+    plans_list.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+    plans_show = plans_sub.add_parser("show", help="one plan with its steps and results")
+    plans_show.add_argument("plan_id", type=int)
+    plans_show.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+    plans_resume = plans_sub.add_parser("resume", help="release steps that were waiting for you")
+    plans_resume.add_argument("plan_id", type=int)
+    plans_resume.add_argument("--step", dest="step_id", type=int, default=0, help="release only this step")
+    plans_cancel = plans_sub.add_parser("cancel", help="stop a plan")
+    plans_cancel.add_argument("plan_id", type=int)
+
     vault_cmd = sub.add_parser("vault", help="the key that encrypts stored site passwords")
     vault_sub = vault_cmd.add_subparsers(dest="vault_command")
     vault_init = vault_sub.add_parser("init", help="create the vault key")
@@ -2155,6 +2291,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.audit_command == "verify":
             return run_audit_verify(args.as_json)
         parser.parse_args(["audit", "--help"])
+        return 0
+    if args.command == "plans":
+        if args.plans_command == "list":
+            return run_plans_list(args.show_all, args.as_json)
+        if args.plans_command == "show":
+            return run_plans_show(args.plan_id, args.as_json)
+        if args.plans_command == "resume":
+            return run_plans_resume(args.plan_id, args.step_id)
+        if args.plans_command == "cancel":
+            return run_plans_cancel(args.plan_id)
+        parser.parse_args(["plans", "--help"])
         return 0
     if args.command == "vault":
         if args.vault_command == "init":
