@@ -428,6 +428,25 @@ def cancel_plan(plan_id: int, agent_name: str, now: float | None = None) -> bool
     return cursor.rowcount > 0
 
 
+def plans_awaiting_summary(agent_name: str, *, limit: int = 5) -> list[dict]:
+    """Finished plans that have not told the owner how it went yet.
+
+    The marker is the state plus an empty summary, not a variable in the poller's
+    loop — so a crash between finishing and reporting loses nothing, and a plan
+    stays owed its summary until it has one. Cancelled plans are not owed one:
+    the owner did that on purpose.
+    """
+    rows = _db().read(
+        """
+        SELECT * FROM plans
+        WHERE agent_name = ? AND state IN (?, ?) AND summary = ''
+        ORDER BY updated_at LIMIT ?
+        """,
+        (agent_name, PLAN_DONE, PLAN_FAILED, limit),
+    )
+    return [dict(row) for row in rows]
+
+
 def expired_plans(agent_name: str, now: float | None = None) -> list[dict]:
     rows = _db().read(
         "SELECT * FROM plans WHERE agent_name = ? AND state = ? AND expires_at <= ?",
