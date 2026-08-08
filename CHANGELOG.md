@@ -6,6 +6,22 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Added
 
+- **Plans — work that outlives a turn** — a durable turn protects minutes; "ask
+  three landlords and compare what comes back" is days, mostly spent waiting. A
+  plan is a goal plus steps, where a step holds a prompt, what it depends on, and
+  what it waits for: a time, you resuming it, you replying, a page starting or
+  stopping to match a pattern, or a number on a page crossing a threshold. The
+  poller runs each ready step as an ordinary agent turn, so durable turns, the
+  effects ledger, approvals and the cost guardian apply unchanged. Conditions are
+  validated in the turn that writes them — a bad regex or a forbidden host is
+  refused with the reason, not discovered next Tuesday. A dependency counts as
+  satisfied when it *finished*, not when it succeeded, so one silent landlord does
+  not turn two answers into none. Steps are silent unless marked `notify`; what
+  always arrives is one closing summary. `plan_start` / `plan_add_step` /
+  `plan_status` / `plan_cancel`, `kaos plans list/show/resume/cancel`, a dashboard
+  page, and bounds on everything that could otherwise wait forever. Docs:
+  [Plans](docs/PLANS.md).
+
 - **Site accounts — acting as the owner, without holding the keys** — an account
   says which sites the agent may work on as you, which domains that session may
   be used on, and what it may do there (`read` / `message` / `full`, with

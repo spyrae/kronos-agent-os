@@ -194,6 +194,6 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         nexus_jobs_registered = 4
 
     total = (
-        21 + nexus_jobs_registered
-    )  # +reminders +handoff/council/memory intake +sla-escalation +swarm-weekly-report +persona-evolution; signal-jobs, travel insights, people-scout and group-digest paused
+        22 + nexus_jobs_registered
+    )  # +reminders +plan-steps +handoff/council/memory intake +sla-escalation +swarm-weekly-report +persona-evolution; signal-jobs, travel insights, people-scout and group-digest paused
     log.info("%d cron jobs registered for agent '%s'", total, me)
