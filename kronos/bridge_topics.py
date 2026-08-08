@@ -23,13 +23,22 @@ class TopicRoute:
 
 @dataclass(frozen=True)
 class TopicDecision:
-    """Small decision object compatible with group_router.RoutingDecision."""
+    """Small decision object compatible with group_router.RoutingDecision.
+
+    The compatibility is load-bearing: ``bridge.handle_message`` reads the same
+    attributes off whichever decision it holds. Every field ``RoutingDecision``
+    carries must exist here too, or the owner-topic path raises AttributeError
+    after the answer is already generated — and the reply is silently lost.
+    """
 
     should_respond: bool
     delay: float
     tier: int
     reason: str
     addressing: object | None = None
+    topic: str = ""
+    topic_owner: str = ""
+    owner_sla_minutes: int = 0
 
 
 def _normalize_telegram_chat_id(chat_id: int | None) -> int | None:

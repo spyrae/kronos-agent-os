@@ -1094,6 +1094,11 @@ async def run_bridge(agent: KronosAgent) -> None:
                     0.0,
                     1,
                     f"topic-owner:{topic_route.label}",
+                    topic=topic_route.label,
+                    # Ownership is already resolved above by `_agent_owns_topic`,
+                    # which also accepts a comma-separated list of owners — so
+                    # the owner of this decision is this agent, not the raw config.
+                    topic_owner=settings.agent_name,
                 )
                 if swarm is not None:
                     swarm.claim_reply(
