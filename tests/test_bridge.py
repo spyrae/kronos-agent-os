@@ -157,6 +157,23 @@ def test_topic_owner_can_allow_multiple_agents(monkeypatch):
     assert bridge._agent_owns_topic(route) is False
 
 
+def test_topic_decision_carries_every_routing_decision_field():
+    """The two decision types are read interchangeably by handle_message.
+
+    A field present only on RoutingDecision raises AttributeError on the
+    owner-topic path — after the answer is generated, so the reply is lost
+    instead of sent. Keep the contract enforced here, not in production.
+    """
+    from dataclasses import fields
+
+    from kronos.group_router import RoutingDecision
+
+    routing = {field.name for field in fields(RoutingDecision)}
+    topic = {field.name for field in fields(bridge.TopicDecision)}
+
+    assert routing <= topic, f"TopicDecision is missing: {sorted(routing - topic)}"
+
+
 def test_topic_route_falls_back_outside_configured_chat(monkeypatch):
     _clear_topic_alias_env(monkeypatch)
     monkeypatch.setattr(bridge.settings, "telegram_swarm_chat_id", 3642435967)
