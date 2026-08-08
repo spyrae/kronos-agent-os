@@ -81,3 +81,49 @@ def test_login_rate_limited_after_repeated_failures(client):
     res = client.post("/api/auth/login", json={"username": "admin", "password": "s3cret"})
     assert res.status_code == 429
     assert "retry-after" in {k.lower() for k in res.headers}
+
+
+def test_unset_password_rejects_every_login(monkeypatch):
+    """A blank password must close the door, not open it.
+
+    `DASHBOARD_PASSWORD=` in an env file leaves the credential empty; without
+    this guard the constant-time compare happily matches an empty submission.
+    """
+    import dashboard.auth as auth
+
+    monkeypatch.setattr(auth, "DASHBOARD_USERNAME", "admin")
+    monkeypatch.setattr(auth, "DASHBOARD_PASSWORD", "")
+
+    assert auth.verify_credentials("admin", "") is False
+    assert auth.verify_credentials("admin", "anything") is False
+
+
+def test_generated_password_is_stored_private_and_stays_stable(tmp_path):
+    """The generated secret lives in a 0600 file, and survives a restart.
+
+    It used to be logged instead — a live credential in the journal — and was
+    rolled on every start, which is what made logging it feel necessary.
+    """
+    import stat
+
+    from dashboard.config import _read_or_create_password
+
+    path = tmp_path / "nested" / "dashboard_password"
+    password = _read_or_create_password(path)
+
+    assert password
+    assert path.read_text(encoding="utf-8").strip() == password
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    # A second startup reads the stored value rather than rolling a new one.
+    assert _read_or_create_password(path) == password
+
+
+def test_unwritable_password_file_yields_no_password(tmp_path):
+    """Failing to persist the secret must not fall back to an open dashboard."""
+    from dashboard.config import _read_or_create_password
+
+    unwritable = tmp_path / "dashboard_password"
+    unwritable.mkdir()  # a directory where the file should be
+
+    assert _read_or_create_password(unwritable) == ""

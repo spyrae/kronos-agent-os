@@ -37,6 +37,7 @@ from dashboard.config import (
     DASHBOARD_HOST,
     DASHBOARD_PASSWORD,
     DASHBOARD_PASSWORD_GENERATED,
+    DASHBOARD_PASSWORD_PATH,
     DASHBOARD_PORT,
     DASHBOARD_USERNAME,
 )
@@ -117,7 +118,21 @@ def create_app(scheduler=None, agent=None) -> FastAPI:
 
 
 async def run_dashboard(scheduler=None, agent=None) -> None:
-    """Start dashboard server."""
+    """Start dashboard server.
+
+    Returns without starting when there is no password to check against —
+    which happens only if the generated one could not be persisted. Serving an
+    unauthenticated dashboard is not an acceptable fallback. The agent keeps
+    running: the dashboard is an accessory to it, never a reason to take it down.
+    """
+    if not DASHBOARD_PASSWORD:
+        log.error(
+            "Dashboard not started: no password available (could not store one in %s). "
+            "Set DASHBOARD_PASSWORD to enable it.",
+            DASHBOARD_PASSWORD_PATH,
+        )
+        return
+
     app = create_app(scheduler=scheduler, agent=agent)
     config = uvicorn.Config(
         app,
@@ -129,8 +144,9 @@ async def run_dashboard(scheduler=None, agent=None) -> None:
     log.info("Dashboard starting on http://%s:%d", DASHBOARD_HOST, DASHBOARD_PORT)
     if DASHBOARD_PASSWORD_GENERATED:
         log.warning(
-            "Generated temporary dashboard password for user '%s': %s",
+            "Dashboard password for user '%s' was generated and stored in %s (mode 0600). "
+            "Set DASHBOARD_PASSWORD to choose your own.",
             DASHBOARD_USERNAME,
-            DASHBOARD_PASSWORD,
+            DASHBOARD_PASSWORD_PATH,
         )
     await server.serve()

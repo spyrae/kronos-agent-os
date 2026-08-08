@@ -48,7 +48,14 @@ def verify_credentials(username: str, password: str) -> bool:
 
     Both comparisons are evaluated before the ``and`` so short-circuiting
     doesn't leak which field mismatched via response timing.
+
+    An unset password rejects every login rather than admitting anyone who
+    sends an empty one — without this, a blank ``DASHBOARD_PASSWORD=`` in an
+    env file would be an open door instead of a closed one.
     """
+    if not DASHBOARD_PASSWORD:
+        return False
+
     user_ok = secrets.compare_digest(username.encode(), DASHBOARD_USERNAME.encode())
     pass_ok = secrets.compare_digest(password.encode(), DASHBOARD_PASSWORD.encode())
     return user_ok and pass_ok
