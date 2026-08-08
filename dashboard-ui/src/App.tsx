@@ -25,6 +25,7 @@ const TurnsPage = lazy(() => import('./pages/TurnsPage'));
 const AnomaliesPage = lazy(() => import('./pages/AnomaliesPage'));
 const SandboxPage = lazy(() => import('./pages/SandboxPage'));
 const AccountsPage = lazy(() => import('./pages/AccountsPage'));
+const PlansPage = lazy(() => import('./pages/PlansPage'));
 
 /* ── Login ── */
 
@@ -115,6 +116,7 @@ const NAV_SECTIONS: NavSection[] = [
       { path: '/analytics', label: 'Analytics', icon: 'N' },
       { path: '/audit', label: 'Audit Trail', icon: 'T' },
       { path: '/turns', label: 'Durable Turns', icon: 'D' },
+      { path: '/plans', label: 'Plans', icon: 'B' },
       { path: '/sandbox', label: 'Sandbox', icon: 'X' },
     ],
   },
@@ -135,7 +137,7 @@ const NAV_SECTIONS: NavSection[] = [
 
 const ICON_COLORS: Record<string, string> = {
   '~': '#f97316', F: '#22d3ee', A: '#3b82f6', M: '#8b5cf6', L: '#4ade80',
-  J: '#0ea5e9', P: '#f59e0b', N: '#06b6d4', T: '#ec4899',
+  J: '#0ea5e9', P: '#f59e0b', N: '#06b6d4', T: '#ec4899', B: '#84cc16',
   X: '#f97316',
   '!': '#ef4444', S: '#6366f1', K: '#14b8a6', G: '#a78bfa', Q: '#22c55e', U: '#eab308', W: '#f472b6', C: '#64748b',
 };
@@ -346,6 +348,7 @@ export default function App() {
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/audit" element={<AuditTrailPage />} />
           <Route path="/turns" element={<TurnsPage />} />
+          <Route path="/plans" element={<PlansPage />} />
           <Route path="/sandbox" element={<SandboxPage />} />
           <Route path="/anomalies" element={<AnomaliesPage />} />
           <Route path="/mcp" element={<McpPage />} />
