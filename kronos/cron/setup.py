@@ -40,6 +40,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.news_monitor import run_news_monitor
     from kronos.cron.persona_evolve import run_persona_evolution
     from kronos.cron.personal_observer import run_daily_scope, run_personal_observer
+    from kronos.cron.plans import run_due_plan_steps
     from kronos.cron.reminders import run_due_reminders
     from kronos.cron.self_improve import run_self_improve
     from kronos.cron.signal_ideas import run_ideas_digest
@@ -66,6 +67,10 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
 
     # User-scheduled reminders / tasks — poll every minute (roadmap 4.2)
     scheduler.add_periodic("user-reminders", run_due_reminders, interval_seconds=60)
+
+    # Long-lived plans — poll every minute. Cheap when nothing is due: a cycle
+    # with no ready step is one indexed query.
+    scheduler.add_periodic("plan-steps", run_due_plan_steps, interval_seconds=60)
 
     # Cross-agent hand-off intake — poll every 30s (roadmap 5.1)
     scheduler.add_periodic("handoff-intake", run_handoff_intake, interval_seconds=30)
@@ -189,6 +194,6 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         nexus_jobs_registered = 4
 
     total = (
-        21 + nexus_jobs_registered
-    )  # +reminders +handoff/council/memory intake +sla-escalation +swarm-weekly-report +persona-evolution; signal-jobs, travel insights, people-scout and group-digest paused
+        22 + nexus_jobs_registered
+    )  # +reminders +plan-steps +handoff/council/memory intake +sla-escalation +swarm-weekly-report +persona-evolution; signal-jobs, travel insights, people-scout and group-digest paused
     log.info("%d cron jobs registered for agent '%s'", total, me)

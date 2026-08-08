@@ -23,6 +23,7 @@ Start here if you want to understand or contribute to Kronos Agent OS.
 | [Skills](SKILLS.md) | Workspace-local reusable procedures |
 | [MCP & Tools](MCP.md) | Static MCP, tool gateway, dynamic tool gates |
 | [Site Accounts](SITE-ACCOUNTS.md) | Acting as the owner on a site: sessions, permissions, the password vault |
+| [Plans](PLANS.md) | Work that outlives a turn: steps, waiting conditions, what reaches you |
 | [Automations](AUTOMATIONS.md) | Scheduler, jobs, notifications, audit trail |
 | [Sub-Agents & Swarm](SWARM.md) | Optional multi-agent coordination |
 | [Skill Registry](REGISTRY.md) | Publishing, signing, installing and measuring skills |

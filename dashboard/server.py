@@ -29,6 +29,7 @@ from dashboard.api.monitoring import set_scheduler
 from dashboard.api.overview import router as overview_router
 from dashboard.api.performance import router as performance_router
 from dashboard.api.persona import router as persona_router
+from dashboard.api.plans import router as plans_router
 from dashboard.api.sandbox import router as sandbox_router
 from dashboard.api.skills import router as skills_router
 from dashboard.api.swarm import router as swarm_router
@@ -84,6 +85,7 @@ def create_app(scheduler=None, agent=None) -> FastAPI:
     app.include_router(audit_trail_router)
     app.include_router(turns_router)
     app.include_router(accounts_router)
+    app.include_router(plans_router)
     app.include_router(anomalies_router)
     app.include_router(persona_router)
     app.include_router(monitoring_router)
