@@ -112,6 +112,12 @@ class KronosAgent:
 
         self._tools.extend(ACCOUNT_TOOLS)
 
+        # Work that will not finish in this conversation: a goal, steps, and what
+        # each step waits for. The cron poller is what actually runs them.
+        from kronos.tools.plans_tools import PLAN_TOOLS
+
+        self._tools.extend(PLAN_TOOLS)
+
         # Browser tools (stateful session; the acquire tools cover one-off reads)
         from kronos.tools.browser.tools import get_browser_tools
 
