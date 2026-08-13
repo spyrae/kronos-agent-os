@@ -97,7 +97,10 @@ def test_sandbox_command_uses_restrictive_docker_flags():
     assert "--cap-drop=ALL" in cmd
     assert "--security-opt=no-new-privileges" in cmd
     assert "--pids-limit=50" in cmd
-    assert "--user=10001:10001" in cmd
+    # Not a fixed uid: the container runs as the agent's own user so the bind
+    # mounts are usable, and never as root.
+    assert f"--user={sandbox.container_user()}" in cmd
+    assert "--user=0:0" not in cmd
     assert "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m" in cmd
     assert "kronos-sandbox:latest" in cmd
     assert cmd[-2:] == ["python", "/sandbox/runner.py"]

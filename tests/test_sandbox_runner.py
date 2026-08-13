@@ -20,7 +20,8 @@ def test_the_command_locks_the_container_down():
     assert "--read-only" in command
     assert "--cap-drop=ALL" in command
     assert "--security-opt=no-new-privileges" in command
-    assert "--user=10001:10001" in command
+    assert f"--user={sandbox.container_user()}" in command
+    assert "--user=0:0" not in command
     assert "--pids-limit=50" in command
     assert "-v" in command and "/tmp/code:/code:ro" in command
 
@@ -42,6 +43,55 @@ def test_with_a_session_directory_it_is_mounted_and_becomes_the_workdir():
 
 def test_the_network_is_opt_in_per_run():
     assert "--network=bridge" in sandbox.build_sandbox_command("/tmp/c", network=True)
+
+
+def test_the_container_never_runs_as_root(monkeypatch):
+    """Matching the host uid is what makes bind mounts usable; root is not an option."""
+    monkeypatch.setattr(sandbox.os, "getuid", lambda: 0)
+
+    assert sandbox.container_user() == f"{sandbox.SANDBOX_UID}:{sandbox.SANDBOX_UID}"
+
+
+def test_the_container_runs_as_the_agents_own_uid(monkeypatch):
+    monkeypatch.setattr(sandbox.os, "getuid", lambda: 1001)
+    monkeypatch.setattr(sandbox.os, "getgid", lambda: 1002)
+
+    assert sandbox.container_user() == "1001:1002"
+
+
+async def test_the_code_is_actually_readable_inside_the_container(monkeypatch):
+    """The bug this catches: mkdtemp is 0700, so /code/tool.py was unreadable.
+
+    Every run failed with "Permission denied: '/code/tool.py'" on any host where
+    the container user differed from the file's owner — which is every host. It
+    went unnoticed because the image was never built and the feature is off by
+    default.
+    """
+    import os
+    import stat
+
+    seen: dict[str, int] = {}
+
+    class Recorder:
+        returncode = 0
+
+        async def communicate(self):
+            return b"", b""
+
+    async def fake_exec(*cmd, stdout=None, stderr=None):
+        mount = next(part for part in cmd if part.endswith(":/code:ro"))
+        code_dir = mount.split(":/code")[0]
+        seen["dir"] = stat.S_IMODE(os.stat(code_dir).st_mode)
+        seen["file"] = stat.S_IMODE(os.stat(os.path.join(code_dir, "tool.py")).st_mode)
+        return Recorder()
+
+    monkeypatch.setattr(sandbox, "sandbox_ready", lambda: True)
+    monkeypatch.setattr(sandbox.asyncio, "create_subprocess_exec", fake_exec)
+
+    await sandbox.execute_sandboxed("print(1)")
+
+    assert seen["dir"] & stat.S_IXOTH, "the code directory must be traversable by the container user"
+    assert seen["file"] & stat.S_IROTH, "the code file must be readable by the container user"
 
 
 class FakeProc:

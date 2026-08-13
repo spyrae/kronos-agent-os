@@ -73,6 +73,36 @@ def sandbox_unavailable_message() -> str:
     return f"Sandbox image {SANDBOX_IMAGE} is missing. Run `{SANDBOX_BUILD_SCRIPT}`."
 
 
+SANDBOX_UID = 10001
+
+
+def container_user() -> str:
+    """Which uid:gid the container runs as — never root, and able to use the mounts.
+
+    Bind mounts carry the host's ownership, so a container running as uid 10001
+    could neither read a 0700 temp directory nor write into a directory owned by
+    the agent's user. Running as the agent's own uid solves both without making
+    anything world-accessible; the image's baked-in 10001 stays as the answer for
+    the one case where the agent's uid would be root, and there the mounts get
+    chowned instead.
+    """
+    uid = os.getuid() if hasattr(os, "getuid") else SANDBOX_UID
+    if uid == 0:
+        return f"{SANDBOX_UID}:{SANDBOX_UID}"
+    return f"{uid}:{os.getgid()}"
+
+
+def _grant_access(path: str) -> None:
+    """Make a mounted directory usable by the container user."""
+    if not hasattr(os, "getuid") or os.getuid() != 0:
+        # Running as ourselves: the mounts are already ours.
+        return
+    try:
+        os.chown(path, SANDBOX_UID, SANDBOX_UID)
+    except OSError as e:  # pragma: no cover - only reachable as root
+        log.warning("Cannot hand %s to the sandbox user: %s", path, e)
+
+
 def build_sandbox_command(
     tmpdir: str,
     memory_limit: str = DEFAULT_MEMORY,
@@ -99,7 +129,7 @@ def build_sandbox_command(
         "--cap-drop=ALL",
         "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m",
         "--security-opt=no-new-privileges",
-        "--user=10001:10001",
+        f"--user={container_user()}",
         "--workdir=/work" if files_dir else "--workdir=/code",
         "-v",
         f"{tmpdir}:/code:ro",
@@ -164,6 +194,14 @@ async def execute_sandboxed(
         tmpdir = tempfile.mkdtemp(prefix="kronos-sandbox-")
         code_file = Path(tmpdir) / "tool.py"
         code_file.write_text(code, encoding="utf-8")
+        # mkdtemp is 0700. Mounted into a container running as anyone else, that
+        # is a permission denied on the very file being executed — which is how
+        # this path was silently broken until a real container was tried.
+        os.chmod(tmpdir, 0o755)
+        os.chmod(code_file, 0o644)
+        _grant_access(tmpdir)
+        if files_dir:
+            _grant_access(files_dir)
 
         cmd = build_sandbox_command(tmpdir, memory_limit=memory_limit, network=network, files_dir=files_dir)
 
