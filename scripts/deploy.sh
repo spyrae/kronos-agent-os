@@ -293,6 +293,20 @@ else
       exit 1
     fi
 
+    # Build the code sandbox image if it is missing. Without it, run_code and
+    # dynamic tools refuse to run — there is no unsandboxed fallback — so the
+    # capability would look enabled and never work. Only when absent: the image
+    # is a base python layer and rebuilding it on every deploy buys nothing.
+    if command -v docker >/dev/null 2>&1; then
+      if ! docker image inspect kronos-sandbox:latest >/dev/null 2>&1; then
+        echo "Building the code sandbox image..."
+        bash app/scripts/build-sandbox.sh \
+          || echo "WARNING: sandbox image build failed — run_code and dynamic tools will refuse to run."
+      fi
+    else
+      echo "NOTE: docker not installed — sandboxed code execution is unavailable on this host."
+    fi
+
     # Rebuild the dashboard UI: rsync excludes dist/ (the pattern also matches
     # Python build dirs), so the served bundle must be rebuilt from the synced
     # sources — otherwise UI changes never reach the host. Best-effort: the

@@ -6,6 +6,24 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Added
 
+- **compare_offers — totals as arithmetic, not prose** — "which flat is the
+  better deal" is adding money correctly and noticing what is missing, and both
+  are where invented numbers come from. The tool ranks on money only and says so
+  in its own output; weighing location or seller reputation stays with whoever
+  reads it. Three refusals carry the value: an offer missing a cost is set aside
+  and named rather than ranked as the cheapest, two currencies are refused
+  without a rate this has no business inventing, and one-off costs are separated
+  from recurring ones — the difference between the cheapest month and the
+  cheapest stay. No sandbox needed: a fixed comparison is a function.
+- **run_code — one-off analysis in the sandbox** — the container could previously
+  only run *persisted* dynamic tools, so ad-hoc work (normalise forty listings,
+  parse an odd export) had nowhere to go and stayed in the model's head. Opt-in
+  via `ENABLE_CODE_EXECUTION` / `capabilities.code_execution`, stdlib only, no
+  network, stdout is the answer. Each session gets one writable directory that
+  outlives the run, defaulting to the current thread — so a plan accumulates its
+  own working files and a step three days later reads what an earlier one wrote.
+  Docs: [Sandbox](docs/SANDBOX.md).
+
 - **Plans — work that outlives a turn** — a durable turn protects minutes; "ask
   three landlords and compare what comes back" is days, mostly spent waiting. A
   plan is a goal plus steps, where a step holds a prompt, what it depends on, and
@@ -137,6 +155,14 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Changed
 
+- **The sandbox now enforces what it declared.** `create_session_workspace` built
+  a directory tree that the runner never mounted, so no files went in or out;
+  the storage budget was a number in a manifest; and the dynamic-tool path
+  assembled its policy from the same request it validated, making an input
+  violation unreachable. The session directory is mounted read-write at `/work`
+  and is the working directory, a watchdog outside the container enforces the
+  disk budget while the run proceeds, and the policy comes from a new `sandbox:`
+  section in `policy.yaml`.
 - `kronos.audit.redact_secrets` is now public (was `_redact_string`'s inline
   loop) so exports and audit logs share one copy of the credential patterns.
 
@@ -153,6 +179,15 @@ All notable changes to Kronos Agent OS are documented here.
   call time instead of binding it at import time; a module-level binding
   ignored a swapped workspace, which also made an earlier test pass against
   the wrong directory.
+
+### Removed
+
+- **The unsandboxed execution path.** Two places dropped to `exec()` in the
+  agent's own process when Docker was missing, both logging "unsafe, dev only"
+  and both one environment variable away from running model-written code in
+  production. Missing Docker now means the code does not run, and
+  `REQUIRE_DYNAMIC_TOOL_SANDBOX=false` turns dynamic tools off rather than
+  running them unprotected.
 
 ## [0.2.0] - 2026-05-26
 
