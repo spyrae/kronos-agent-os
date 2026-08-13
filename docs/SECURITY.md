@@ -17,7 +17,7 @@ These defaults mean a fresh clone can run local chat/demo flows without allowing
 
 Telegram DMs are blocked until `ALLOWED_USERS` is configured, unless `ALLOW_ALL_USERS=true` is set explicitly.
 
-Dynamic tools require the local Docker sandbox image when `REQUIRE_DYNAMIC_TOOL_SANDBOX=true`. Build it with `scripts/build-sandbox.sh`; `kaos doctor` fails closed if dynamic tools are enabled but Docker or the image is missing.
+Agent-written code only ever runs in the Docker sandbox. Build the image with `scripts/build-sandbox.sh`; without it the code does not run. There is no in-process fallback — `REQUIRE_DYNAMIC_TOOL_SANDBOX=false` turns dynamic tools off rather than running them unsandboxed. `kaos doctor` fails closed if dynamic tools are enabled but Docker or the image is missing.
 
 ## Tool-Call Audit Trail
 

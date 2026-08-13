@@ -145,7 +145,12 @@ async def test_dynamic_tool_creation_requires_ready_sandbox_image(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_dynamic_tool_can_register_from_ast_metadata_without_required_sandbox(monkeypatch, tmp_path):
+async def test_asking_not_to_require_a_sandbox_turns_the_feature_off(monkeypatch, tmp_path):
+    """There is no unsandboxed mode: the answer is "no tool", not "in this process".
+
+    This test used to assert the opposite — that the tool was created and ran
+    in-process — which is precisely the mode that was removed.
+    """
     from kronos.tools import dynamic, sandbox
 
     class FakeModel:
@@ -168,7 +173,17 @@ async def test_dynamic_tool_can_register_from_ast_metadata_without_required_sand
 
     tool, message = await dynamic.create_tool("hello_tool", "Say hello")
 
-    assert tool is not None
-    assert "created successfully" in message
-    assert await tool.ainvoke({"name": "Ada"}) == "hello Ada"
-    assert (tmp_path / "hello_tool.py").exists()
+    assert tool is None
+    assert "outside the sandbox is not supported" in message
+    assert not (tmp_path / "hello_tool.py").exists(), "nothing is persisted for a mode that cannot run"
+
+
+def test_persisted_tools_are_not_loaded_without_a_sandbox(monkeypatch, tmp_path):
+    from kronos.tools import dynamic
+
+    monkeypatch.setattr(settings, "enable_dynamic_tools", True)
+    monkeypatch.setattr(settings, "require_dynamic_tool_sandbox", False)
+    monkeypatch.setattr(dynamic, "TOOLS_DIR", tmp_path)
+    (tmp_path / "hello_tool.py").write_text("async def hello_tool() -> str:\n    return 'hi'\n")
+
+    assert dynamic.load_persisted_tools() == []

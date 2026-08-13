@@ -1,7 +1,11 @@
-"""Docker sandbox for dynamic tool execution.
+"""Docker sandbox for running code the agent wrote.
 
-Runs untrusted code in isolated Docker containers instead of exec() in-process.
-Public-safe default fails closed if Docker is unavailable.
+Everything here runs in a container with no network, a read-only root, every
+capability dropped and a non-root uid. **There is no fallback.** An earlier
+version dropped to ``exec()`` in the agent's own process when Docker was
+missing and ``require_dynamic_tool_sandbox`` was off — a mode described in its
+own log line as unsafe, one environment variable away from arbitrary code in
+production. Missing Docker now means the code does not run.
 """
 
 import asyncio
@@ -113,21 +117,8 @@ async def execute_sandboxed(
     Returns:
         Tuple of (stdout, stderr)
     """
-    from kronos.config import settings
-
-    if not _docker_available():
-        if settings.require_dynamic_tool_sandbox:
-            return "", "Sandbox unavailable: Docker is required for dynamic tool execution."
-
-        log.warning("Docker not available, falling back to in-process exec")
-        return _exec_in_process(code, timeout)
-
-    if not _docker_image_available():
-        if settings.require_dynamic_tool_sandbox:
-            return "", f"Sandbox unavailable: {sandbox_unavailable_message()}"
-
-        log.warning("Docker sandbox image not available, falling back to in-process exec")
-        return _exec_in_process(code, timeout)
+    if not sandbox_ready():
+        return "", f"Sandbox unavailable: {sandbox_unavailable_message()}"
 
     tmpdir = None
     try:
@@ -156,39 +147,11 @@ async def execute_sandboxed(
         )
 
     except FileNotFoundError:
-        from kronos.config import settings
-
-        if settings.require_dynamic_tool_sandbox:
-            return "", "Sandbox unavailable: Docker binary not found."
-
-        log.warning("Docker binary not found, falling back to in-process exec")
-        return _exec_in_process(code, timeout)
+        # Docker disappeared between the readiness check and the run.
+        return "", "Sandbox unavailable: Docker binary not found."
     except Exception as e:
         log.error("Sandbox execution failed: %s", e)
         return "", f"Sandbox error: {e}"
     finally:
         if tmpdir and os.path.exists(tmpdir):
             shutil.rmtree(tmpdir, ignore_errors=True)
-
-
-def _exec_in_process(code: str, timeout: int = DEFAULT_TIMEOUT) -> tuple[str, str]:
-    """Fallback: execute code in-process (unsafe, for dev/testing only)."""
-    import io
-    import sys
-
-    log.warning("Executing dynamic tool in-process (no sandbox isolation)")
-
-    old_stdout = sys.stdout
-    old_stderr = sys.stderr
-    sys.stdout = captured_out = io.StringIO()
-    sys.stderr = captured_err = io.StringIO()
-
-    try:
-        namespace: dict = {}
-        exec(code, namespace)  # noqa: S102
-        return captured_out.getvalue().strip(), captured_err.getvalue().strip()
-    except Exception as e:
-        return "", f"Execution error: {e}"
-    finally:
-        sys.stdout = old_stdout
-        sys.stderr = old_stderr
