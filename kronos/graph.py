@@ -106,6 +106,12 @@ class KronosAgent:
 
         self._tools.extend(ACQUIRE_TOOLS)
 
+        # Adding money up is where invented numbers come from, so it is a
+        # function rather than something the model does in its head.
+        from kronos.tools.compare import compare_offers
+
+        self._tools.append(compare_offers)
+
         # Working as the owner on configured sites. The tools hand out sessions,
         # never secrets.
         from kronos.tools.accounts_tools import ACCOUNT_TOOLS
