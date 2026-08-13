@@ -51,6 +51,10 @@ class CapabilityPolicy(BaseModel):
 
     dynamic_tools: bool = False
     dynamic_tool_sandbox_required: bool = True
+    # One-off sandboxed execution for analysis. Separate from dynamic_tools:
+    # totalling a list of offers is not a reason to also let the agent author and
+    # keep new tools.
+    code_execution: bool = False
     mcp_gateway_management: bool = False
     dynamic_mcp_servers: bool = False
     server_ops: bool = False
@@ -195,6 +199,32 @@ class EvolutionPolicy(BaseModel):
         return value
 
 
+class SandboxPolicy(BaseModel):
+    """What code running in the sandbox may reach and spend.
+
+    Every list is empty by default, which means refused — the sandbox has no
+    network and no extra packages unless a deployment writes them here. The
+    resource ceilings are what the watchdogs enforce, so they are the difference
+    between a declared budget and a real one.
+    """
+
+    network_domains: list[str] = Field(default_factory=list)
+    packages: list[str] = Field(default_factory=list)
+    secret_capabilities: list[str] = Field(default_factory=list)
+    max_cpu: float = 1.0
+    max_memory_mb: int = 256
+    max_timeout_seconds: int = 60
+    max_storage_mb: int = 64
+    max_process_count: int = 50
+
+    @field_validator("max_cpu", "max_memory_mb", "max_timeout_seconds", "max_storage_mb", "max_process_count")
+    @classmethod
+    def _positive(cls, value):
+        if value <= 0:
+            raise ValueError(f"sandbox limits must be positive, got {value!r}")
+        return value
+
+
 class Policy(BaseModel):
     """The whole declared posture of one deployment."""
 
@@ -209,6 +239,7 @@ class Policy(BaseModel):
     pii: PiiPolicy = Field(default_factory=PiiPolicy)
     registry: RegistryPolicy = Field(default_factory=RegistryPolicy)
     evolution: EvolutionPolicy = Field(default_factory=EvolutionPolicy)
+    sandbox: SandboxPolicy = Field(default_factory=SandboxPolicy)
 
     # Where this policy came from; "" means "no file, code defaults".
     source_path: str = ""
@@ -230,6 +261,7 @@ class Policy(BaseModel):
 _SETTINGS_MAP: tuple[tuple[str, str, str], ...] = (
     ("capabilities", "dynamic_tools", "enable_dynamic_tools"),
     ("capabilities", "dynamic_tool_sandbox_required", "require_dynamic_tool_sandbox"),
+    ("capabilities", "code_execution", "enable_code_execution"),
     ("capabilities", "mcp_gateway_management", "enable_mcp_gateway_management"),
     ("capabilities", "dynamic_mcp_servers", "enable_dynamic_mcp_servers"),
     ("capabilities", "server_ops", "enable_server_ops"),

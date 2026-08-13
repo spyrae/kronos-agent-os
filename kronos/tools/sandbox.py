@@ -22,6 +22,8 @@ SANDBOX_IMAGE = "kronos-sandbox:latest"
 SANDBOX_BUILD_SCRIPT = "scripts/build-sandbox.sh"
 DEFAULT_TIMEOUT = 30
 DEFAULT_MEMORY = "256m"
+DEFAULT_STORAGE_MB = 64
+STORAGE_CHECK_INTERVAL_SECONDS = 0.5
 
 
 def _docker_available() -> bool:
@@ -75,10 +77,17 @@ def build_sandbox_command(
     tmpdir: str,
     memory_limit: str = DEFAULT_MEMORY,
     network: bool = False,
+    files_dir: str | None = None,
 ) -> list[str]:
-    """Build the Docker command for a single sandboxed execution."""
+    """Build the Docker command for a single sandboxed execution.
+
+    With ``files_dir`` the session's shared directory is mounted read-write at
+    /work and becomes the working directory, so ordinary relative writes
+    (``open("offers.csv", "w")``) land somewhere that outlives the container.
+    Without it nothing is writable but /tmp, which the container discards.
+    """
     network_flag = "bridge" if network else "none"
-    return [
+    command = [
         "docker",
         "run",
         "--rm",
@@ -91,13 +100,38 @@ def build_sandbox_command(
         "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m",
         "--security-opt=no-new-privileges",
         "--user=10001:10001",
-        "--workdir=/code",
+        "--workdir=/work" if files_dir else "--workdir=/code",
         "-v",
         f"{tmpdir}:/code:ro",
-        SANDBOX_IMAGE,
-        "python",
-        "/sandbox/runner.py",
     ]
+    if files_dir:
+        command += ["-v", f"{files_dir}:/work:rw"]
+    command += [SANDBOX_IMAGE, "python", "/sandbox/runner.py"]
+    return command
+
+
+async def _kill_over_budget(files_dir: str, limit_mb: int, proc: asyncio.subprocess.Process) -> str:
+    """Stop the run if it fills the shared directory. Returns why, or "".
+
+    A read-write bind mount has no size of its own, so the declared storage
+    budget would otherwise be a number in a manifest while a loop writing bytes
+    filled the host disk. Checking from outside is cheap and makes the declared
+    limit real.
+    """
+    from kronos.tools.sandbox_platform import directory_size_bytes
+
+    limit_bytes = max(1, limit_mb) * 1024 * 1024
+    path = Path(files_dir)
+    while proc.returncode is None:
+        await asyncio.sleep(STORAGE_CHECK_INTERVAL_SECONDS)
+        if directory_size_bytes(path) > limit_bytes:
+            log.warning("Sandbox run exceeded %d MB in %s; stopping it", limit_mb, files_dir)
+            try:
+                proc.kill()
+            except ProcessLookupError:  # pragma: no cover - it just exited
+                return ""
+            return f"Stopped: the run wrote more than {limit_mb} MB into the session directory."
+    return ""
 
 
 async def execute_sandboxed(
@@ -105,6 +139,8 @@ async def execute_sandboxed(
     timeout: int = DEFAULT_TIMEOUT,
     memory_limit: str = DEFAULT_MEMORY,
     network: bool = False,
+    files_dir: str | None = None,
+    storage_mb: int = DEFAULT_STORAGE_MB,
 ) -> tuple[str, str]:
     """Execute Python code in a Docker sandbox.
 
@@ -113,6 +149,8 @@ async def execute_sandboxed(
         timeout: Max execution time in seconds
         memory_limit: Docker memory limit (e.g. '256m')
         network: Whether to allow network access
+        files_dir: Host directory mounted read-write at /work (the session's files)
+        storage_mb: How much that directory may grow to before the run is stopped
 
     Returns:
         Tuple of (stdout, stderr)
@@ -121,12 +159,13 @@ async def execute_sandboxed(
         return "", f"Sandbox unavailable: {sandbox_unavailable_message()}"
 
     tmpdir = None
+    watchdog: asyncio.Task | None = None
     try:
         tmpdir = tempfile.mkdtemp(prefix="kronos-sandbox-")
         code_file = Path(tmpdir) / "tool.py"
         code_file.write_text(code, encoding="utf-8")
 
-        cmd = build_sandbox_command(tmpdir, memory_limit=memory_limit, network=network)
+        cmd = build_sandbox_command(tmpdir, memory_limit=memory_limit, network=network, files_dir=files_dir)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -134,12 +173,21 @@ async def execute_sandboxed(
             stderr=asyncio.subprocess.PIPE,
         )
 
+        if files_dir:
+            watchdog = asyncio.create_task(_kill_over_budget(files_dir, storage_mb, proc))
+
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except TimeoutError:
             proc.kill()
             await proc.wait()
             return "", f"Execution timed out after {timeout}s"
+
+        if watchdog is not None:
+            over_budget = await watchdog
+            watchdog = None
+            if over_budget:
+                return stdout.decode("utf-8", errors="replace").strip(), over_budget
 
         return (
             stdout.decode("utf-8", errors="replace").strip(),
@@ -153,5 +201,7 @@ async def execute_sandboxed(
         log.error("Sandbox execution failed: %s", e)
         return "", f"Sandbox error: {e}"
     finally:
+        if watchdog is not None:
+            watchdog.cancel()
         if tmpdir and os.path.exists(tmpdir):
             shutil.rmtree(tmpdir, ignore_errors=True)
