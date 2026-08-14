@@ -233,7 +233,17 @@ async def fetch_browser(url: str) -> tuple[int, str]:
     # The page's HTML, not a snapshot: every caller here runs html_to_text over
     # what comes back, and a compact accessibility tree is the wrong input for
     # extraction — it drops prices that live in attributes and markup.
-    return 200, await engine.page_html()
+    body = await engine.page_html()
+
+    # Validated like every other tier. A browser can hand back its own error
+    # sentence, or a shell whose 158 KB of markup carry no words at all, and
+    # calling either a successful fetch is how a marketplace that refused to be
+    # read becomes an empty answer with no explanation.
+    if not _looks_like_a_page(body):
+        raise FetchBlockedError(f"browser returned no usable content: {body.strip()[:200] or 'empty output'}")
+    if looks_blocked(200, body):
+        raise FetchBlockedError("browser loaded the page but it has no readable content (still a shell, or blocked)")
+    return 200, body
 
 
 async def fetch_tiered(url: str) -> tuple[str, str, list[str]]:

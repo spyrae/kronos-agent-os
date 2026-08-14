@@ -113,3 +113,96 @@ def test_the_removed_api_is_not_referenced_anywhere():
     source = Path(engine.__file__).read_text(encoding="utf-8")
 
     assert "accessibility.snapshot(" not in source
+
+
+# --- the browser tier's own output is not trusted just because a browser ran ---
+
+
+class NavigatingPage(FakePage):
+    """A single-page app that is still moving the first time it is read."""
+
+    def __init__(self, html: str, failures: int = 1):
+        super().__init__(FakeLocator(), html)
+        self._failures = failures
+        self.reads = 0
+
+    async def wait_for_load_state(self, state: str, timeout: int = 0):
+        return None
+
+    async def wait_for_timeout(self, ms: int):
+        return None
+
+    async def content(self):
+        self.reads += 1
+        if self.reads <= self._failures:
+            raise RuntimeError("Page.content: Unable to retrieve content because the page is navigating")
+        return self._html
+
+
+async def test_a_read_that_raced_a_navigation_is_retried(page):
+    """Every marketplace does this; giving up on the first race loses the page."""
+    fake = page(NavigatingPage("<html><body>Rp 8.750.000</body></html>"))
+
+    html = await engine.page_html()
+
+    assert "8.750.000" in html
+    assert fake.reads == 2
+
+
+async def test_a_page_that_never_settles_is_reported_not_guessed(page):
+    fake = page(NavigatingPage("<html/>", failures=5))
+
+    assert "Could not read the page" in await engine.page_html()
+    assert fake.reads == 2, "retried once, then said so"
+
+
+async def test_the_browser_tier_refuses_its_own_error_sentence(monkeypatch):
+    """The bug this closes: an error string counted as a successful fetch."""
+    from kronos.tools import acquire
+
+    async def fake_navigate(url, wait_until="domcontentloaded"):
+        return "ok"
+
+    async def fake_html():
+        return "Could not read the page: navigating"
+
+    monkeypatch.setattr(engine, "navigate", fake_navigate)
+    monkeypatch.setattr(engine, "page_html", fake_html)
+
+    with pytest.raises(acquire.FetchBlockedError, match="no usable content"):
+        await acquire.fetch_browser("https://shop.test/item")
+
+
+async def test_the_browser_tier_refuses_markup_with_no_words_in_it(monkeypatch):
+    """158 KB of shell and zero characters of text is not a page that loaded."""
+    from kronos.tools import acquire
+
+    async def fake_navigate(url, wait_until="domcontentloaded"):
+        return "ok"
+
+    async def fake_html():
+        return "<html><head>" + ("<script>x=1;</script>" * 3000) + "</head><body></body></html>"
+
+    monkeypatch.setattr(engine, "navigate", fake_navigate)
+    monkeypatch.setattr(engine, "page_html", fake_html)
+
+    with pytest.raises(acquire.FetchBlockedError, match="no readable content"):
+        await acquire.fetch_browser("https://shop.test/item")
+
+
+async def test_a_real_page_through_the_browser_tier_is_accepted(monkeypatch):
+    from kronos.tools import acquire
+
+    async def fake_navigate(url, wait_until="domcontentloaded"):
+        return "ok"
+
+    async def fake_html():
+        return "<html><body><h1>ROG Ally X</h1><p>Rp 8.750.000 — ready stock</p></body></html>"
+
+    monkeypatch.setattr(engine, "navigate", fake_navigate)
+    monkeypatch.setattr(engine, "page_html", fake_html)
+
+    status, body = await acquire.fetch_browser("https://shop.test/item")
+
+    assert status == 200
+    assert "8.750.000" in body

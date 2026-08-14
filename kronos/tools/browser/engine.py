@@ -138,18 +138,40 @@ async def snapshot() -> str:
         return f"Snapshot failed: {e}"
 
 
+CONTENT_SETTLE_MS = 4000
+
+
 async def page_html() -> str:
     """The page's markup after scripts have run.
 
     What a JavaScript-rendered listing actually contains — the point of using a
     browser at all. Extraction needs the markup, not a compact tree: a price in
     an attribute or a data- field is invisible in an accessibility snapshot.
+
+    A single-page app keeps navigating after DOMContentLoaded, and reading it
+    mid-flight fails with "the page is navigating and changing the content" —
+    which is what a marketplace does on every visit. So: wait for the network to
+    go quiet, and if the read still lands in a navigation, wait and take it once
+    more rather than reporting the race as an unreadable page.
     """
     page = await _ensure_browser()
     try:
-        return await page.content()
+        await page.wait_for_load_state("networkidle", timeout=CONTENT_SETTLE_MS)
     except Exception as e:
-        return f"Could not read the page: {e}"
+        log.debug("Page never went quiet (%s); reading it as it is", e)
+
+    for attempt in (1, 2):
+        try:
+            return await page.content()
+        except Exception as e:
+            if attempt == 2:
+                return f"Could not read the page: {e}"
+            log.debug("Content read raced with a navigation; retrying once")
+            try:
+                await page.wait_for_timeout(CONTENT_SETTLE_MS // 2)
+            except Exception:  # pragma: no cover - page went away entirely
+                pass
+    return "Could not read the page"
 
 
 async def screenshot() -> bytes:
