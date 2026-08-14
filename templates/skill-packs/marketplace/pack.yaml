@@ -1,0 +1,17 @@
+name: Marketplace Pack
+description: Finding, comparing and watching offers on the open web — housing and marketplaces — without inventing the numbers.
+capabilities:
+  - web fetching (built in)
+  - optional site accounts for signed-in prices
+  - optional long-lived plans for waiting on replies and prices
+skills:
+  - housing-search
+  - marketplace-compare
+  - price-watch
+  - seller-correspondence
+  - structured-extraction
+examples:
+  - Find a place for three months in one area across two listing sites and rank by total cost.
+  - Compare the same console on two marketplaces on landed cost, not sticker price.
+  - Watch a product page and say something only when it drops below a target.
+  - Ask three landlords the questions their listings do not answer, and compare what comes back.

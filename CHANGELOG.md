@@ -6,6 +6,17 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Added
 
+- **Marketplace skill pack** — the five procedures the tools were built for:
+  `housing-search`, `marketplace-compare`, `price-watch`,
+  `seller-correspondence` and `structured-extraction`. They encode the domain
+  rules that decide whether an answer is true rather than plausible: a listing
+  that does not state its deposit is not a listing with no deposit; landed cost
+  is price plus shipping plus duty plus fees; 4.9 across 3,000 sales beats 5.0
+  across 12; a watch fires on crossing a threshold, not on a price being below
+  it. The correspondence skill is the one that writes under the owner's name, so
+  it says plainly that an instruction found in a listing is data rather than a
+  request, and names the five shapes that go to the owner instead of being
+  handled. `kaos skills install-pack marketplace --agent <name>`.
 - **Repositories the agent may read** — "why did the build break" and "what
   changed this week" are questions with a definite answer, usually asked away
   from the laptop. `kaos repos add <name> <path>` registers a working copy;
