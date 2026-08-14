@@ -24,6 +24,7 @@ Start here if you want to understand or contribute to Kronos Agent OS.
 | [MCP & Tools](MCP.md) | Static MCP, tool gateway, dynamic tool gates |
 | [Site Accounts](SITE-ACCOUNTS.md) | Acting as the owner on a site: sessions, permissions, the password vault |
 | [Plans](PLANS.md) | Work that outlives a turn: steps, waiting conditions, what reaches you |
+| [Repositories](REPOSITORIES.md) | Reading code the owner registered: the boundary, and what is refused |
 | [Sandbox](SANDBOX.md) | Running agent-written code: the container, session files, real budgets |
 | [Automations](AUTOMATIONS.md) | Scheduler, jobs, notifications, audit trail |
 | [Sub-Agents & Swarm](SWARM.md) | Optional multi-agent coordination |
