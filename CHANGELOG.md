@@ -180,6 +180,17 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Changed
 
+- **The browser tier is installed by deploy, and reads pages through the API that
+  still exists.** Two findings from pointing the deployed agent at real
+  marketplaces. The host had no Playwright at all, so the last acquisition tier
+  and every site session were dead — `deploy.sh` now installs the `browser` extra
+  and chromium when they are absent. And current Playwright has no
+  `page.accessibility`: `snapshot()` *returned* the resulting error message, so
+  the browser tier fed that sentence to the extractor as page content and the
+  signed-in check, finding no "log in" in it, said yes on a session that may have
+  expired. Snapshots now use `aria_snapshot` with visible text as a fallback, and
+  the browser tier returns markup — a price in an attribute is invisible in an
+  accessibility tree.
 - **Context is compacted by size, not by message count.** Measured before the
   change: five turns carrying a pasted document each are 57,150 tokens and never
   compacted, while sixteen one-line exchanges are 944 tokens and did — spending a

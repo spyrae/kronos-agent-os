@@ -230,7 +230,10 @@ async def fetch_browser(url: str) -> tuple[int, str]:
         raise FetchBlockedError(f"browser backend unavailable: {e}") from e
 
     await engine.navigate(url)
-    return 200, await engine.snapshot()
+    # The page's HTML, not a snapshot: every caller here runs html_to_text over
+    # what comes back, and a compact accessibility tree is the wrong input for
+    # extraction — it drops prices that live in attributes and markup.
+    return 200, await engine.page_html()
 
 
 async def fetch_tiered(url: str) -> tuple[str, str, list[str]]:

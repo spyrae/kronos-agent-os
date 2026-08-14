@@ -114,20 +114,42 @@ async def navigate(url: str, wait_until: str = "domcontentloaded") -> str:
 
 
 async def snapshot() -> str:
-    """Get accessibility tree snapshot (compact, token-efficient).
+    """A compact view of the page — roles and text, not markup.
 
-    Returns structured text representation of the page,
-    ~500 tokens vs ~5000 for raw HTML.
+    Current Playwright has no ``accessibility`` on Page — it was removed, and the
+    failure was the quiet kind: the snapshot *returned* the error message, so the
+    browser tier fed that sentence to the extractor and the signed-in check found
+    no "log in" in it and said yes. ``aria_snapshot`` is the replacement and gives
+    the same tree in YAML; visible text is the fallback for a page with no
+    accessible structure worth printing.
     """
     page = await _ensure_browser()
     try:
-        # Use Playwright's accessibility snapshot
-        tree = await page.accessibility.snapshot()
-        if not tree:
-            return "[Empty page — no accessibility tree]"
-        return _format_a11y_tree(tree)
+        tree = await page.locator("body").aria_snapshot()
+        if tree and tree.strip():
+            return tree
+    except Exception as e:
+        log.debug("aria_snapshot unavailable (%s); falling back to visible text", e)
+
+    try:
+        text = await page.locator("body").inner_text(timeout=5000)
+        return text.strip() or "[Empty page]"
     except Exception as e:
         return f"Snapshot failed: {e}"
+
+
+async def page_html() -> str:
+    """The page's markup after scripts have run.
+
+    What a JavaScript-rendered listing actually contains — the point of using a
+    browser at all. Extraction needs the markup, not a compact tree: a price in
+    an attribute or a data- field is invisible in an accessibility snapshot.
+    """
+    page = await _ensure_browser()
+    try:
+        return await page.content()
+    except Exception as e:
+        return f"Could not read the page: {e}"
 
 
 async def screenshot() -> bytes:
@@ -194,28 +216,3 @@ async def close():
         await _pw.stop()
         _pw = None
     log.info("Browser closed")
-
-
-def _format_a11y_tree(node: dict, indent: int = 0) -> str:
-    """Format accessibility tree into compact text representation."""
-    lines = []
-    role = node.get("role", "")
-    name = node.get("name", "")
-    value = node.get("value", "")
-
-    # Skip generic/container nodes without useful info
-    if role in ("none", "generic", "presentation") and not name:
-        pass
-    else:
-        prefix = "  " * indent
-        parts = [role]
-        if name:
-            parts.append(f'"{name}"')
-        if value:
-            parts.append(f"[{value}]")
-        lines.append(f"{prefix}{' '.join(parts)}")
-
-    for child in node.get("children", []):
-        lines.append(_format_a11y_tree(child, indent + 1))
-
-    return "\n".join(line for line in lines if line)
