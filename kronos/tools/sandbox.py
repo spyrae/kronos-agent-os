@@ -132,10 +132,14 @@ def build_sandbox_command(
         f"--user={container_user()}",
         "--workdir=/work" if files_dir else "--workdir=/code",
         "-v",
-        f"{tmpdir}:/code:ro",
+        f"{Path(tmpdir).resolve()}:/code:ro",
     ]
     if files_dir:
-        command += ["-v", f"{files_dir}:/work:rw"]
+        # Absolute, always. Docker reads a relative path as a *named volume*, so
+        # `-v data/kronos/sandbox/x/files:/work` fails with "invalid characters
+        # for a local volume name" — and only on a host whose data directory is
+        # configured relatively, which is every real deployment and no test.
+        command += ["-v", f"{Path(files_dir).resolve()}:/work:rw"]
     command += [SANDBOX_IMAGE, "python", "/sandbox/runner.py"]
     return command
 
