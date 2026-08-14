@@ -23,7 +23,7 @@ def test_the_command_locks_the_container_down():
     assert f"--user={sandbox.container_user()}" in command
     assert "--user=0:0" not in command
     assert "--pids-limit=50" in command
-    assert "-v" in command and "/tmp/code:/code:ro" in command
+    assert "-v" in command and any(part.endswith(":/code:ro") for part in command)
 
 
 def test_without_a_session_directory_nothing_is_writable():
@@ -37,8 +37,33 @@ def test_with_a_session_directory_it_is_mounted_and_becomes_the_workdir():
     """Model-written code does open("out.csv", "w"); that has to land somewhere real."""
     command = sandbox.build_sandbox_command("/tmp/code", files_dir="/data/sandbox/bali/files")
 
-    assert "/data/sandbox/bali/files:/work:rw" in command
+    assert any(part.endswith("/bali/files:/work:rw") for part in command)
     assert "--workdir=/work" in command
+
+
+def test_mount_paths_are_absolute_because_docker_reads_relative_ones_as_volumes():
+    """Found on a real host: every deployment configures data/ relatively.
+
+    `-v data/kronos/sandbox/x/files:/work` is not a directory to Docker, it is a
+    named volume, and the run dies with "invalid characters for a local volume
+    name". Tests using tmp_path never saw it because tmp_path is absolute.
+    """
+    command = sandbox.build_sandbox_command("relative/code", files_dir="data/agent/sandbox/s/files")
+
+    mounts = [part for part in command if ":/work:rw" in part or ":/code:ro" in part]
+
+    assert len(mounts) == 2
+    for mount in mounts:
+        assert mount.startswith("/"), f"{mount} is relative; Docker would read it as a volume name"
+
+
+def test_the_workspace_root_is_absolute(tmp_path, monkeypatch):
+    from kronos.config import settings
+    from kronos.tools.sandbox_platform import sandbox_workspace_root
+
+    monkeypatch.setattr(settings, "db_path", "./data/agent/session.db")
+
+    assert sandbox_workspace_root().is_absolute()
 
 
 def test_the_network_is_opt_in_per_run():

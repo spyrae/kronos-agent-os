@@ -281,8 +281,12 @@ def sandbox_audit_path() -> Path:
 
 
 def sandbox_workspace_root() -> Path:
-    """Return the base directory for isolated sandbox workspaces."""
-    return Path(settings.db_path).parent / "sandbox"
+    """Return the base directory for isolated sandbox workspaces.
+
+    Absolute: these paths are handed to Docker as bind mounts, and a relative
+    one is not a directory to Docker — it is a named volume.
+    """
+    return (Path(settings.db_path).parent / "sandbox").resolve()
 
 
 def _resource_violations(resources: SandboxResourceLimits, maximum: SandboxResourceLimits) -> list[str]:
