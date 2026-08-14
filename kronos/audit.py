@@ -177,9 +177,21 @@ def _get_audit_dir() -> Path:
     return _audit_dir
 
 
+CHARS_PER_TOKEN = 3.5
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimate: ~3.5 chars per token for mixed RU/EN.
+
+    Public because context budgeting needs the same number cost accounting uses.
+    Two ratios in one codebase would drift, and then "why did it compact" and
+    "why did it cost that" would stop agreeing.
+    """
+    return math.ceil(len(text) / CHARS_PER_TOKEN)
+
+
 def _estimate_tokens(text: str) -> int:
-    """Rough token estimate: ~3.5 chars per token for mixed RU/EN."""
-    return math.ceil(len(text) / 3.5)
+    return estimate_tokens(text)
 
 
 def set_tool_audit_context(**context: str) -> Token:

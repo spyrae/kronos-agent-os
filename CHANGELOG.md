@@ -155,6 +155,19 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Changed
 
+- **Context is compacted by size, not by message count.** Measured before the
+  change: five turns carrying a pasted document each are 57,150 tokens and never
+  compacted, while sixteen one-line exchanges are 944 tokens and did — spending a
+  summarisation call to save nothing. A token budget (`CONTEXT_TOKEN_BUDGET` /
+  `budgets.context_tokens`, default 12,000 of persisted history) now drives all
+  three strategies; the count trigger keeps a floor so a tiny history is never
+  summarised. What survives is trimmed to the budget, and compaction no longer
+  depends on Mem0 being configured — deployments with no long-term memory were
+  the ones carrying unbounded histories. Tool output had the same bug in
+  miniature: whether the model saw all of it was decided by matching the tool's
+  *name*, so `run_code`, `plan_status` and `list_site_accounts` matched nothing
+  and went in whole at any size. There is now a general ceiling, and a tool whose
+  value is being complete declares `output_max_chars=0`.
 - **The sandbox now enforces what it declared.** `create_session_workspace` built
   a directory tree that the runner never mounted, so no files went in or out;
   the storage budget was a number in a manifest; and the dynamic-tool path

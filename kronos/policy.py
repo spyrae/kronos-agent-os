@@ -79,6 +79,10 @@ class BudgetPolicy(BaseModel):
     session_usd: float = 1.0
     degrade_at_fraction: float = 0.8
     per_agent_daily_usd: dict[str, float] = Field(default_factory=dict)
+    # Tokens of conversation history carried before it is compacted. A budget in
+    # money and a budget in context are the same question asked twice, so they
+    # live together. 0 = the code default.
+    context_tokens: int = 0
 
     @field_validator("degrade_at_fraction")
     @classmethod
@@ -265,6 +269,7 @@ _SETTINGS_MAP: tuple[tuple[str, str, str], ...] = (
     ("capabilities", "mcp_gateway_management", "enable_mcp_gateway_management"),
     ("capabilities", "dynamic_mcp_servers", "enable_dynamic_mcp_servers"),
     ("capabilities", "server_ops", "enable_server_ops"),
+    ("budgets", "context_tokens", "context_token_budget"),
     ("approvals", "enabled", "tool_approvals_enabled"),
     ("untrusted_output", "on_injection", "untrusted_injection_action"),
 )

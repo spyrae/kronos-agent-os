@@ -108,8 +108,17 @@ def clear_delegation_ctx(token: Any) -> None:
 
 
 RAW_TOOL_CONTENT_KEY = "raw_content"
+# The tight cap, for sources whose output is long by nature (search results,
+# fetched pages, dumps). Named by tool below.
 MODEL_OUTPUT_MAX_CHARS = 2400
 MODEL_OUTPUT_MAX_ITEMS = 8
+# The ceiling every other tool gets. Name-matching alone left an open door: a
+# tool called run_code, plan_status or list_site_accounts matched no marker and
+# went into the context whole, however large it was. A name is a guess; a size
+# is a fact.
+GENERAL_OUTPUT_MAX_CHARS = 8000
+# Tools whose whole text is the point declare metadata["output_max_chars"] = 0.
+OUTPUT_LIMIT_METADATA_KEY = "output_max_chars"
 
 DEFAULT_APPROVAL_TOOL_NAMES = {
     "mcp_add_server",
@@ -282,7 +291,7 @@ def _compact_item(item: Any, index: int) -> str:
     return f"{index}. {_clip(str(data), 260)}"
 
 
-def compact_tool_output(result: Any) -> str:
+def compact_tool_output(result: Any, limit: int = MODEL_OUTPUT_MAX_CHARS) -> str:
     """Return a token-light representation of large tool results."""
     if isinstance(result, (list, tuple)):
         items = [_compact_item(item, idx) for idx, item in enumerate(result[:MODEL_OUTPUT_MAX_ITEMS], start=1)]
@@ -291,18 +300,34 @@ def compact_tool_output(result: Any) -> str:
         return "Tool result summary for model:\n" + "\n".join(items) + suffix
 
     raw = _render_tool_result(result)
-    if len(raw) <= MODEL_OUTPUT_MAX_CHARS:
+    if len(raw) <= limit:
         return raw
     return (
         f"[COMPRESSED tool output: {len(raw)} chars; full output is available "
         "in tool_result event/audit.]\n"
-        f"{raw[:MODEL_OUTPUT_MAX_CHARS].rstrip()}..."
+        f"{raw[:limit].rstrip()}..."
     )
 
 
 def _default_should_compact_tool_output(tool: BaseTool) -> bool:
     name = tool.name.lower()
     return any(marker in name for marker in DEFAULT_COMPACT_OUTPUT_NAME_MARKERS)
+
+
+def tool_output_limit(tool: BaseTool) -> int:
+    """Characters of this tool's output the model may see. 0 means no limit.
+
+    An explicit declaration wins, then the verbose-source list, then the general
+    ceiling. Declaring 0 is for output that is bounded by construction and whose
+    value is being complete — a skill body the model must follow, a comparison
+    whose rows are already capped.
+    """
+    metadata = getattr(tool, "metadata", None) or {}
+    if OUTPUT_LIMIT_METADATA_KEY in metadata:
+        return max(0, int(metadata[OUTPUT_LIMIT_METADATA_KEY]))
+    if _default_should_compact_tool_output(tool):
+        return MODEL_OUTPUT_MAX_CHARS
+    return GENERAL_OUTPUT_MAX_CHARS
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -324,8 +349,14 @@ async def _tool_model_output(tool: BaseTool, result: Any) -> tuple[str, str]:
         except Exception as e:
             log.warning("Tool to_model_output failed for %s: %s", tool.name, e)
 
-    if _default_should_compact_tool_output(tool):
-        return compact_tool_output(result), raw_content
+    limit = tool_output_limit(tool)
+    # Two reasons to compact, and they are not the same. A verbose source is
+    # summarised whatever its size — thirty small search hits are still thirty
+    # records the model does not need in full. Everything else is compacted only
+    # when it is actually too large, which is the ceiling that used to be missing.
+    verbose_source = _default_should_compact_tool_output(tool)
+    if limit and (verbose_source or len(raw_content) > limit):
+        return compact_tool_output(result, limit=limit), raw_content
     return raw_content, raw_content
 
 

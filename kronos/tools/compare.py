@@ -243,3 +243,8 @@ async def compare_offers(offers: str, recurring: str = "", one_off: str = "", pe
         return f"[ERROR] {e}"
 
     return render(result)
+
+
+# The output is bounded by MAX_OFFERS, and its value is being complete: a ranking
+# cut off halfway is a different ranking. Exempt from the general output ceiling.
+compare_offers.metadata = {**(compare_offers.metadata or {}), "output_max_chars": 0}

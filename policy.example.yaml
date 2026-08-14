@@ -35,6 +35,7 @@ budgets:
   daily_usd: 5.0
   session_usd: 1.0
   degrade_at_fraction: 0.8            # above this, drop to the lite tier
+  context_tokens: 0                   # history tokens before compaction; 0 = default (12000)
   per_agent_daily_usd: {}
 
 # Content coming from outside the process (web pages, MCP servers, documents,

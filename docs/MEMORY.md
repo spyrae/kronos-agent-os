@@ -36,6 +36,49 @@ Thread IDs are transport-specific:
 Only the recent window is kept in the session table. Transient system context
 from group routing or peer reactions is not persisted.
 
+## Context Budget
+
+History is compacted by **size**, not by number of messages. The unit matters:
+five turns each carrying a pasted document are ~57,000 tokens in ten messages,
+while thirty-two one-line exchanges are under a thousand. A rule counting
+messages gets both wrong — it ignores the first and summarises the second at the
+cost of a model call.
+
+| Trigger | When |
+|---|---|
+| Over budget | history exceeds `budgets.context_tokens` (default 12,000) |
+| Long enough to be worth it | more messages than the strategy's window **and** at least a quarter of the budget |
+
+The budget is the *persisted history*, not the model's context window: the system
+prompt, retrieved memories and a turn's tool results are added on top of it.
+Configure with `CONTEXT_TOKEN_BUDGET` or `budgets.context_tokens`; `0` means the
+default.
+
+Whatever the strategy, what survives is trimmed to the budget — a window of
+twenty messages says nothing about the size of those twenty. One message larger
+than the whole budget is still sent, because dropping it would lose the request
+itself.
+
+Compaction does not depend on long-term memory being configured. Keeping a
+conversation sendable is context management; it used to be skipped wherever Mem0
+was absent, so the deployments with no memory were also the ones carrying
+unbounded histories.
+
+### Tool output
+
+The same question applies to what a tool returns:
+
+| Tool | Seen by the model |
+|---|---|
+| Verbose by nature (search, fetch, dumps) | first 2,400 characters, or a summary of the first 8 records |
+| Everything else | up to 8,000 characters |
+| Declares `output_max_chars=0` | all of it |
+
+The last row is for output that is bounded by construction and whose value is
+being complete — a ranking cut in half is a different ranking, and half a skill
+reads as a whole procedure. The full text is always kept in the tool-call audit
+regardless of what the model was shown.
+
 ## Long-Term Recall
 
 When memory is enabled and `DEEPSEEK_API_KEY` is available, KAOS can extract

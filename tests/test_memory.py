@@ -62,8 +62,13 @@ class TestRetrieveMemories:
 
 class TestCompaction:
     def test_should_compact_when_many_messages(self):
-        messages = [HumanMessage(content=f"msg {i}") for i in range(35)]
+        messages = [HumanMessage(content=f"msg {i} " + "детали " * 200) for i in range(35)]
         assert should_compact({"messages": messages}) is True
+
+    def test_should_not_compact_many_tiny_messages(self):
+        """Thirty-five one-word messages cost less to carry than to summarise."""
+        messages = [HumanMessage(content=f"msg {i}") for i in range(35)]
+        assert should_compact({"messages": messages}) is False
 
     def test_should_not_compact_when_few_messages(self):
         messages = [HumanMessage(content=f"msg {i}") for i in range(5)]
