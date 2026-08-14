@@ -122,3 +122,9 @@ def import_skill_from_source(source: str) -> str:
     from kronos.skills.hub import import_skill
 
     return import_skill(source, _store)
+
+
+# A skill the model must follow is not something to truncate: half a procedure
+# reads as a complete one.
+for _skill_tool in (load_skill, load_skill_reference):
+    _skill_tool.metadata = {**(_skill_tool.metadata or {}), "output_max_chars": 0}

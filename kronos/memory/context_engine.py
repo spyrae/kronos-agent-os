@@ -9,6 +9,12 @@ Usage in graph.py:
     engine = get_context_engine("summarize")
     if engine.should_compact(state):
         return engine.compact(state)
+
+**Size, not just count.** Every threshold here used to be a number of messages,
+which is the wrong unit: five turns carrying a pasted document each are 57k
+tokens and would never compact, while sixteen one-line exchanges are under a
+thousand and would — paying for a summarisation that saves nothing. Both
+triggers now apply, and the size one is the one that matters.
 """
 
 import logging
@@ -16,9 +22,72 @@ from abc import ABC, abstractmethod
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from kronos.audit import estimate_tokens
 from kronos.state import AgentState
 
 log = logging.getLogger("kronos.memory.context_engine")
+
+# How large the *persisted history* may get before it is compacted. Not the
+# model's context window: the working set adds the system prompt, retrieved
+# memories and a turn's tool results on top of this.
+DEFAULT_TOKEN_BUDGET = 12_000
+# A history below budget/this is too small to be worth a summarisation call.
+MIN_COMPACT_FRACTION = 4
+
+
+def message_text(message) -> str:
+    content = getattr(message, "content", message)
+    return content if isinstance(content, str) else str(content)
+
+
+def history_tokens(messages: list) -> int:
+    """What this history costs to send, near enough to budget with."""
+    return sum(estimate_tokens(message_text(message)) for message in messages)
+
+
+def token_budget() -> int:
+    """The configured history budget, or the default."""
+    from kronos.config import settings
+
+    configured = int(getattr(settings, "context_token_budget", 0) or 0)
+    return configured if configured > 0 else DEFAULT_TOKEN_BUDGET
+
+
+def over_budget(messages: list) -> bool:
+    return history_tokens(messages) > token_budget()
+
+
+def worth_compacting(messages: list, count_limit: int) -> bool:
+    """Whether to compact: over budget, or long enough that it is worth doing.
+
+    The count trigger carries a floor because compacting is not free — the
+    summarising engine spends a model call. Thirty-two one-line exchanges are a
+    thousand tokens; summarising them costs more than carrying them, and the old
+    count-only rule did exactly that.
+    """
+    if over_budget(messages):
+        return True
+    if len(messages) <= count_limit:
+        return False
+    return history_tokens(messages) >= token_budget() // MIN_COMPACT_FRACTION
+
+
+def trim_to_budget(messages: list, budget: int | None = None) -> list:
+    """Keep the newest messages that fit. Never returns nothing.
+
+    Used when even the sliding window is too large to send — a window counted in
+    messages says nothing about the size of those messages.
+    """
+    limit = budget if budget is not None else token_budget()
+    kept: list = []
+    used = 0
+    for message in reversed(messages):
+        cost = estimate_tokens(message_text(message))
+        if kept and used + cost > limit:
+            break
+        kept.append(message)
+        used += cost
+    return list(reversed(kept))
 
 
 class ContextEngine(ABC):
@@ -56,7 +125,7 @@ class SummarizeEngine(ContextEngine):
         self.keep_recent = keep_recent
 
     def should_compact(self, state: AgentState) -> bool:
-        return len(state.get("messages", [])) > self.max_messages
+        return worth_compacting(state.get("messages", []), self.max_messages)
 
     def compact(self, state: AgentState) -> AgentState:
         # Import here to avoid circular deps
@@ -76,17 +145,20 @@ class SlidingWindowEngine(ContextEngine):
         self.window_size = window_size
 
     def should_compact(self, state: AgentState) -> bool:
-        return len(state.get("messages", [])) > self.window_size
+        return worth_compacting(state.get("messages", []), self.window_size)
 
     def compact(self, state: AgentState) -> AgentState:
         messages = state.get("messages", [])
-        if len(messages) <= self.window_size:
+        if len(messages) <= self.window_size and not over_budget(messages):
             return {}
 
-        dropped = len(messages) - self.window_size
         kept = list(messages[-self.window_size :])
+        # A window counted in messages says nothing about their size, so the
+        # window itself gets trimmed to the budget.
+        kept = trim_to_budget(kept)
+        dropped = len(messages) - len(kept)
 
-        log.info("Sliding window: dropped %d messages, kept %d", dropped, self.window_size)
+        log.info("Sliding window: dropped %d messages, kept %d (%d tokens)", dropped, len(kept), history_tokens(kept))
 
         return {"messages": kept}
 
@@ -107,20 +179,21 @@ class HybridEngine(ContextEngine):
         self.flush_threshold = flush_threshold
 
     def should_compact(self, state: AgentState) -> bool:
-        return len(state.get("messages", [])) > self.flush_threshold
+        return worth_compacting(state.get("messages", []), self.flush_threshold)
 
     def compact(self, state: AgentState) -> AgentState:
         messages = state.get("messages", [])
-        if len(messages) <= self.flush_threshold:
+        if len(messages) <= self.flush_threshold and not over_budget(messages):
             return {}
 
         user_id = state.get("user_id", "")
         session_id = state.get("session_id", "")
 
-        # Messages to drop (will be flushed to memory)
-        drop_count = len(messages) - self.window_size
+        # What to keep is decided by size first: a few very large messages must
+        # be dropped even when there are fewer of them than the window allows.
+        to_keep = trim_to_budget(messages[-self.window_size :])
+        drop_count = len(messages) - len(to_keep)
         to_flush = messages[:drop_count]
-        to_keep = list(messages[drop_count:])
 
         # Flush dropped messages to long-term memory
         if user_id and to_flush:

@@ -168,6 +168,10 @@ class Settings(BaseSettings):
     shared_workspace_path: str = ""  # optional common skills/notes workspace mounted read-mostly by all agents
     db_path: str = ""  # override; if empty, resolved to ./data/<agent_name>/session.db
     context_strategy: str = "summarize"  # summarize | sliding_window | hybrid
+    # How many tokens of *persisted history* to carry before compacting. Not the
+    # model's window: the system prompt, retrieved memories and a turn's tool
+    # results are added on top. 0 = use the code default.
+    context_token_budget: int = 0
 
     def model_post_init(self, __context: object) -> None:
         """Resolve empty paths from agent_name after initialization.

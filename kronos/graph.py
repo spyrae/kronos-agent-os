@@ -787,7 +787,13 @@ class KronosAgent:
             )
 
         # Step 5: Compact if needed (only for real user turns).
-        if self._memory_enabled and not is_ephemeral:
+        #
+        # Not conditional on memory: keeping a conversation sendable is context
+        # management, and it used to be skipped entirely wherever Mem0 was not
+        # configured — so the deployments with no long-term memory were also the
+        # ones carrying unbounded histories. The engines that flush to memory
+        # already cope with it being unavailable.
+        if not is_ephemeral:
             engine = get_context_engine()
             compact_state = {**state, "messages": list(persisted_history)}
             if engine.should_compact(compact_state):

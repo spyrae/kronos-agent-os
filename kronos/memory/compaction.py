@@ -47,9 +47,10 @@ CHUNK_SIZE = 6000
 
 
 def should_compact(state: AgentState) -> bool:
-    """Check if conversation needs compaction."""
-    msg_count = len(state.get("messages", []))
-    return msg_count > MAX_MESSAGES
+    """Check if conversation needs compaction — by size as well as by count."""
+    from kronos.memory.context_engine import worth_compacting
+
+    return worth_compacting(state.get("messages", []), MAX_MESSAGES)
 
 
 def _build_conversation_text(messages: list) -> str:
@@ -127,16 +128,21 @@ def compact_messages(state: AgentState) -> AgentState:
     2. Flush key facts to Mem0 + FTS5
     3. Replace with [summary] + messages[-KEEP_RECENT:]
     """
+    from kronos.memory.context_engine import over_budget, trim_to_budget
+
     messages = state.get("messages", [])
-    if len(messages) <= MAX_MESSAGES:
+    if len(messages) <= MAX_MESSAGES and not over_budget(messages):
         return {}
 
     user_id = state.get("user_id", "")
     session_id = state.get("session_id", "")
 
-    # Split: old messages to summarize, recent to keep
-    old_messages = messages[:-KEEP_RECENT]
-    recent_messages = messages[-KEEP_RECENT:]
+    # Split: old messages to summarize, recent to keep. The tail is trimmed to
+    # the budget as well — six messages carrying a document each are still too
+    # much to send, and keeping them would leave the history over budget right
+    # after compacting it.
+    recent_messages = trim_to_budget(messages[-KEEP_RECENT:])
+    old_messages = messages[: len(messages) - len(recent_messages)]
 
     conversation_text = _build_conversation_text(old_messages)
     if not conversation_text:
