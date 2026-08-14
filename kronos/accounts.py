@@ -28,6 +28,8 @@ without the value.
 """
 
 import logging
+import os
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -171,6 +173,50 @@ def _default_profile_dir(site: str) -> str:
     hand, so making them invent a path would be ceremony.
     """
     return str(Path(settings.db_dir) / "browser-profiles" / site)
+
+
+# What a Chromium user-data directory contains. Checked because the failure of a
+# wrong directory is late and confusing: the browser starts on an empty profile,
+# the site shows a login wall, and the account reports "session expired" forever
+# without anyone suspecting the path.
+PROFILE_MARKERS = ("Default", "Preferences", "Local State")
+
+
+def looks_like_profile(path: Path) -> bool:
+    return path.is_dir() and any((path / marker).exists() for marker in PROFILE_MARKERS)
+
+
+def import_profile(site: str, source: str) -> SiteAccount:
+    """Take a browser profile signed in elsewhere and make it this account's.
+
+    The headless answer to "how do I log in on a machine with no screen": sign in
+    on a laptop, copy the profile directory over, point the account at it. The
+    copy lands in the agent's own data directory at 0700 — it holds live session
+    cookies, which is to say credentials, and a profile readable by others is the
+    same leak as a readable key file.
+    """
+    account = get_account(site)
+    origin = Path(source).expanduser().resolve()
+    if not origin.is_dir():
+        raise AccountError(f"{origin} is not a directory")
+    if not looks_like_profile(origin):
+        raise AccountError(
+            f"{origin} does not look like a browser profile (expected one of {', '.join(PROFILE_MARKERS)} inside it)"
+        )
+
+    target = Path(_default_profile_dir(account.site))
+    if origin == target.resolve():
+        raise AccountError(f"{origin} is already this account's profile directory")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        shutil.rmtree(target)
+    shutil.copytree(origin, target, symlinks=False, ignore_dangling_symlinks=True)
+    os.chmod(target, 0o700)
+
+    _db().write("UPDATE site_accounts SET profile_dir = ? WHERE site = ?", (str(target), account.site))
+    log.info("Imported a browser profile for %s", account.site)
+    return get_account(site)
 
 
 def _stored_secret(site: str) -> bytes | None:

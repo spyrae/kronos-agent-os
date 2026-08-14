@@ -50,6 +50,29 @@ the second factor. The agent reuses that session and stores nothing secret;
 revoking is deleting the directory. When the session expires, the agent tells
 you instead of guessing.
 
+*On a server there is no screen to sign in on.* Make the profile on a machine
+that has one, and bring it over:
+
+```bash
+# on your laptop — sign in, then close the browser so the profile is flushed
+python -c "
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    ctx = p.chromium.launch_persistent_context('/tmp/airbnb-profile', headless=False)
+    input('sign in, then press Enter here')
+    ctx.close()
+"
+
+scp -r /tmp/airbnb-profile you@host:/tmp/
+ssh you@host 'cd /opt/kaos/app && .venv/bin/python -m kronos.cli accounts import-profile airbnb /tmp/airbnb-profile'
+```
+
+`import-profile` checks the directory really is a browser profile before adopting
+it — pointing an account at the wrong path fails late and unreadably, as an
+expired session that never recovers — copies it into the agent's data directory
+at 0700, and points the account at the copy. The profile holds live session
+cookies, so it is a credential: keep it as private as the vault key.
+
 **With a stored password.** The agent fills the site's own login form when the
 session expires, and carries on. The password goes from the vault into the page
 and nowhere else — not into a tool result, a message, the session history, or a
