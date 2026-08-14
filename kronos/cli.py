@@ -1649,6 +1649,39 @@ def run_plans_cancel(plan_id: int) -> int:
     return 0
 
 
+def run_accounts_list(as_json: bool) -> int:
+    """Which sites the agent may act on, and what it may do there."""
+    from kronos import accounts
+
+    configured = accounts.list_accounts()
+    if as_json:
+        print(json.dumps([vars(account) for account in configured], ensure_ascii=False, indent=2))
+        return 0
+    if not configured:
+        print("No site accounts. Add one in the dashboard (Accounts).")
+        return 0
+    for account in configured:
+        password = "password stored" if account.has_password else "no password"
+        print(f"{account.site}: may {account.permission}, session {account.session_state}, {password}")
+        print(f"    domains: {', '.join(account.domains)}")
+    return 0
+
+
+def run_accounts_import_profile(site: str, path: str) -> int:
+    """Adopt a browser profile that was signed into somewhere with a screen."""
+    from kronos import accounts
+
+    try:
+        account = accounts.import_profile(site, path)
+    except accounts.AccountError as e:
+        print(f"[FAIL] {e}")
+        return 1
+    print(f"Imported the profile for '{account.site}'.")
+    print("It holds live session cookies, so the copy is private to this user (0700).")
+    print(f"Check it worked: the agent's next use of '{account.site}' should report a signed-in session.")
+    return 0
+
+
 def run_repos_list(as_json: bool) -> int:
     """Which repositories the agent may read."""
     from kronos import repos
@@ -2144,6 +2177,16 @@ def build_parser() -> argparse.ArgumentParser:
     plans_cancel = plans_sub.add_parser("cancel", help="stop a plan")
     plans_cancel.add_argument("plan_id", type=int)
 
+    accounts_cmd = sub.add_parser("accounts", help="sites the agent may act on as you")
+    accounts_sub = accounts_cmd.add_subparsers(dest="accounts_command")
+    accounts_list = accounts_sub.add_parser("list", help="configured site accounts")
+    accounts_list.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+    accounts_import = accounts_sub.add_parser(
+        "import-profile", help="adopt a browser profile signed in on another machine"
+    )
+    accounts_import.add_argument("site")
+    accounts_import.add_argument("path", help="the copied profile directory")
+
     repos_cmd = sub.add_parser("repos", help="repositories the agent may read")
     repos_sub = repos_cmd.add_subparsers(dest="repos_command")
     repos_list = repos_sub.add_parser("list", help="registered repositories")
@@ -2356,6 +2399,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.plans_command == "cancel":
             return run_plans_cancel(args.plan_id)
         parser.parse_args(["plans", "--help"])
+        return 0
+    if args.command == "accounts":
+        if args.accounts_command == "list":
+            return run_accounts_list(args.as_json)
+        if args.accounts_command == "import-profile":
+            return run_accounts_import_profile(args.site, args.path)
+        parser.parse_args(["accounts", "--help"])
         return 0
     if args.command == "repos":
         if args.repos_command == "list":

@@ -6,6 +6,14 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Added
 
+- **`kaos accounts import-profile`** — the site-accounts design says "sign in by
+  hand once", and the machine the agent runs on has no screen. So the profile is
+  made on a laptop and adopted here: the command checks the directory really is a
+  browser profile (pointing an account at the wrong path fails late and
+  unreadably, as a session that expired and never recovers), copies it into the
+  agent's data directory at 0700 because live session cookies are a credential,
+  and points the account at the copy. `kaos accounts list` shows what is
+  configured without the profile path or any hint of a password.
 - **Marketplace skill pack** — the five procedures the tools were built for:
   `housing-search`, `marketplace-compare`, `price-watch`,
   `seller-correspondence` and `structured-extraction`. They encode the domain
