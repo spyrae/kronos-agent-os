@@ -10,7 +10,6 @@ access, no network, no imports beyond allowlist).
 """
 
 import ast
-import inspect
 import json
 import logging
 import re
@@ -226,39 +225,28 @@ def _build_runner_code(code: str, func_name: str, args: tuple, kwargs: dict) -> 
     )
 
 
-async def _run_locally_for_dev(code: str, func_name: str, args: tuple, kwargs: dict):
-    namespace: dict = {}
-    exec(code, namespace)  # noqa: S102
-    result = namespace[func_name](*args, **kwargs)
-    if inspect.isawaitable(result):
-        return await result
-    return result
-
-
 def _build_dynamic_tool(name: str, code: str, spec: ToolFunctionSpec) -> BaseTool:
     async def _sandboxed_wrapper(*args, **kwargs):
         """Execute the dynamic tool in a Docker sandbox."""
         from kronos.tools.sandbox import execute_sandboxed, sandbox_ready
         from kronos.tools.sandbox_platform import (
             PolicyDecision,
-            SandboxPolicy,
-            SandboxResourceLimits,
             SandboxRunRequest,
             create_session_workspace,
             evaluate_policy,
             record_sandbox_decision,
+            sandbox_policy,
         )
 
-        request_inputs = tuple([f"arg_{index}" for index, _ in enumerate(args)] + list(kwargs.keys()))
+        # The policy comes from policy.yaml, not from this call. It used to be
+        # built out of the request's own argument names, which made an input
+        # violation impossible — a check that could only ever pass.
+        policy = sandbox_policy()
         request = SandboxRunRequest(
             tool_name=spec.name,
             session_id=f"dynamic:{spec.name}",
-            input_mounts=request_inputs,
-            resources=SandboxResourceLimits(timeout_seconds=30),
-        )
-        policy = SandboxPolicy(
-            allowed_inputs=request_inputs,
-            max_resources=SandboxResourceLimits(timeout_seconds=30),
+            input_mounts=tuple([f"arg_{index}" for index, _ in enumerate(args)] + list(kwargs.keys())),
+            resources=policy.max_resources,
         )
         decision = evaluate_policy(request, policy)
         if not decision.allowed:
@@ -267,30 +255,33 @@ def _build_dynamic_tool(name: str, code: str, spec: ToolFunctionSpec) -> BaseToo
 
         if sandbox_ready():
             runner_code = _build_runner_code(code, spec.name, args, kwargs)
-            create_session_workspace(request)
-            stdout, stderr = await execute_sandboxed(runner_code, timeout=30)
+            workspace = create_session_workspace(request)
+            timeout = policy.max_resources.timeout_seconds
+            stdout, stderr = await execute_sandboxed(
+                runner_code,
+                timeout=timeout,
+                files_dir=workspace["files"],
+                storage_mb=policy.max_resources.storage_mb,
+            )
             record_sandbox_decision(
                 request,
                 decision,
                 policy,
                 stdout=stdout,
                 stderr=stderr,
-                resources_used={"timeout_seconds": 30},
+                resources_used={"timeout_seconds": timeout, "storage_mb": policy.max_resources.storage_mb},
             )
             if stderr:
                 log.warning("Sandbox stderr for %s: %s", spec.name, stderr[:200])
             return stdout or stderr or "No output"
-        if settings.require_dynamic_tool_sandbox:
-            from kronos.tools.sandbox import sandbox_unavailable_message
+        from kronos.tools.sandbox import sandbox_unavailable_message
 
-            record_sandbox_decision(
-                request,
-                PolicyDecision(False, "sandbox unavailable", ("execution:docker_not_ready",)),
-                policy,
-            )
-            return f"Blocked: Docker sandbox is required for dynamic tools. {sandbox_unavailable_message()}"
-
-        return await _run_locally_for_dev(code, spec.name, args, kwargs)
+        record_sandbox_decision(
+            request,
+            PolicyDecision(False, "sandbox unavailable", ("execution:docker_not_ready",)),
+            policy,
+        )
+        return f"Blocked: the Docker sandbox is required to run this. {sandbox_unavailable_message()}"
 
     _sandboxed_wrapper.__name__ = spec.name
     _sandboxed_wrapper.__doc__ = spec.description
@@ -345,15 +336,22 @@ async def create_tool(name: str, description: str) -> tuple[BaseTool | None, str
     if spec.name != clean_name:
         return None, f"Generated code rejected: function name must match tool name '{clean_name}'"
 
-    if settings.require_dynamic_tool_sandbox:
-        from kronos.tools.sandbox import sandbox_ready, sandbox_unavailable_message
+    if not settings.require_dynamic_tool_sandbox:
+        # There is no unsandboxed mode any more. Asking not to require a sandbox
+        # is answered by not having the feature, rather than by running the code
+        # in this process.
+        return None, (
+            "Dynamic tools are unavailable while REQUIRE_DYNAMIC_TOOL_SANDBOX=false: "
+            "running agent-written code outside the sandbox is not supported."
+        )
 
-        if not sandbox_ready():
-            return None, (
-                "Docker sandbox is required before dynamic tools can be created. "
-                f"{sandbox_unavailable_message()} "
-                "Set REQUIRE_DYNAMIC_TOOL_SANDBOX=false for local development only."
-            )
+    from kronos.tools.sandbox import sandbox_ready, sandbox_unavailable_message
+
+    if not sandbox_ready():
+        return (
+            None,
+            f"The Docker sandbox must be ready before a dynamic tool can be created. {sandbox_unavailable_message()}",
+        )
 
     tool = _build_dynamic_tool(clean_name, code, spec)
 
@@ -369,12 +367,17 @@ def load_persisted_tools() -> list[BaseTool]:
     if not settings.enable_dynamic_tools:
         return []
 
-    if settings.require_dynamic_tool_sandbox:
-        from kronos.tools.sandbox import sandbox_ready, sandbox_unavailable_message
+    if not settings.require_dynamic_tool_sandbox:
+        log.warning(
+            "Skipping persisted dynamic tools: REQUIRE_DYNAMIC_TOOL_SANDBOX=false and there is no unsandboxed mode"
+        )
+        return []
 
-        if not sandbox_ready():
-            log.warning("Skipping persisted dynamic tools: %s", sandbox_unavailable_message())
-            return []
+    from kronos.tools.sandbox import sandbox_ready, sandbox_unavailable_message
+
+    if not sandbox_ready():
+        log.warning("Skipping persisted dynamic tools: %s", sandbox_unavailable_message())
+        return []
 
     if not TOOLS_DIR.exists():
         return []

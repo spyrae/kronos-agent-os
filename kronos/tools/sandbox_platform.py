@@ -74,6 +74,37 @@ class PolicyDecision:
     violations: tuple[str, ...] = ()
 
 
+def sandbox_policy() -> SandboxPolicy:
+    """The ceilings and allowlists for a run, taken from the governance policy.
+
+    The point of reading them here is that the caller cannot supply them. A
+    policy assembled from the same request it validates is not a check, and that
+    is exactly what the dynamic-tool path used to do — ``allowed_inputs`` built
+    from ``request.input_mounts``, so an input violation was unreachable.
+
+    Input names are deliberately unrestricted: they are argument and file names,
+    not a security boundary. What bounds a run is the container, the clock and
+    the disk watchdog. The allowlists that do matter — network, packages, secret
+    capabilities — start empty, which means refused.
+    """
+    from kronos.policy import get_policy
+
+    declared = get_policy().sandbox
+    return SandboxPolicy(
+        allowed_inputs=("*",),
+        allowed_network_domains=tuple(declared.network_domains),
+        allowed_packages=tuple(declared.packages),
+        allowed_secret_capabilities=tuple(declared.secret_capabilities),
+        max_resources=SandboxResourceLimits(
+            cpu=declared.max_cpu,
+            memory_mb=declared.max_memory_mb,
+            timeout_seconds=declared.max_timeout_seconds,
+            process_count=declared.max_process_count,
+            storage_mb=declared.max_storage_mb,
+        ),
+    )
+
+
 def evaluate_policy(request: SandboxRunRequest, policy: SandboxPolicy | None = None) -> PolicyDecision:
     """Evaluate a run request using fail-closed allowlists."""
     policy = policy or SandboxPolicy()
@@ -114,13 +145,22 @@ def create_session_workspace(
     *,
     base_dir: Path | None = None,
 ) -> dict[str, str]:
-    """Create an isolated workspace skeleton for a sandbox session."""
-    root = (base_dir or sandbox_workspace_root()) / _safe_path_part(request.session_id) / _run_id(request)
+    """Create the workspace for one run, and the session's shared file directory.
+
+    ``files`` lives one level up from the run, next to its siblings, because it is
+    the point of having a session at all: a run today writes ``offers.csv`` and a
+    plan step three days later reads it. It is the only directory the container
+    can write to, and the only one that outlives the run.
+
+    ``root`` holds this run's own record (its manifest, later its output). The
+    two are separate so that clearing a session's files does not erase the
+    history of what ran.
+    """
+    session = (base_dir or sandbox_workspace_root()) / _safe_path_part(request.session_id)
+    root = session / _run_id(request)
     paths = {
         "root": root,
-        "inputs": root / "inputs",
-        "outputs": root / "outputs",
-        "artifacts": root / "artifacts",
+        "files": session / "files",
         "tmp": root / "tmp",
     }
     for path in paths.values():
@@ -136,6 +176,18 @@ def create_session_workspace(
     }
     (root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return {key: str(path) for key, path in paths.items()}
+
+
+def directory_size_bytes(path: Path) -> int:
+    """Total size of a directory tree, symlinks not followed."""
+    total = 0
+    for entry in path.rglob("*"):
+        try:
+            if entry.is_file() and not entry.is_symlink():
+                total += entry.stat().st_size
+        except OSError:  # pragma: no cover - a file removed mid-walk
+            continue
+    return total
 
 
 def record_sandbox_decision(

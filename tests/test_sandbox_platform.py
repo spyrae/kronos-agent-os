@@ -105,11 +105,68 @@ def test_create_session_workspace_writes_manifest(tmp_path):
 
     root = Path(paths["root"])
     assert root.exists()
-    assert (root / "inputs").is_dir()
-    assert (root / "outputs").is_dir()
-    assert (root / "artifacts").is_dir()
+    assert (root / "tmp").is_dir()
     assert "session-with-unsafe-chars" in str(root)
     assert "input.json" in (root / "manifest.json").read_text(encoding="utf-8")
+
+
+def test_the_files_directory_is_shared_by_every_run_of_a_session(tmp_path):
+    """The reason a session exists: one run prepares what a later one reads."""
+    first = create_session_workspace(SandboxRunRequest(tool_name="t", session_id="bali"), base_dir=tmp_path)
+    second = create_session_workspace(SandboxRunRequest(tool_name="t", session_id="bali"), base_dir=tmp_path)
+
+    assert first["files"] == second["files"]
+    assert Path(first["files"]).is_dir()
+    # Per-run history lives in the append-only sandbox audit, not in the manifest,
+    # so a repeated identical request reusing its run directory is fine.
+    assert (Path(first["root"]) / "manifest.json").exists()
+
+
+def test_files_of_different_sessions_are_separate(tmp_path):
+    one = create_session_workspace(SandboxRunRequest(tool_name="t", session_id="one"), base_dir=tmp_path)
+    two = create_session_workspace(SandboxRunRequest(tool_name="t", session_id="two"), base_dir=tmp_path)
+
+    assert one["files"] != two["files"]
+
+
+def test_directory_size_adds_up_what_is_actually_there(tmp_path):
+    from kronos.tools.sandbox_platform import directory_size_bytes
+
+    (tmp_path / "a.txt").write_bytes(b"x" * 10)
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "b.txt").write_bytes(b"y" * 5)
+
+    assert directory_size_bytes(tmp_path) == 15
+
+
+def test_the_policy_comes_from_governance_not_from_the_caller(monkeypatch):
+    """The old dynamic-tool path built the allowlist out of the request it checked."""
+    from kronos.policy import Policy
+    from kronos.policy import SandboxPolicy as DeclaredSandbox
+    from kronos.tools.sandbox_platform import sandbox_policy
+
+    declared = Policy(sandbox=DeclaredSandbox(network_domains=["api.example.com"], max_timeout_seconds=15))
+    monkeypatch.setattr("kronos.policy.get_policy", lambda: declared)
+
+    policy = sandbox_policy()
+
+    assert policy.allowed_network_domains == ("api.example.com",)
+    assert policy.max_resources.timeout_seconds == 15
+    assert policy.allowed_packages == (), "packages stay refused unless a deployment writes them"
+
+
+def test_a_run_asking_for_an_undeclared_domain_is_refused(monkeypatch):
+    from kronos.policy import Policy
+    from kronos.policy import SandboxPolicy as DeclaredSandbox
+    from kronos.tools.sandbox_platform import sandbox_policy
+
+    monkeypatch.setattr("kronos.policy.get_policy", lambda: Policy(sandbox=DeclaredSandbox()))
+    request = SandboxRunRequest(tool_name="t", session_id="s", network_domains=("evil.test",))
+
+    decision = evaluate_policy(request, sandbox_policy())
+
+    assert decision.allowed is False
+    assert "network:evil.test" in decision.violations
 
 
 def test_sandbox_platform_status_separates_platform_from_execution(monkeypatch, tmp_path):
@@ -137,7 +194,7 @@ def test_sandbox_platform_status_separates_platform_from_execution(monkeypatch, 
 async def test_dynamic_tool_execution_records_sandbox_audit(monkeypatch, tmp_path):
     from kronos.tools import dynamic, sandbox, sandbox_platform
 
-    async def fake_execute_sandboxed(code, timeout=30, memory_limit="256m", network=False):
+    async def fake_execute_sandboxed(code, timeout=30, memory_limit="256m", network=False, **mounts):
         return "hello Ada", ""
 
     code = 'async def hello_tool(name: str) -> str:\n    """Say hello."""\n    return f\'hello {name}\'\n'

@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     # local deployments. Demo/fresh-clone mode should stay read-mostly.
     enable_dynamic_tools: bool = False
     require_dynamic_tool_sandbox: bool = True
+    # One-off code execution for analysis (run_code). Separate from
+    # enable_dynamic_tools on purpose: wanting to total a list of offers is not a
+    # reason to also allow the agent to author and keep new tools.
+    enable_code_execution: bool = False
     enable_mcp_gateway_management: bool = False
     enable_dynamic_mcp_servers: bool = False
     enable_server_ops: bool = False

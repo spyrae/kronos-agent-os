@@ -15,6 +15,7 @@ version: 1
 capabilities:
   dynamic_tools: false                # LLM-authored Python tools
   dynamic_tool_sandbox_required: true # ...and only inside the Docker sandbox
+  code_execution: false               # run_code: one-off analysis in the sandbox
   mcp_gateway_management: false       # add/remove MCP servers at runtime
   dynamic_mcp_servers: false          # load MCP servers persisted by the agent
   server_ops: false                   # SSH / systemd / docker control
