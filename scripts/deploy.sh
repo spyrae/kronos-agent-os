@@ -288,9 +288,21 @@ else
     # so PDF/DOCX ingest (roadmap 6.1) works on the host. A FAILED install must
     # abort the deploy — restarting agents against a half-updated venv (new code,
     # missing/old deps) would just crash-loop them. Errors are shown, not hidden.
-    if ! app/.venv/bin/python -m pip install -e "app/.[documents]" --quiet; then
+    if ! app/.venv/bin/python -m pip install -e "app/.[documents,browser]" --quiet; then
       echo "FATAL: dependency install failed — not restarting agents." >&2
       exit 1
+    fi
+
+    # Chromium for the browser: without it the last acquisition tier is gone
+    # (marketplaces that block a plain fetch become unreadable) and site sessions
+    # cannot open at all. Only when absent — the download is ~115 MB.
+    if [ -x app/.venv/bin/playwright ]; then
+      if ! app/.venv/bin/python -c "from playwright.sync_api import sync_playwright" 2>/dev/null \
+         || ! ls "$HOME/.cache/ms-playwright"/chromium* >/dev/null 2>&1; then
+        echo "Installing chromium for the browser tier..."
+        app/.venv/bin/playwright install chromium \
+          || echo "WARNING: chromium install failed — protected pages and site sessions will not work."
+      fi
     fi
 
     # Build the code sandbox image if it is missing. Without it, run_code and

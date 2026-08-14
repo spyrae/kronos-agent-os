@@ -67,6 +67,19 @@ password box. Same when a site rejects the attempt: it is reported as a failure,
 because claiming success would send the agent off to scrape a login wall and
 report prices that do not exist.
 
+## What the host needs
+
+Sessions are a real browser, so the host needs one:
+
+```bash
+pip install -e ".[browser]" && playwright install chromium
+```
+
+`deploy.sh` does both when they are missing. Without them `open_site_session`
+cannot open anything — and note that a *stale* Playwright is worse than a missing
+one: the API for reading a page changed, and code written against the old one
+returned its own error message as page content, which reads as a page that loaded.
+
 ## The vault
 
 Passwords are encrypted with AES-GCM by `kronos.vault`, bound to the site they
