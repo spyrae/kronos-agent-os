@@ -6,6 +6,20 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Added
 
+- **Repositories the agent may read** — "why did the build break" and "what
+  changed this week" are questions with a definite answer, usually asked away
+  from the laptop. `kaos repos add <name> <path>` registers a working copy;
+  `repo_list` / `repo_tree` / `repo_read` / `repo_search` / `repo_history` /
+  `repo_diff` answer from it. Read-only, and the boundary is the feature: nothing
+  outside a registered root, every path resolved before it is compared (so a
+  symlink out of the tree is refused like `../` is), and credentials refused
+  before being read — by name across every path segment, by the repository's own
+  gitignore, and never surfaced through a search result. What does get through is
+  redacted and marked untrusted, because a code comment is as good a place to
+  hide an instruction as a web page. Nothing is written: committing needs
+  credentials and a decision about which repositories may change unattended, so a
+  permission other than `read` is refused rather than quietly accepted. Docs:
+  [Repositories](docs/REPOSITORIES.md).
 - **compare_offers — totals as arithmetic, not prose** — "which flat is the
   better deal" is adding money correctly and noticing what is missing, and both
   are where invented numbers come from. The tool ranks on money only and says so

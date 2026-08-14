@@ -132,6 +132,18 @@ class KronosAgent:
 
         self._tools.extend(PLAN_TOOLS)
 
+        # Reading registered repositories. Added only when there are any, so an
+        # agent with no repositories is not offered six tools that all say no.
+        from kronos.repos import list_repos
+        from kronos.tools.repo_tools import REPO_TOOLS
+
+        try:
+            if list_repos():
+                self._tools.extend(REPO_TOOLS)
+                log.info("Repository tools added")
+        except Exception as e:
+            log.warning("Repository registry unavailable: %s", e)
+
         # Browser tools (stateful session; the acquire tools cover one-off reads)
         from kronos.tools.browser.tools import get_browser_tools
 

@@ -1649,6 +1649,49 @@ def run_plans_cancel(plan_id: int) -> int:
     return 0
 
 
+def run_repos_list(as_json: bool) -> int:
+    """Which repositories the agent may read."""
+    from kronos import repos
+
+    registered = repos.list_repos()
+    if as_json:
+        print(json.dumps([vars(repo) for repo in registered], ensure_ascii=False, indent=2))
+        return 0
+    if not registered:
+        print("No repositories registered. Add one: kaos repos add <name> <path>")
+        return 0
+    for repo in registered:
+        exists = "" if Path(repo.path).is_dir() else "  [MISSING]"
+        print(f"{repo.name}: {repo.path} ({repo.permission}){exists}")
+        if repo.notes:
+            print(f"    {repo.notes}")
+    return 0
+
+
+def run_repos_add(name: str, path: str, notes: str) -> int:
+    from kronos import repos
+
+    try:
+        repo = repos.add_repo(name, path, notes=notes)
+    except repos.RepoError as e:
+        print(f"[FAIL] {e}")
+        return 1
+    print(f"Registered '{repo.name}' → {repo.path} (read-only).")
+    print("The agent can now list, read, search, and see history and diffs there.")
+    print("Credentials and gitignored files are refused, and nothing is written.")
+    return 0
+
+
+def run_repos_remove(name: str) -> int:
+    from kronos import repos
+
+    if not repos.remove_repo(name):
+        print(f"No repository called '{name}'")
+        return 1
+    print(f"Removed '{name}'. Its files are untouched.")
+    return 0
+
+
 def run_vault_init(overwrite: bool) -> int:
     """Create the key that encrypts stored site passwords."""
     from kronos import vault
@@ -2101,6 +2144,17 @@ def build_parser() -> argparse.ArgumentParser:
     plans_cancel = plans_sub.add_parser("cancel", help="stop a plan")
     plans_cancel.add_argument("plan_id", type=int)
 
+    repos_cmd = sub.add_parser("repos", help="repositories the agent may read")
+    repos_sub = repos_cmd.add_subparsers(dest="repos_command")
+    repos_list = repos_sub.add_parser("list", help="registered repositories")
+    repos_list.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+    repos_add = repos_sub.add_parser("add", help="register a repository (read-only)")
+    repos_add.add_argument("name")
+    repos_add.add_argument("path")
+    repos_add.add_argument("--notes", default="", help="what this repository is, for the agent")
+    repos_remove = repos_sub.add_parser("remove", help="stop the agent reading a repository")
+    repos_remove.add_argument("name")
+
     vault_cmd = sub.add_parser("vault", help="the key that encrypts stored site passwords")
     vault_sub = vault_cmd.add_subparsers(dest="vault_command")
     vault_init = vault_sub.add_parser("init", help="create the vault key")
@@ -2302,6 +2356,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.plans_command == "cancel":
             return run_plans_cancel(args.plan_id)
         parser.parse_args(["plans", "--help"])
+        return 0
+    if args.command == "repos":
+        if args.repos_command == "list":
+            return run_repos_list(args.as_json)
+        if args.repos_command == "add":
+            return run_repos_add(args.name, args.path, args.notes)
+        if args.repos_command == "remove":
+            return run_repos_remove(args.name)
+        parser.parse_args(["repos", "--help"])
         return 0
     if args.command == "vault":
         if args.vault_command == "init":
