@@ -27,7 +27,7 @@ All core cron jobs are registered in `kronos/cron/setup.py` and run by the built
 | 19 | turn-retention | Weekly Sun 05:00 UTC (13:00 UTC+8) | Weekly | `turn_retention.py` |
 | 20 | swarm-weekly-report | Weekly Sun 06:00 UTC (14:00 UTC+8) | Weekly | `swarm_weekly.py` |
 | 21 | sla-escalation | Every 60 s | Periodic | `escalation.py` |
-| 22 | acquire-smoke | Daily 06:00 UTC (14:00 UTC+8) | Daily | `acquire_smoke.py` |
+| 22 | acquire-smoke | Daily 07:00 UTC (15:00 UTC+8) | Daily | `acquire_smoke.py` |
 
 Intake pollers registered alongside these: `user-reminders` (60 s),
 `handoff-intake`, `council-intake`, `memory-intake` (30 s each).
@@ -322,7 +322,7 @@ hand-off. A no-op ledger read when `agents.yaml` declares no ownership.
 **Notification:** none directly — delivery is the hand-off itself.
 
 ### 22. acquire-smoke
-**Schedule:** Daily 06:00 UTC (14:00 UTC+8)
+**Schedule:** Daily 07:00 UTC (15:00 UTC+8)
 **Module:** `kronos/cron/acquire_smoke.py`
 
 Fetches a known-good page through each acquisition tier (`plain`, `stealth`,

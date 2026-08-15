@@ -156,11 +156,13 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # Source Quality Audit — weekly check with a 13-day guard = biweekly cadence.
     scheduler.add_weekly("source-quality-audit", run_source_quality_audit, weekday=6, hour_utc=4)
 
-    # Acquisition tier smoke — daily at 06:30 UTC. Proves plain/stealth/browser
-    # can still fetch a page, and speaks only when that changes. Guards inside
-    # to the owning agent: the backends are per-host, so six probes would be
-    # five wasted browser launches and five duplicate alerts.
-    scheduler.add_daily("acquire-smoke", run_acquire_smoke, hour_utc=6)
+    # Acquisition tier smoke — daily at 07:00 UTC, an hour kept clear of the
+    # Sunday swarm report at 06:00 so a browser launch never lands on top of an
+    # LLM digest. Proves plain/stealth/browser can still fetch a page, and speaks
+    # only when that changes. Guards inside to the owning agent: the backends are
+    # per-host, so six probes would be five wasted browser launches and five
+    # duplicate alerts about one fault.
+    scheduler.add_daily("acquire-smoke", run_acquire_smoke, hour_utc=7)
 
     # Swarm Retention — weekly Sunday 03:00 UTC. Prunes swarm_messages
     # older than MESSAGE_RETENTION_DAYS (90d). Safe on all 6 agents.
