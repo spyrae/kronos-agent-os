@@ -31,6 +31,7 @@ import json
 import logging
 import re
 import shlex
+from dataclasses import dataclass
 
 from langchain_core.tools import tool
 
@@ -275,6 +276,112 @@ async def fetch_tiered(url: str) -> tuple[str, str, list[str]]:
         notes.append(f"browser fetch failed: {e}")
 
     raise FetchBlockedError("; ".join(notes) or "no backend could fetch this page")
+
+
+# ── Tier health ───────────────────────────────────────────────────────────────
+#
+# Every tier here degrades quietly. A stealth backend uninstalled by a host
+# rebuild, a browser whose API moved under it, a plain fetch that started
+# meeting a CDN — none of them raise at startup, none fail a test, and all of
+# them turn into "that marketplace can't be read" weeks later, attributed to
+# the marketplace. Three of this module's real bugs were found by running it
+# against the live web and none by the suite, because a test that fakes the
+# boundary cannot notice the boundary changing.
+
+TIER_OK = "ok"
+TIER_BROKEN = "broken"
+TIER_OFF = "off"
+
+# Deliberately not a marketplace. The question here is "does our machinery
+# still work", and a marketplace answers a different one — "is that site in a
+# good mood today" — which changes for reasons outside this repo and on a
+# schedule nobody controls. A checker that cries wolf whenever Shopee tightens
+# its defences is a checker people learn to ignore, and then it is worth less
+# than nothing. example.com exists for exactly this and changes for nobody.
+SMOKE_URL = "https://example.com"
+
+
+@dataclass(frozen=True)
+class TierHealth:
+    """What one acquisition tier can do right now."""
+
+    tier: str
+    status: str
+    detail: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.status == TIER_OK
+
+
+async def check_tier_health(url: str = SMOKE_URL) -> list[TierHealth]:
+    """Probe each tier against a page none of them has any reason to be refused.
+
+    Three outcomes per tier, and the third is the one worth having: `off` means
+    a backend this deployment never installed, which is a documented choice and
+    not a fault. Collapsing it into `broken` would page somebody about a stealth
+    browser they deliberately never wanted, and an alert that is usually wrong
+    gets muted — taking the real ones with it.
+    """
+    from kronos.security.egress import check_url
+
+    try:
+        check_url(url, tool="acquire-health")
+    except Exception as e:
+        # Bypassing the policy to run a health check would be a strange place
+        # to put a hole. Report instead: unrunnable is not the same as broken.
+        return [TierHealth(tier, TIER_OFF, f"cannot probe: {e}") for tier in (TIER_PLAIN, TIER_STEALTH, TIER_BROWSER)]
+
+    return [
+        await _check_plain(url),
+        await _check_stealth(url),
+        await _check_browser(url),
+    ]
+
+
+async def _check_plain(url: str) -> TierHealth:
+    try:
+        status, body = await fetch_plain(url)
+    except Exception as e:
+        return TierHealth(TIER_PLAIN, TIER_BROKEN, f"{type(e).__name__}: {e}")
+    if looks_blocked(status, body):
+        return TierHealth(TIER_PLAIN, TIER_BROKEN, f"HTTP {status}, and the body reads as a block or a shell")
+    return TierHealth(TIER_PLAIN, TIER_OK, f"HTTP {status}, {len(html_to_text(body))} characters of text")
+
+
+async def _check_stealth(url: str) -> TierHealth:
+    if stealth_command(url) is None:
+        return TierHealth(TIER_STEALTH, TIER_OFF, "no STEALTH_FETCH_COMMAND configured")
+    try:
+        _, body = await fetch_stealth(url)
+    except Exception as e:
+        return TierHealth(TIER_STEALTH, TIER_BROKEN, str(e))
+    return TierHealth(TIER_STEALTH, TIER_OK, f"{len(html_to_text(body))} characters of text")
+
+
+async def _check_browser(url: str) -> TierHealth:
+    import importlib.util
+
+    if importlib.util.find_spec("playwright") is None:
+        return TierHealth(TIER_BROWSER, TIER_OFF, "playwright is not installed (pip install -e '.[browser]')")
+
+    from kronos.tools.browser import engine
+
+    # Leave the process as we found it. If the agent already had a browser open
+    # — a signed-in site session, most likely — closing it here would end that
+    # session to prove an unrelated point.
+    was_running = engine.is_running()
+    try:
+        _, body = await fetch_browser(url)
+    except Exception as e:
+        return TierHealth(TIER_BROWSER, TIER_BROKEN, str(e))
+    finally:
+        if not was_running:
+            try:
+                await engine.close()
+            except Exception as e:  # pragma: no cover - best effort
+                log.debug("Closing the probe's browser failed: %s", e)
+    return TierHealth(TIER_BROWSER, TIER_OK, f"{len(html_to_text(body))} characters of text")
 
 
 @tool
