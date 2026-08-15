@@ -27,6 +27,7 @@ All core cron jobs are registered in `kronos/cron/setup.py` and run by the built
 | 19 | turn-retention | Weekly Sun 05:00 UTC (13:00 UTC+8) | Weekly | `turn_retention.py` |
 | 20 | swarm-weekly-report | Weekly Sun 06:00 UTC (14:00 UTC+8) | Weekly | `swarm_weekly.py` |
 | 21 | sla-escalation | Every 60 s | Periodic | `escalation.py` |
+| 22 | acquire-smoke | Daily 07:00 UTC (15:00 UTC+8) | Daily | `acquire_smoke.py` |
 
 Intake pollers registered alongside these: `user-reminders` (60 s),
 `handoff-intake`, `council-intake`, `memory-intake` (30 s each).
@@ -319,6 +320,29 @@ compare-and-set on the watch row, so exactly one of the six pollers creates the
 hand-off. A no-op ledger read when `agents.yaml` declares no ownership.
 
 **Notification:** none directly — delivery is the hand-off itself.
+
+### 22. acquire-smoke
+**Schedule:** Daily 07:00 UTC (15:00 UTC+8)
+**Module:** `kronos/cron/acquire_smoke.py`
+
+Fetches a known-good page through each acquisition tier (`plain`, `stealth`,
+`browser`) and records which ones worked. Guards internally to the `kronos`
+agent: the backends are per-host, so six probes would be five wasted browser
+launches and five duplicate alerts about one fault.
+
+It exists because each tier degrades quietly — the stealth backend lives outside
+the repo and a host rebuild removes it, Playwright once deleted the API the
+browser tier read pages through — and those turn into "the agent can't read that
+site any more" weeks later, blamed on the site. It probes `example.com`, not a
+marketplace: the question is whether our machinery works, not whether a
+marketplace is in a good mood today. See [ACQUISITION.md](ACQUISITION.md).
+
+A tier that is not installed reports `off`, which is a deployment choice and
+never an alert. Run the same probe by hand with `kaos acquire check`.
+
+**Notification:** only when a tier's status *changes* — Telegram webhook plus
+NTFY, `high` priority when a working tier was lost, `default` on recovery.
+Silence is the normal outcome.
 
 ## Scheduler Implementation
 

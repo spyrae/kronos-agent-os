@@ -6,6 +6,26 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Added
 
+- **A reproducible stealth tier, and a daily check that it still exists** — the
+  middle way of fetching a page ran on a backend installed by hand, documented
+  nowhere, on one machine. A host rebuild would have removed it silently and the
+  first sign would have been a marketplace becoming unreadable weeks later,
+  blamed on the marketplace. `scripts/setup-stealth.sh` now installs it —
+  outside `app/`, because `deploy.sh` rsyncs with `--delete` and a venv
+  underneath it works exactly once — while the adapter it drives
+  (`scripts/stealth_fetch.py`) lives in the repo and ships with every deploy.
+  That adapter can only print a page or exit non-zero: the wrapper it replaces
+  printed *"Install scrapling for CSS extraction"* and exited 0, and 36
+  characters of advice is indistinguishable from a short page. A test reads the
+  source to keep it that way. `kaos acquire check` probes every tier on demand,
+  the new `acquire-smoke` job does it daily, and both distinguish a tier that is
+  *off* (never installed here — a choice) from one that is *broken*. It reports
+  only when that changes: a daily "all three fine" trains its reader to skip the
+  one morning it says something else. It probes `example.com` and deliberately
+  not a marketplace, since a checker that goes red whenever Shopee tightens its
+  defences is one people learn to ignore. `deploy.sh` warns when
+  `STEALTH_FETCH_COMMAND` points at an interpreter the host no longer has. Docs:
+  [Acquisition](docs/ACQUISITION.md).
 - **`kaos accounts import-profile`** — the site-accounts design says "sign in by
   hand once", and the machine the agent runs on has no screen. So the profile is
   made on a laptop and adopted here: the command checks the directory really is a

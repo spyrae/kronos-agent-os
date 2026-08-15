@@ -23,6 +23,7 @@ _AGENT_EXCLUSIVE_JOBS: dict[str, str] = {
 def setup_cron_jobs(scheduler: Scheduler) -> None:
     """Register all cron jobs. Matches Kronos I systemd timers."""
 
+    from kronos.cron.acquire_smoke import run_acquire_smoke
     from kronos.cron.analytics_alerts import run_analytics_alerts
     from kronos.cron.analytics_pulse import run_analytics_pulse
     from kronos.cron.analytics_weekly import run_analytics_weekly
@@ -155,6 +156,14 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # Source Quality Audit — weekly check with a 13-day guard = biweekly cadence.
     scheduler.add_weekly("source-quality-audit", run_source_quality_audit, weekday=6, hour_utc=4)
 
+    # Acquisition tier smoke — daily at 07:00 UTC, an hour kept clear of the
+    # Sunday swarm report at 06:00 so a browser launch never lands on top of an
+    # LLM digest. Proves plain/stealth/browser can still fetch a page, and speaks
+    # only when that changes. Guards inside to the owning agent: the backends are
+    # per-host, so six probes would be five wasted browser launches and five
+    # duplicate alerts about one fault.
+    scheduler.add_daily("acquire-smoke", run_acquire_smoke, hour_utc=7)
+
     # Swarm Retention — weekly Sunday 03:00 UTC. Prunes swarm_messages
     # older than MESSAGE_RETENTION_DAYS (90d). Safe on all 6 agents.
     scheduler.add_weekly("swarm-retention", run_swarm_retention, weekday=6, hour_utc=3)
@@ -194,6 +203,6 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         nexus_jobs_registered = 4
 
     total = (
-        22 + nexus_jobs_registered
-    )  # +reminders +plan-steps +handoff/council/memory intake +sla-escalation +swarm-weekly-report +persona-evolution; signal-jobs, travel insights, people-scout and group-digest paused
+        23 + nexus_jobs_registered
+    )  # +reminders +plan-steps +handoff/council/memory intake +sla-escalation +swarm-weekly-report +persona-evolution +acquire-smoke; signal-jobs, travel insights, people-scout and group-digest paused
     log.info("%d cron jobs registered for agent '%s'", total, me)

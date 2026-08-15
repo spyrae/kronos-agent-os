@@ -305,6 +305,23 @@ else
       fi
     fi
 
+    # The stealth fetch tier is an optional backend installed OUTSIDE app/ (see
+    # scripts/setup-stealth.sh), precisely so this rsync --delete cannot erase
+    # it. The flip side is that a rebuilt or migrated host keeps the .env line
+    # and loses the interpreter it points at. One test -x here beats finding out
+    # three weeks later as "the agent stopped being able to read that site".
+    # Not auto-installed: it is a ~150 MB browser most deployments never need.
+    STEALTH_CMD=$(grep -m1 '^STEALTH_FETCH_COMMAND=' app/.env 2>/dev/null | cut -d= -f2- || true)
+    STEALTH_CMD=${STEALTH_CMD%\"}
+    STEALTH_CMD=${STEALTH_CMD#\"}
+    if [ -n "$STEALTH_CMD" ]; then
+      STEALTH_BIN=$(echo "$STEALTH_CMD" | awk '{print $1}')
+      if [ ! -x "$STEALTH_BIN" ]; then
+        echo "WARNING: STEALTH_FETCH_COMMAND points at '$STEALTH_BIN', which is not executable on this host."
+        echo "         The stealth tier is dead until you run: bash app/scripts/setup-stealth.sh"
+      fi
+    fi
+
     # Build the code sandbox image if it is missing. Without it, run_code and
     # dynamic tools refuse to run — there is no unsandboxed fallback — so the
     # capability would look enabled and never work. Only when absent: the image

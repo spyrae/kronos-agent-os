@@ -1789,6 +1789,36 @@ def run_vault_status(as_json: bool) -> int:
     return 0 if usable else 1
 
 
+def run_acquire_check(as_json: bool) -> int:
+    """Whether each way of fetching a page still works.
+
+    The same probe the daily job runs, on demand — for right after installing a
+    backend, and for the moment a task reports a site as unreadable and the
+    question is whether the site changed or this host did.
+    """
+    import asyncio
+
+    from kronos.tools.acquire import SMOKE_URL, TIER_BROKEN, TIER_OFF, check_tier_health
+
+    results = asyncio.run(check_tier_health())
+    broken = [r for r in results if r.status == TIER_BROKEN]
+
+    if as_json:
+        print(json.dumps([{"tier": r.tier, "status": r.status, "detail": r.detail} for r in results], indent=2))
+        return 1 if broken else 0
+
+    print(f"Probed {SMOKE_URL}\n")
+    marks = {"ok": "[OK]  ", TIER_BROKEN: "[FAIL]", TIER_OFF: "[--]  "}
+    for r in results:
+        print(f"{marks.get(r.status, '[??]  ')} {r.tier:<8} {r.detail}")
+
+    if broken:
+        print(f"\n{len(broken)} tier(s) broken. Sites needing them are reported as unreadable, not fetched wrongly.")
+    elif any(r.status == TIER_OFF for r in results):
+        print("\nTiers marked [--] are not installed here — a choice, not a fault. See docs/ACQUISITION.md.")
+    return 1 if broken else 0
+
+
 def run_swarm_report(period: str, as_json: bool) -> int:
     """Post-mortem of the swarm's period: who answered, how well, at what cost."""
     from kronos.swarm_report import build_report, render_markdown
@@ -2198,6 +2228,11 @@ def build_parser() -> argparse.ArgumentParser:
     repos_remove = repos_sub.add_parser("remove", help="stop the agent reading a repository")
     repos_remove.add_argument("name")
 
+    acquire_cmd = sub.add_parser("acquire", help="how pages are fetched, and whether that still works")
+    acquire_sub = acquire_cmd.add_subparsers(dest="acquire_command")
+    acquire_check = acquire_sub.add_parser("check", help="probe every fetch tier against a known-good page")
+    acquire_check.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+
     vault_cmd = sub.add_parser("vault", help="the key that encrypts stored site passwords")
     vault_sub = vault_cmd.add_subparsers(dest="vault_command")
     vault_init = vault_sub.add_parser("init", help="create the vault key")
@@ -2415,6 +2450,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.repos_command == "remove":
             return run_repos_remove(args.name)
         parser.parse_args(["repos", "--help"])
+        return 0
+    if args.command == "acquire":
+        if args.acquire_command == "check":
+            return run_acquire_check(args.as_json)
+        parser.parse_args(["acquire", "--help"])
         return 0
     if args.command == "vault":
         if args.vault_command == "init":

@@ -216,6 +216,17 @@ async def get_current_url() -> str:
     return page.url
 
 
+def is_running() -> bool:
+    """Whether a browser is already open.
+
+    For callers that start the browser only to prove it works: they should put
+    the process back as they found it, and must never close a session somebody
+    else opened. Asking first is the difference between a health check and an
+    interruption.
+    """
+    return _page is not None and not _page.is_closed()
+
+
 async def close():
     """Close browser and cleanup."""
     global _pw, _browser, _page, _profile_dir
