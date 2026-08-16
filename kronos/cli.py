@@ -1819,6 +1819,40 @@ def run_acquire_check(as_json: bool) -> int:
     return 1 if broken else 0
 
 
+def run_sandbox_check(as_json: bool) -> int:
+    """Whether the sandbox runs code, and still contains the code it runs.
+
+    Its readiness check answers a different question — does Docker exist, does
+    the image exist — and both of the real failures answered that one perfectly
+    while every run inside failed. This one runs code.
+    """
+    import asyncio
+
+    from kronos.health import STATUS_BROKEN, STATUS_OFF
+    from kronos.tools.sandbox import CONTAINMENT_CHECKS, check_sandbox_health
+
+    results = asyncio.run(check_sandbox_health())
+    broken = [r for r in results if r.status == STATUS_BROKEN]
+
+    if as_json:
+        print(json.dumps([{"check": r.name, "status": r.status, "detail": r.detail} for r in results], indent=2))
+        return 1 if broken else 0
+
+    marks = {"ok": "[OK]  ", STATUS_BROKEN: "[FAIL]", STATUS_OFF: "[--]  "}
+    for r in results:
+        print(f"{marks.get(r.status, '[??]  ')} {r.name:<14} {r.detail}")
+
+    breached = [r for r in broken if r.name in CONTAINMENT_CHECKS]
+    if breached:
+        print("\nContainment is down: code still runs, but a wall is missing.")
+        print("Stop it with ENABLE_CODE_EXECUTION=false until this is fixed.")
+    elif broken:
+        print("\nrun_code and dynamic tools will refuse rather than fall back — there is no unsandboxed path.")
+    elif any(r.status == STATUS_OFF for r in results):
+        print("\nMarked [--]: not installed here — a choice, not a fault. See docs/SANDBOX.md.")
+    return 1 if broken else 0
+
+
 def run_swarm_report(period: str, as_json: bool) -> int:
     """Post-mortem of the swarm's period: who answered, how well, at what cost."""
     from kronos.swarm_report import build_report, render_markdown
@@ -2233,6 +2267,11 @@ def build_parser() -> argparse.ArgumentParser:
     acquire_check = acquire_sub.add_parser("check", help="probe every fetch tier against a known-good page")
     acquire_check.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
 
+    sandbox_cmd = sub.add_parser("sandbox", help="the container the agent's own code runs in")
+    sandbox_sub = sandbox_cmd.add_subparsers(dest="sandbox_command")
+    sandbox_check = sandbox_sub.add_parser("check", help="run code in it, and check it still contains what it runs")
+    sandbox_check.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+
     vault_cmd = sub.add_parser("vault", help="the key that encrypts stored site passwords")
     vault_sub = vault_cmd.add_subparsers(dest="vault_command")
     vault_init = vault_sub.add_parser("init", help="create the vault key")
@@ -2455,6 +2494,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.acquire_command == "check":
             return run_acquire_check(args.as_json)
         parser.parse_args(["acquire", "--help"])
+        return 0
+    if args.command == "sandbox":
+        if args.sandbox_command == "check":
+            return run_sandbox_check(args.as_json)
+        parser.parse_args(["sandbox", "--help"])
         return 0
     if args.command == "vault":
         if args.vault_command == "init":
