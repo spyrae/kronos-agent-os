@@ -43,6 +43,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.personal_observer import run_daily_scope, run_personal_observer
     from kronos.cron.plans import run_due_plan_steps
     from kronos.cron.reminders import run_due_reminders
+    from kronos.cron.sandbox_smoke import run_sandbox_smoke
     from kronos.cron.self_improve import run_self_improve
     from kronos.cron.signal_ideas import run_ideas_digest
 
@@ -164,6 +165,14 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # duplicate alerts about one fault.
     scheduler.add_daily("acquire-smoke", run_acquire_smoke, hour_utc=7)
 
+    # Sandbox smoke — daily at 08:00 UTC, an hour after the acquisition probe so
+    # two container/browser launches never overlap. Runs code to prove the
+    # sandbox works at all (its readiness check cannot see the failures that
+    # actually happened) and asks the container what it can reach, turning three
+    # documented containment guarantees into three checked ones. Guards inside to
+    # the owning agent: the daemon and image are per-host.
+    scheduler.add_daily("sandbox-smoke", run_sandbox_smoke, hour_utc=8)
+
     # Swarm Retention — weekly Sunday 03:00 UTC. Prunes swarm_messages
     # older than MESSAGE_RETENTION_DAYS (90d). Safe on all 6 agents.
     scheduler.add_weekly("swarm-retention", run_swarm_retention, weekday=6, hour_utc=3)
@@ -203,6 +212,6 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         nexus_jobs_registered = 4
 
     total = (
-        23 + nexus_jobs_registered
-    )  # +reminders +plan-steps +handoff/council/memory intake +sla-escalation +swarm-weekly-report +persona-evolution +acquire-smoke; signal-jobs, travel insights, people-scout and group-digest paused
+        24 + nexus_jobs_registered
+    )  # +reminders +plan-steps +handoff/council/memory intake +sla-escalation +swarm-weekly-report +persona-evolution +acquire-smoke +sandbox-smoke; signal-jobs, travel insights, people-scout and group-digest paused
     log.info("%d cron jobs registered for agent '%s'", total, me)

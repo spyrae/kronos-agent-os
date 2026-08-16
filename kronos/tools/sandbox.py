@@ -9,12 +9,15 @@ production. Missing Docker now means the code does not run.
 """
 
 import asyncio
+import json
 import logging
 import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+
+from kronos.health import STATUS_BROKEN, STATUS_OFF, STATUS_OK, HealthCheck
 
 log = logging.getLogger("kronos.tools.sandbox")
 
@@ -247,3 +250,193 @@ async def execute_sandboxed(
             watchdog.cancel()
         if tmpdir and os.path.exists(tmpdir):
             shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ── Health ────────────────────────────────────────────────────────────────────
+#
+# `sandbox_ready()` asks whether Docker and the image exist. Both of this
+# module's real bugs passed that question and failed everything after it: a
+# temp directory at 0700 mounted into a container running as another user, so
+# every run died on `Permission denied: '/code/tool.py'`; and a bind mount
+# passed relatively, which Docker reads as a *named volume* — broken on every
+# host whose data directory is configured relatively, which is every real
+# deployment and no test.
+#
+# A configuration check cannot see either. Only running code can, so that is
+# what this does. And since a sandbox that runs but does not contain is worse
+# than one that refuses to start, the same run checks that the walls are still
+# up: no network, a read-only root, and not running as root.
+
+PROBE_MARKER = "kronos-sandbox-probe"
+PROBE_SESSION = "health-check"
+PROBE_TIMEOUT = 60
+
+CHECK_DOCKER = "docker"
+CHECK_IMAGE = "image"
+CHECK_EXECUTION = "execution"
+CHECK_WORKSPACE = "workspace"
+CHECK_NO_NETWORK = "no_network"
+CHECK_READONLY_ROOT = "readonly_root"
+CHECK_NON_ROOT = "non_root"
+
+# The ones that are about safety rather than capability. A caller reporting a
+# failure needs to tell the two apart: losing execution costs a feature, losing
+# containment means code is still running with a wall down.
+CONTAINMENT_CHECKS = frozenset({CHECK_NO_NETWORK, CHECK_READONLY_ROOT, CHECK_NON_ROOT})
+
+# Reports uid, where it could route a packet, and whether its root filesystem
+# took a write. Everything is answered from inside the container: asking the
+# network question by dialling out would send the very packet it is checking for.
+#
+# The routing table, not the interface list, is what decides the network answer.
+# Some kernels put phantom tunnel stubs (tunl0, sit0) into every new namespace,
+# so `interfaces == ["lo"]` would report a breach on those hosts and be wrong —
+# and a checker that cries wolf is one people learn to ignore. A stub carries no
+# route; a bridge carries a default one. Measured empty under --network=none.
+_PROBE_CODE = f"""
+import json, os
+
+report = {{"marker": "{PROBE_MARKER}", "uid": os.getuid()}}
+
+try:
+    with open("/proc/net/route") as handle:
+        report["routes"] = [line.split()[0] for line in handle.read().splitlines()[1:] if line.strip()]
+except OSError as e:
+    report["routes"] = None
+    report["routes_error"] = str(e)
+
+try:
+    report["interfaces"] = sorted(os.listdir("/sys/class/net"))
+except OSError:
+    report["interfaces"] = None
+
+try:
+    with open("/{PROBE_MARKER}", "w") as handle:
+        handle.write("x")
+    report["root_writable"] = True
+except OSError:
+    report["root_writable"] = False
+
+print(json.dumps(report))
+"""
+
+
+def _probe_workspace() -> Path:
+    """Where the workspace probe writes, derived exactly as a real run's is."""
+    from kronos.tools.sandbox_platform import sandbox_workspace_root
+
+    return sandbox_workspace_root() / PROBE_SESSION / "files"
+
+
+async def check_sandbox_health() -> list[HealthCheck]:
+    """Prove the sandbox can run code, and that it still contains what it runs.
+
+    A check that could not be *determined* is left out rather than guessed at:
+    when nothing can run, the containment guarantees are absent from the list
+    instead of being reported as broken, and they come back as soon as
+    execution does.
+    """
+    if not _docker_available():
+        # Not a fault: a host without Docker is a host that opted out of running
+        # code, and the tools that need it already refuse rather than fall back.
+        return [HealthCheck(CHECK_DOCKER, STATUS_OFF, "docker is not installed — code execution is unavailable here")]
+
+    checks = [HealthCheck(CHECK_DOCKER, STATUS_OK, "docker is available")]
+
+    if not _docker_image_available():
+        checks.append(HealthCheck(CHECK_IMAGE, STATUS_BROKEN, sandbox_unavailable_message()))
+        return checks
+    checks.append(HealthCheck(CHECK_IMAGE, STATUS_OK, SANDBOX_IMAGE))
+
+    stdout, stderr = await execute_sandboxed(_PROBE_CODE, timeout=PROBE_TIMEOUT)
+    report = _parse_probe(stdout)
+    if report is None:
+        checks.append(
+            HealthCheck(
+                CHECK_EXECUTION, STATUS_BROKEN, (stderr or stdout).strip()[:300] or "the container printed nothing"
+            )
+        )
+        return checks
+
+    checks.append(HealthCheck(CHECK_EXECUTION, STATUS_OK, "ran code and read its output back"))
+    checks.extend(_containment_checks(report))
+    checks.append(await _check_workspace())
+    return checks
+
+
+def _parse_probe(stdout: str) -> dict | None:
+    """The probe's own JSON, or None when the container said something else."""
+    for line in reversed(stdout.strip().splitlines()):
+        try:
+            parsed = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict) and parsed.get("marker") == PROBE_MARKER:
+            return parsed
+    return None
+
+
+def _containment_checks(report: dict) -> list[HealthCheck]:
+    """Whether the walls the design promises are actually standing."""
+    routes = report.get("routes")
+    interfaces = report.get("interfaces") or []
+    if routes is None:
+        # Failing to read the routing table is not evidence that it is empty.
+        network = HealthCheck(
+            CHECK_NO_NETWORK,
+            STATUS_BROKEN,
+            f"could not read the container's routing table: {report.get('routes_error')}",
+        )
+    elif routes:
+        network = HealthCheck(
+            CHECK_NO_NETWORK,
+            STATUS_BROKEN,
+            f"the container can route through {', '.join(sorted(set(routes)))} — --network=none is not in force",
+        )
+    else:
+        network = HealthCheck(
+            CHECK_NO_NETWORK,
+            STATUS_OK,
+            f"no routes ({', '.join(interfaces) or 'no interfaces'})",
+        )
+
+    if report.get("root_writable"):
+        readonly = HealthCheck(CHECK_READONLY_ROOT, STATUS_BROKEN, "the container wrote to its own root filesystem")
+    else:
+        readonly = HealthCheck(CHECK_READONLY_ROOT, STATUS_OK, "root filesystem refused a write")
+
+    uid = report.get("uid")
+    if uid == 0:
+        non_root = HealthCheck(CHECK_NON_ROOT, STATUS_BROKEN, "the container is running as root")
+    else:
+        non_root = HealthCheck(CHECK_NON_ROOT, STATUS_OK, f"running as uid {uid}")
+
+    return [network, readonly, non_root]
+
+
+async def _check_workspace() -> HealthCheck:
+    """A file written at /work must survive the container that wrote it.
+
+    This is the mount that broke: passed relatively, Docker read it as a named
+    volume and every run with session files failed. The probe derives the path
+    the way a real run does rather than handing in an absolute one, so a
+    regression in that derivation shows up here.
+    """
+    files_dir = _probe_workspace()
+    marker = files_dir / f"{PROBE_MARKER}.txt"
+    try:
+        files_dir.mkdir(parents=True, exist_ok=True)
+        marker.unlink(missing_ok=True)
+    except OSError as e:
+        return HealthCheck(CHECK_WORKSPACE, STATUS_BROKEN, f"cannot prepare the session directory: {e}")
+
+    code = f"open({marker.name!r}, 'w').write('ok')\nprint('wrote')"
+    stdout, stderr = await execute_sandboxed(code, timeout=PROBE_TIMEOUT, files_dir=str(files_dir))
+
+    try:
+        if not marker.exists():
+            detail = (stderr or stdout or "the file was not there afterwards").strip()[:300]
+            return HealthCheck(CHECK_WORKSPACE, STATUS_BROKEN, detail)
+        return HealthCheck(CHECK_WORKSPACE, STATUS_OK, "a file written at /work survived the run")
+    finally:
+        marker.unlink(missing_ok=True)

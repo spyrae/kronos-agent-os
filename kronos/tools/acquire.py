@@ -31,11 +31,11 @@ import json
 import logging
 import re
 import shlex
-from dataclasses import dataclass
 
 from langchain_core.tools import tool
 
 from kronos.config import settings
+from kronos.health import STATUS_BROKEN, STATUS_OFF, STATUS_OK, HealthCheck
 from kronos.security.untrusted import frame_external, mark_untrusted
 
 log = logging.getLogger("kronos.tools.acquire")
@@ -288,9 +288,11 @@ async def fetch_tiered(url: str) -> tuple[str, str, list[str]]:
 # against the live web and none by the suite, because a test that fakes the
 # boundary cannot notice the boundary changing.
 
-TIER_OK = "ok"
-TIER_BROKEN = "broken"
-TIER_OFF = "off"
+# The same vocabulary the sandbox checks report in — one meaning of "off"
+# across the whole system, so one set of rules can decide who hears about it.
+TIER_OK = STATUS_OK
+TIER_BROKEN = STATUS_BROKEN
+TIER_OFF = STATUS_OFF
 
 # Deliberately not a marketplace. The question here is "does our machinery
 # still work", and a marketplace answers a different one — "is that site in a
@@ -301,20 +303,7 @@ TIER_OFF = "off"
 SMOKE_URL = "https://example.com"
 
 
-@dataclass(frozen=True)
-class TierHealth:
-    """What one acquisition tier can do right now."""
-
-    tier: str
-    status: str
-    detail: str = ""
-
-    @property
-    def ok(self) -> bool:
-        return self.status == TIER_OK
-
-
-async def check_tier_health(url: str = SMOKE_URL) -> list[TierHealth]:
+async def check_tier_health(url: str = SMOKE_URL) -> list[HealthCheck]:
     """Probe each tier against a page none of them has any reason to be refused.
 
     Three outcomes per tier, and the third is the one worth having: `off` means
@@ -330,7 +319,7 @@ async def check_tier_health(url: str = SMOKE_URL) -> list[TierHealth]:
     except Exception as e:
         # Bypassing the policy to run a health check would be a strange place
         # to put a hole. Report instead: unrunnable is not the same as broken.
-        return [TierHealth(tier, TIER_OFF, f"cannot probe: {e}") for tier in (TIER_PLAIN, TIER_STEALTH, TIER_BROWSER)]
+        return [HealthCheck(tier, TIER_OFF, f"cannot probe: {e}") for tier in (TIER_PLAIN, TIER_STEALTH, TIER_BROWSER)]
 
     return [
         await _check_plain(url),
@@ -339,31 +328,31 @@ async def check_tier_health(url: str = SMOKE_URL) -> list[TierHealth]:
     ]
 
 
-async def _check_plain(url: str) -> TierHealth:
+async def _check_plain(url: str) -> HealthCheck:
     try:
         status, body = await fetch_plain(url)
     except Exception as e:
-        return TierHealth(TIER_PLAIN, TIER_BROKEN, f"{type(e).__name__}: {e}")
+        return HealthCheck(TIER_PLAIN, TIER_BROKEN, f"{type(e).__name__}: {e}")
     if looks_blocked(status, body):
-        return TierHealth(TIER_PLAIN, TIER_BROKEN, f"HTTP {status}, and the body reads as a block or a shell")
-    return TierHealth(TIER_PLAIN, TIER_OK, f"HTTP {status}, {len(html_to_text(body))} characters of text")
+        return HealthCheck(TIER_PLAIN, TIER_BROKEN, f"HTTP {status}, and the body reads as a block or a shell")
+    return HealthCheck(TIER_PLAIN, TIER_OK, f"HTTP {status}, {len(html_to_text(body))} characters of text")
 
 
-async def _check_stealth(url: str) -> TierHealth:
+async def _check_stealth(url: str) -> HealthCheck:
     if stealth_command(url) is None:
-        return TierHealth(TIER_STEALTH, TIER_OFF, "no STEALTH_FETCH_COMMAND configured")
+        return HealthCheck(TIER_STEALTH, TIER_OFF, "no STEALTH_FETCH_COMMAND configured")
     try:
         _, body = await fetch_stealth(url)
     except Exception as e:
-        return TierHealth(TIER_STEALTH, TIER_BROKEN, str(e))
-    return TierHealth(TIER_STEALTH, TIER_OK, f"{len(html_to_text(body))} characters of text")
+        return HealthCheck(TIER_STEALTH, TIER_BROKEN, str(e))
+    return HealthCheck(TIER_STEALTH, TIER_OK, f"{len(html_to_text(body))} characters of text")
 
 
-async def _check_browser(url: str) -> TierHealth:
+async def _check_browser(url: str) -> HealthCheck:
     import importlib.util
 
     if importlib.util.find_spec("playwright") is None:
-        return TierHealth(TIER_BROWSER, TIER_OFF, "playwright is not installed (pip install -e '.[browser]')")
+        return HealthCheck(TIER_BROWSER, TIER_OFF, "playwright is not installed (pip install -e '.[browser]')")
 
     from kronos.tools.browser import engine
 
@@ -374,14 +363,14 @@ async def _check_browser(url: str) -> TierHealth:
     try:
         _, body = await fetch_browser(url)
     except Exception as e:
-        return TierHealth(TIER_BROWSER, TIER_BROKEN, str(e))
+        return HealthCheck(TIER_BROWSER, TIER_BROKEN, str(e))
     finally:
         if not was_running:
             try:
                 await engine.close()
             except Exception as e:  # pragma: no cover - best effort
                 log.debug("Closing the probe's browser failed: %s", e)
-    return TierHealth(TIER_BROWSER, TIER_OK, f"{len(html_to_text(body))} characters of text")
+    return HealthCheck(TIER_BROWSER, TIER_OK, f"{len(html_to_text(body))} characters of text")
 
 
 @tool

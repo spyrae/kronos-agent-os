@@ -332,6 +332,16 @@ else
         bash app/scripts/build-sandbox.sh \
           || echo "WARNING: sandbox image build failed — run_code and dynamic tools will refuse to run."
       fi
+
+      # Having the image is not having a working sandbox: both of the real
+      # failures here had the image and failed every run. This runs code in it.
+      # Informational — a deploy is not the place to block on it, and the daily
+      # sandbox-smoke job carries the same check afterwards.
+      if docker image inspect kronos-sandbox:latest >/dev/null 2>&1; then
+        echo "Checking the sandbox..."
+        (cd app && .venv/bin/python -m kronos.cli sandbox check) \
+          || echo "WARNING: the sandbox is not fully healthy (see above) — run 'kaos sandbox check' for detail."
+      fi
     else
       echo "NOTE: docker not installed — sandboxed code execution is unavailable on this host."
     fi

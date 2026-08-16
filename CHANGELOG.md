@@ -6,6 +6,23 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Added
 
+- **A sandbox check that runs code, because the readiness flag never could** —
+  `sandbox_ready()` asks whether Docker and the image exist, and both of this
+  subsystem's real failures answered that perfectly while every run inside
+  failed: a temp directory at `0700` the container could not read, and a bind
+  mount passed relatively, which Docker takes for a named volume. Neither raised
+  at startup, neither failed a test, and the sandbox called itself ready
+  throughout. `kaos sandbox check` and the daily `sandbox-smoke` job now execute
+  a program and read its output back. They also ask the container what it can
+  reach — only loopback, a root filesystem that refuses writes, a non-root uid —
+  turning three documented containment guarantees into three checked ones, all
+  answered from inside without sending a packet. Losing execution and losing
+  containment are opposite problems, so they get opposite messages: the first
+  costs a capability (nothing falls back to running unsandboxed), the second
+  means code still runs with a wall down, and that one names the off switch. A
+  check that could not be *determined* is left out rather than guessed at.
+  Verified against live Docker before it was written. Docs:
+  [Sandbox](docs/SANDBOX.md#checking-that-it-still-works).
 - **A reproducible stealth tier, and a daily check that it still exists** — the
   middle way of fetching a page ran on a backend installed by hand, documented
   nowhere, on one machine. A host rebuild would have removed it silently and the

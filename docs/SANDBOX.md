@@ -102,6 +102,61 @@ decision, the resources declared, and redacted output. The dashboard's **Sandbox
 page reads it. Secrets and PII are masked on the way in — a run's stdout is
 untrusted content like any other.
 
+## Checking that it still works
+
+Readiness and capability are different questions, and only one of them was being
+asked. `sandbox_ready()` reports whether Docker and the image exist — and both of
+this subsystem's real failures answered that perfectly while every run inside
+failed:
+
+- a temp directory created at `0700` and mounted into a container running as
+  another user, so every run died on `Permission denied: '/code/tool.py'`;
+- a bind mount passed as a relative path, which Docker reads as a *named volume*
+  — broken on every host whose data directory is configured relatively, which is
+  every real deployment and no test.
+
+Neither raised at startup. Neither failed the suite. So the check runs code:
+
+```bash
+kaos sandbox check          # probe now
+kaos sandbox check --json   # same, machine-readable
+```
+
+It asks seven questions, in two groups that mean opposite things when they fail.
+
+**Can it work at all** — `docker`, `image`, `execution` (code ran and its output
+came back), `workspace` (a file written at `/work` outlived the container). Losing
+these costs a capability: `run_code` and dynamic tools then refuse, because there
+is no unsandboxed path to fall back to.
+
+**Is it still a sandbox** — `no_network` (the container has nowhere to route a
+packet), `readonly_root` (its root filesystem refuses a write), `non_root` (it is
+not running as uid 0). Losing one of these is the opposite problem: code still
+runs, with a wall down. The report says so plainly and names the off switch,
+because a message telling you no safety was lost would be exactly backwards.
+
+Every answer comes from inside the container, and none of it sends traffic — the
+network question is settled by reading the routing table, not by dialling out to
+prove a call cannot be made. The **routing table** and not the interface list,
+because some kernels seed every new namespace with tunnel stubs (`tunl0`, `sit0`)
+and judging on interfaces would report a breach on those hosts and be wrong. A
+stub carries no route; a bridge carries a default one.
+
+A check that could not be *determined* is left out rather than guessed at. When
+nothing can run, the containment guarantees are simply absent from the report;
+they return, and are reported if broken, as soon as execution does.
+
+The same probe runs daily as the `sandbox-smoke` cron job, and **only speaks when
+something changes** — see [ACQUISITION.md](ACQUISITION.md#checking-that-it-still-works)
+for why silence is the design and not an oversight. A host without Docker reports
+`off`: opting out of running code is a choice, not a fault.
+
+It probes whether or not `ENABLE_CODE_EXECUTION` is on, and the image is what
+gates it: a host that has one wants the sandbox, and learning it works *before*
+the flag is flipped beats learning it afterwards from a task that failed. The
+code it runs is the probe's own half-dozen lines reporting uid and interfaces —
+never anything the agent wrote.
+
 ## Honest limits
 
 - **Input names are not a security boundary.** They are validated for the audit
@@ -116,3 +171,7 @@ untrusted content like any other.
 - **The image has no third-party packages.** For the arithmetic this exists for,
   `csv`, `json` and `statistics` are enough; pandas would add hundreds of
   megabytes to an image whose point is being small and boring.
+- **The daily check proves the walls are up, not that they are sufficient.** It
+  confirms `--network=none`, `--read-only` and a non-root uid are actually in
+  force; it does not audit the kernel, the daemon's configuration, or a container
+  escape. A sandbox is a boundary, not a proof.
