@@ -28,6 +28,7 @@ All core cron jobs are registered in `kronos/cron/setup.py` and run by the built
 | 20 | swarm-weekly-report | Weekly Sun 06:00 UTC (14:00 UTC+8) | Weekly | `swarm_weekly.py` |
 | 21 | sla-escalation | Every 60 s | Periodic | `escalation.py` |
 | 22 | acquire-smoke | Daily 07:00 UTC (15:00 UTC+8) | Daily | `acquire_smoke.py` |
+| 23 | sandbox-smoke | Daily 08:00 UTC (16:00 UTC+8) | Daily | `sandbox_smoke.py` |
 
 Intake pollers registered alongside these: `user-reminders` (60 s),
 `handoff-intake`, `council-intake`, `memory-intake` (30 s each).
@@ -343,6 +344,29 @@ never an alert. Run the same probe by hand with `kaos acquire check`.
 **Notification:** only when a tier's status *changes* — Telegram webhook plus
 NTFY, `high` priority when a working tier was lost, `default` on recovery.
 Silence is the normal outcome.
+
+### 23. sandbox-smoke
+**Schedule:** Daily 08:00 UTC (16:00 UTC+8)
+**Module:** `kronos/cron/sandbox_smoke.py`
+
+Runs code in the sandbox and asks the container what it can reach. Guards
+internally to the `kronos` agent: the Docker daemon and the image belong to the
+host, so six probes would be ten wasted container runs and five duplicate alerts
+about one fault.
+
+It exists because `sandbox_ready()` answers a different question — does Docker
+exist, does the image exist — and both of this subsystem's real failures answered
+that perfectly while every run inside failed. Seven checks in two groups: whether
+it can work at all (`docker`, `image`, `execution`, `workspace`) and whether it is
+still a sandbox (`no_network`, `readonly_root`, `non_root`). The two mean
+opposite things when they fail, and the message says which. See
+[SANDBOX.md](SANDBOX.md#checking-that-it-still-works).
+
+Run the same probe by hand with `kaos sandbox check`.
+
+**Notification:** only when a check's status *changes* — Telegram webhook plus
+NTFY, `high` priority when something is broken, `default` on recovery. Silence is
+the normal outcome.
 
 ## Scheduler Implementation
 
