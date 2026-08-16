@@ -35,7 +35,7 @@ def no_backends(monkeypatch):
 
 
 def _by_tier(results):
-    return {r.tier: r for r in results}
+    return {r.name: r for r in results}
 
 
 def working_plain(monkeypatch):
@@ -82,7 +82,7 @@ async def test_every_tier_is_reported(monkeypatch):
 
     results = await check_tier_health()
 
-    assert [r.tier for r in results] == [TIER_PLAIN, TIER_STEALTH, TIER_BROWSER]
+    assert [r.name for r in results] == [TIER_PLAIN, TIER_STEALTH, TIER_BROWSER]
 
 
 # --- a fault is not the same as a deliberate absence --------------------------
