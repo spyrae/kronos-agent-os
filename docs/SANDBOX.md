@@ -148,6 +148,12 @@ something changes** — see [ACQUISITION.md](ACQUISITION.md#checking-that-it-sti
 for why silence is the design and not an oversight. A host without Docker reports
 `off`: opting out of running code is a choice, not a fault.
 
+It probes whether or not `ENABLE_CODE_EXECUTION` is on, and the image is what
+gates it: a host that has one wants the sandbox, and learning it works *before*
+the flag is flipped beats learning it afterwards from a task that failed. The
+code it runs is the probe's own half-dozen lines reporting uid and interfaces —
+never anything the agent wrote.
+
 ## Honest limits
 
 - **Input names are not a security boundary.** They are validated for the audit
