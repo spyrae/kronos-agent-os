@@ -4,6 +4,22 @@ All notable changes to Kronos Agent OS are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two MCP servers had been dead on every boot for months** — `fetch` and
+  `yahoo-finance` both declare `mcp>=1.6` with no upper bound, uv honoured that
+  literally and installed SDK 2.0, and the API each of them uses is gone there:
+  `mcp-server-fetch` dies importing `McpError`, `mcp-yahoo-finance` on
+  `Server.list_tools`. The tool manager handled it correctly — skip the server,
+  keep the rest — so nothing crashed and nobody noticed. The cost was 11 tools,
+  including every piece of market data the finance agent is built on: prices,
+  history, dividends, income statement, cash flow, earnings dates. It answered
+  finance questions from news search alone and never said it was doing so. The
+  SDK is now pinned inside each server's own ephemeral environment, which leaves
+  this process on the current SDK — the two halves talk over the wire protocol,
+  which negotiates. Verified by loading their tools through the app's own client
+  on a live host: `fetch` 0 → 1, `yahoo-finance` 0 → 10.
+
 ### Added
 
 - **A sandbox check that runs code, because the readiness flag never could** —
