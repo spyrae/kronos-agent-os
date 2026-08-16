@@ -26,6 +26,23 @@ def _find_uvx() -> str:
     return "uvx"  # hope it's on PATH
 
 
+# Third-party servers written against MCP SDK 1.x, which declare `mcp>=1.6` with
+# no upper bound. uv honours that literally and installs 2.0, where the API each
+# of them uses is gone — `mcp-server-fetch` dies importing `McpError`,
+# `mcp-yahoo-finance` on `Server.list_tools`. Both had been failing on every boot
+# for months, costing 11 tools (the whole of the finance agent's market data) and
+# leaving a traceback in the journal that trained everyone to skip startup errors.
+#
+# The pin lives inside each server's own ephemeral uvx environment, so it is
+# local to them: this process keeps whatever SDK it wants, and the two halves
+# talk over the wire protocol, which negotiates versions. Verified by loading
+# their tools through this app's own client, not by watching them start.
+#
+# Neither package has shipped since 2025, so there is no forward fix to wait for.
+# Drop the pin only after confirming the upstream release actually supports 2.x.
+SDK_1X = ["--with", "mcp<2"]
+
+
 def build_mcp_config() -> dict:
     """Build MultiServerMCPClient configuration dict.
 
@@ -62,7 +79,7 @@ def build_mcp_config() -> dict:
     servers["fetch"] = {
         "transport": "stdio",
         "command": uvx,
-        "args": ["mcp-server-fetch"],
+        "args": [*SDK_1X, "mcp-server-fetch"],
     }
 
     servers["content-core"] = {
@@ -131,7 +148,9 @@ def build_mcp_config() -> dict:
     servers["yahoo-finance"] = {
         "transport": "stdio",
         "command": uvx,
-        "args": ["--from", "mcp-yahoo-finance", "mcp-yahoo-finance"],
+        # --with must precede the command uvx is asked to run, or uv reads it as
+        # an argument to that command instead of a dependency of the environment.
+        "args": ["--from", "mcp-yahoo-finance", *SDK_1X, "mcp-yahoo-finance"],
     }
 
     # --- Filesystem ---
