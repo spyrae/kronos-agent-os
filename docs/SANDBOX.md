@@ -129,15 +129,18 @@ came back), `workspace` (a file written at `/work` outlived the container). Losi
 these costs a capability: `run_code` and dynamic tools then refuse, because there
 is no unsandboxed path to fall back to.
 
-**Is it still a sandbox** — `no_network` (the container sees only loopback),
-`readonly_root` (its root filesystem refuses a write), `non_root` (it is not
-running as uid 0). Losing one of these is the opposite problem: code still runs,
-with a wall down. The report says so plainly and names the off switch, because a
-message telling you no safety was lost would be exactly backwards.
+**Is it still a sandbox** — `no_network` (the container has nowhere to route a
+packet), `readonly_root` (its root filesystem refuses a write), `non_root` (it is
+not running as uid 0). Losing one of these is the opposite problem: code still
+runs, with a wall down. The report says so plainly and names the off switch,
+because a message telling you no safety was lost would be exactly backwards.
 
 Every answer comes from inside the container, and none of it sends traffic — the
-network question is settled by listing interfaces, not by dialling out to prove a
-call cannot be made.
+network question is settled by reading the routing table, not by dialling out to
+prove a call cannot be made. The **routing table** and not the interface list,
+because some kernels seed every new namespace with tunnel stubs (`tunl0`, `sit0`)
+and judging on interfaces would report a breach on those hosts and be wrong. A
+stub carries no route; a bridge carries a default one.
 
 A check that could not be *determined* is left out rather than guessed at. When
 nothing can run, the containment guarantees are simply absent from the report;

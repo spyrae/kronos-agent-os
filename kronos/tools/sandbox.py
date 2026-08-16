@@ -284,19 +284,31 @@ CHECK_NON_ROOT = "non_root"
 # containment means code is still running with a wall down.
 CONTAINMENT_CHECKS = frozenset({CHECK_NO_NETWORK, CHECK_READONLY_ROOT, CHECK_NON_ROOT})
 
-# Reports uid, the interfaces it can see, and whether its root filesystem took a
-# write. Everything is answered from inside the container: asking the network
-# question by dialling out would send real packets to prove they cannot be sent.
+# Reports uid, where it could route a packet, and whether its root filesystem
+# took a write. Everything is answered from inside the container: asking the
+# network question by dialling out would send the very packet it is checking for.
+#
+# The routing table, not the interface list, is what decides the network answer.
+# Some kernels put phantom tunnel stubs (tunl0, sit0) into every new namespace,
+# so `interfaces == ["lo"]` would report a breach on those hosts and be wrong —
+# and a checker that cries wolf is one people learn to ignore. A stub carries no
+# route; a bridge carries a default one. Measured empty under --network=none.
 _PROBE_CODE = f"""
 import json, os
 
 report = {{"marker": "{PROBE_MARKER}", "uid": os.getuid()}}
 
 try:
-    report["interfaces"] = sorted(os.listdir("/sys/class/net"))
+    with open("/proc/net/route") as handle:
+        report["routes"] = [line.split()[0] for line in handle.read().splitlines()[1:] if line.strip()]
 except OSError as e:
+    report["routes"] = None
+    report["routes_error"] = str(e)
+
+try:
+    report["interfaces"] = sorted(os.listdir("/sys/class/net"))
+except OSError:
     report["interfaces"] = None
-    report["interfaces_error"] = str(e)
 
 try:
     with open("/{PROBE_MARKER}", "w") as handle:
@@ -366,20 +378,26 @@ def _parse_probe(stdout: str) -> dict | None:
 
 def _containment_checks(report: dict) -> list[HealthCheck]:
     """Whether the walls the design promises are actually standing."""
-    interfaces = report.get("interfaces")
-    if interfaces is None:
+    routes = report.get("routes")
+    interfaces = report.get("interfaces") or []
+    if routes is None:
+        # Failing to read the routing table is not evidence that it is empty.
         network = HealthCheck(
             CHECK_NO_NETWORK,
             STATUS_BROKEN,
-            f"could not read the container's interfaces: {report.get('interfaces_error')}",
+            f"could not read the container's routing table: {report.get('routes_error')}",
         )
-    elif interfaces == ["lo"]:
-        network = HealthCheck(CHECK_NO_NETWORK, STATUS_OK, "loopback only")
+    elif routes:
+        network = HealthCheck(
+            CHECK_NO_NETWORK,
+            STATUS_BROKEN,
+            f"the container can route through {', '.join(sorted(set(routes)))} — --network=none is not in force",
+        )
     else:
         network = HealthCheck(
             CHECK_NO_NETWORK,
-            STATUS_BROKEN,
-            f"the container can see {', '.join(interfaces)} — --network=none is not in force",
+            STATUS_OK,
+            f"no routes ({', '.join(interfaces) or 'no interfaces'})",
         )
 
     if report.get("root_writable"):

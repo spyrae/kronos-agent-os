@@ -30,8 +30,8 @@ from kronos.tools.sandbox import (
 )
 
 # What the container really answered on a live host, measured before this was
-# written: uid 1001, loopback only, root refusing a write.
-REAL_REPORT = f'{{"marker": "{PROBE_MARKER}", "uid": 1001, "interfaces": ["lo"], "root_writable": false}}'
+# written: uid 1001, an empty routing table, loopback only, root refusing a write.
+REAL_REPORT = f'{{"marker": "{PROBE_MARKER}", "uid": 1001, "routes": [], "interfaces": ["lo"], "root_writable": false}}'
 
 
 @pytest.fixture
@@ -176,11 +176,12 @@ async def test_chatter_before_the_report_does_not_break_parsing(docker, workspac
 
 
 @pytest.mark.asyncio
-async def test_a_container_with_a_network_is_reported(docker, workspace, monkeypatch):
+async def test_a_container_that_can_route_somewhere_is_reported(docker, workspace, monkeypatch):
     """--network=none quietly not applying is a sandbox that reaches the internet."""
     container(
         monkeypatch,
-        stdout=f'{{"marker": "{PROBE_MARKER}", "uid": 1001, "interfaces": ["eth0", "lo"], "root_writable": false}}',
+        stdout=f'{{"marker": "{PROBE_MARKER}", "uid": 1001, "routes": ["eth0", "eth0"], '
+        '"interfaces": ["eth0", "lo"], "root_writable": false}',
     )
 
     checks = by_name(await check_sandbox_health())
@@ -190,9 +191,31 @@ async def test_a_container_with_a_network_is_reported(docker, workspace, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_a_phantom_tunnel_interface_is_not_a_breach(docker, workspace, monkeypatch):
+    """Some kernels seed every new namespace with tunl0/sit0 stubs.
+
+    Judging on the interface list would call those hosts breached and be wrong,
+    and a checker that cries wolf is one people stop reading. A stub carries no
+    route; that is the difference that matters.
+    """
+    container(
+        monkeypatch,
+        stdout=f'{{"marker": "{PROBE_MARKER}", "uid": 1001, "routes": [], '
+        '"interfaces": ["lo", "sit0", "tunl0"], "root_writable": false}',
+    )
+
+    checks = by_name(await check_sandbox_health())
+
+    assert checks[CHECK_NO_NETWORK].status == STATUS_OK
+    assert "tunl0" in checks[CHECK_NO_NETWORK].detail, "still worth naming for diagnosis"
+
+
+@pytest.mark.asyncio
 async def test_a_writable_root_is_reported(docker, workspace, monkeypatch):
     container(
-        monkeypatch, stdout=f'{{"marker": "{PROBE_MARKER}", "uid": 1001, "interfaces": ["lo"], "root_writable": true}}'
+        monkeypatch,
+        stdout=f'{{"marker": "{PROBE_MARKER}", "uid": 1001, "routes": [], '
+        '"interfaces": ["lo"], "root_writable": true}',
     )
 
     checks = by_name(await check_sandbox_health())
@@ -203,7 +226,8 @@ async def test_a_writable_root_is_reported(docker, workspace, monkeypatch):
 @pytest.mark.asyncio
 async def test_running_as_root_is_reported(docker, workspace, monkeypatch):
     container(
-        monkeypatch, stdout=f'{{"marker": "{PROBE_MARKER}", "uid": 0, "interfaces": ["lo"], "root_writable": false}}'
+        monkeypatch,
+        stdout=f'{{"marker": "{PROBE_MARKER}", "uid": 0, "routes": [], "interfaces": ["lo"], "root_writable": false}}',
     )
 
     checks = by_name(await check_sandbox_health())
@@ -212,17 +236,18 @@ async def test_running_as_root_is_reported(docker, workspace, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_unreadable_interfaces_are_not_taken_for_containment(docker, workspace, monkeypatch):
-    """Failing to see the interfaces is not evidence there are none."""
+async def test_an_unreadable_routing_table_is_not_taken_for_containment(docker, workspace, monkeypatch):
+    """Failing to read the table is not evidence that it is empty."""
     container(
         monkeypatch,
-        stdout=f'{{"marker": "{PROBE_MARKER}", "uid": 1001, "interfaces": null, "interfaces_error": "no /sys", "root_writable": false}}',
+        stdout=f'{{"marker": "{PROBE_MARKER}", "uid": 1001, "routes": null, '
+        '"routes_error": "no /proc", "interfaces": ["lo"], "root_writable": false}',
     )
 
     checks = by_name(await check_sandbox_health())
 
     assert checks[CHECK_NO_NETWORK].status == STATUS_BROKEN
-    assert "no /sys" in checks[CHECK_NO_NETWORK].detail
+    assert "no /proc" in checks[CHECK_NO_NETWORK].detail
 
 
 # --- housekeeping ---------------------------------------------------------------
