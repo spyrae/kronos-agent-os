@@ -1819,6 +1819,35 @@ def run_acquire_check(as_json: bool) -> int:
     return 1 if broken else 0
 
 
+def run_mcp_check(as_json: bool) -> int:
+    """Which MCP servers still hand over their tools.
+
+    Slow on purpose — it starts every server the way startup does, one at a
+    time. Two of them were dead for months precisely because nothing ever asked.
+    """
+    import asyncio
+
+    from kronos.health import STATUS_BROKEN, STATUS_OFF
+    from kronos.tools.manager import check_mcp_health
+
+    results = asyncio.run(check_mcp_health())
+    broken = [r for r in results if r.status == STATUS_BROKEN]
+
+    if as_json:
+        print(json.dumps([{"server": r.name, "status": r.status, "detail": r.detail} for r in results], indent=2))
+        return 1 if broken else 0
+
+    marks = {"ok": "[OK]  ", STATUS_BROKEN: "[FAIL]", STATUS_OFF: "[--]  "}
+    for r in results:
+        print(f"{marks.get(r.status, '[??]  ')} {r.name:<17} {r.detail}")
+
+    working = [r for r in results if r.status == "ok"]
+    print(f"\n{len(working)} of {len(results)} servers working.")
+    if broken:
+        print("A broken server's tools are simply absent — nothing errors, answers get built without them.")
+    return 1 if broken else 0
+
+
 def run_sandbox_check(as_json: bool) -> int:
     """Whether the sandbox runs code, and still contains the code it runs.
 
@@ -2267,6 +2296,11 @@ def build_parser() -> argparse.ArgumentParser:
     acquire_check = acquire_sub.add_parser("check", help="probe every fetch tier against a known-good page")
     acquire_check.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
 
+    mcp_cmd = sub.add_parser("mcp", help="the external tool servers the agent loads at startup")
+    mcp_sub = mcp_cmd.add_subparsers(dest="mcp_command")
+    mcp_check = mcp_sub.add_parser("check", help="start every server and see which hand over tools")
+    mcp_check.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+
     sandbox_cmd = sub.add_parser("sandbox", help="the container the agent's own code runs in")
     sandbox_sub = sandbox_cmd.add_subparsers(dest="sandbox_command")
     sandbox_check = sandbox_sub.add_parser("check", help="run code in it, and check it still contains what it runs")
@@ -2494,6 +2528,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.acquire_command == "check":
             return run_acquire_check(args.as_json)
         parser.parse_args(["acquire", "--help"])
+        return 0
+    if args.command == "mcp":
+        if args.mcp_command == "check":
+            return run_mcp_check(args.as_json)
+        parser.parse_args(["mcp", "--help"])
         return 0
     if args.command == "sandbox":
         if args.sandbox_command == "check":
