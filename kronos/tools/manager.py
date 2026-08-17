@@ -9,8 +9,10 @@ doesn't prevent the rest from starting.
 
 import asyncio
 import logging
+import os
 import re
-from contextlib import asynccontextmanager
+import tempfile
+from contextlib import asynccontextmanager, contextmanager
 
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -27,10 +29,105 @@ log = logging.getLogger("kronos.tools.manager")
 PROBE_TIMEOUT_SECONDS = 60
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+# How much of a dying server's last words to carry into the report.
+STDERR_TAIL_LINES = 2
+STDERR_TAIL_CHARS = 200
+
+
+@contextmanager
+def _child_stderr(capture: bool):
+    """Take the subprocess stderr this process would otherwise inherit.
+
+    MCP servers write to fd 2 directly, and two different things arrive there:
+    noise nobody asked for — node deprecation warnings, a startup banner in
+    ASCII art, forty-one lines of it around a twelve-line table — and, when a
+    server dies, the traceback saying why. The protocol's own view of that death
+    is only "Connection closed", so this stream cannot simply be silenced: it is
+    the diagnosis.
+
+    Redirected at the file descriptor because that is what a child inherits.
+    ``errlog`` on the SDK's stdio client would be tidier, but
+    langchain-mcp-adapters does not pass it through.
+
+    **Only for short-lived callers.** fd 2 belongs to the whole process, so doing
+    this inside a running agent would swallow every other task's logging for the
+    duration. The CLI opts in; the daily job does not.
+    """
+    if not capture:
+        yield lambda: ""
+        return
+
+    saved = os.dup(2)
+    handle = tempfile.TemporaryFile(mode="w+")
+
+    def read_back() -> str:
+        try:
+            handle.flush()
+            os.fsync(handle.fileno())
+            handle.seek(0)
+            return handle.read()
+        except OSError:
+            return ""
+
+    try:
+        os.dup2(handle.fileno(), 2)
+        yield read_back
+    finally:
+        os.dup2(saved, 2)
+        os.close(saved)
+        handle.close()
+
+
+def _with_last_words(reason: str, stderr_text: str) -> str:
+    """Append what the server said on its way out, when it said anything.
+
+    "Connection closed" is the whole of what the protocol knows about a server
+    that started and then died — which is exactly how the two servers that were
+    broken for months looked from this side.
+    """
+    lines = [_ANSI.sub("", line).strip() for line in stderr_text.splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return reason
+    tail = " / ".join(lines[-STDERR_TAIL_LINES:])[:STDERR_TAIL_CHARS]
+    return f"{reason} — server said: {tail}"
+
+
+def describe_failure(error: BaseException) -> str:
+    """The cause a reader can act on, not the wrapper it arrived in.
+
+    A stdio server that starts and then dies surfaces through anyio as
+    ``ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)`` — true,
+    and useless. The real reason sits nested inside, sometimes two groups deep,
+    and for the two servers that were dead for months it was the only thing that
+    ever said ``AttributeError: 'Server' object has no attribute 'list_tools'``.
+
+    That mattered more than it looks: until this unwrapping, the actionable text
+    existed only in the subprocess's stderr, which is why quietening that stream
+    had to wait for this.
+    """
+    causes = []
+    for leaf in _leaf_causes(error):
+        text = f"{type(leaf).__name__}: {leaf}".strip().rstrip(":")
+        if text not in causes:
+            causes.append(text)
+    return "; ".join(causes)
+
+
+def _leaf_causes(error: BaseException) -> list[BaseException]:
+    """Flatten nested exception groups down to the exceptions that say something."""
+    if isinstance(error, BaseExceptionGroup):
+        return [leaf for sub in error.exceptions for leaf in _leaf_causes(sub)]
+    return [error]
+
+
 async def _load_server_tools(
     name: str,
     server_config: dict,
     timeout: float | None = None,
+    capture_stderr: bool = False,
 ) -> tuple[list[BaseTool], str]:
     """Load tools from one MCP server. Returns (tools, why-it-failed).
 
@@ -45,19 +142,26 @@ async def _load_server_tools(
     change when a slow-but-working server is given up on, and that is a different
     decision from bounding a daily probe.
     """
+    said = ""
     try:
-        client = MultiServerMCPClient({name: server_config})
-        tools = await (asyncio.wait_for(client.get_tools(), timeout) if timeout else client.get_tools())
+        # The capture window is exactly the child's lifetime: our own logging
+        # below must not land in what we report back as the server's words.
+        with _child_stderr(capture_stderr) as read_back:
+            try:
+                client = MultiServerMCPClient({name: server_config})
+                tools = await (asyncio.wait_for(client.get_tools(), timeout) if timeout else client.get_tools())
+            finally:
+                said = read_back()
         for tool in tools:
             tool.metadata = {**(tool.metadata or {}), "mcp_server": name}
         log.info("  [%s] loaded %d tools", name, len(tools))
         return tools, ""
     except TimeoutError:
         log.error("  [%s] did not answer within %ss — skipping", name, timeout)
-        return [], f"no answer within {timeout}s"
+        return [], _with_last_words(f"no answer within {timeout}s", said)
     except Exception as e:
         log.exception("  [%s] FAILED to load — skipping", name)
-        return [], f"{type(e).__name__}: {e}"
+        return [], _with_last_words(describe_failure(e), said)
 
 
 @asynccontextmanager
@@ -140,7 +244,7 @@ def _without_credentials(text: str, server_config: dict) -> str:
     return redact_secrets(text)
 
 
-async def check_mcp_health() -> list[HealthCheck]:
+async def check_mcp_health(capture_stderr: bool = False) -> list[HealthCheck]:
     """Start every known MCP server and report which ones hand over tools.
 
     This exists because two servers were dead for months and nothing said so.
@@ -163,7 +267,9 @@ async def check_mcp_health() -> list[HealthCheck]:
             checks.append(HealthCheck(name, STATUS_OFF, "not configured here (no credentials, or not this agent's)"))
             continue
 
-        tools, error = await _load_server_tools(name, config[name], timeout=PROBE_TIMEOUT_SECONDS)
+        tools, error = await _load_server_tools(
+            name, config[name], timeout=PROBE_TIMEOUT_SECONDS, capture_stderr=capture_stderr
+        )
         if error:
             checks.append(HealthCheck(name, STATUS_BROKEN, _without_credentials(error, config[name])[:300]))
         elif not tools:

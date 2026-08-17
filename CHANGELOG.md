@@ -4,6 +4,24 @@ All notable changes to Kronos Agent OS are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`kaos mcp check` drowned its own report** — the servers are chatty on the
+  stderr this process inherits: node deprecation warnings, a startup banner in
+  ASCII art, 41 lines of it around a 12-line table. Silencing the stream would
+  have been the wrong fix, because when a server dies that stream is the *only*
+  thing that says why: the protocol reports `Connection closed` and no more, and
+  anyio wraps even that in `ExceptionGroup: unhandled errors in a TaskGroup`. So
+  the wrapper is now unwrapped to the real exception, and the stream is captured
+  rather than discarded — noise from a server that worked is dropped, last words
+  from one that did not are printed with its failure. The historical
+  yahoo-finance break now reads `McpError: Connection closed — server said:
+  AttributeError: 'Server' object has no attribute 'list_tools'` instead of a
+  wrapper and a wall of text. Capture is at the file-descriptor level and **only
+  the CLI opts in**: fd 2 belongs to the whole process, so doing it inside a
+  running agent would swallow every other task's logging. `--verbose` leaves the
+  stream alone. Measured on prod: stderr 41 lines → 0.
+
 ### Added
 
 - **A daily check that the MCP servers still hand over their tools** — the third
