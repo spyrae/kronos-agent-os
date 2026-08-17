@@ -37,6 +37,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.handoff import run_handoff_intake
     from kronos.cron.heartbeat import run_heartbeat
     from kronos.cron.market_review import run_market_review
+    from kronos.cron.mcp_smoke import run_mcp_smoke
     from kronos.cron.memory_ask import run_memory_intake
     from kronos.cron.news_monitor import run_news_monitor
     from kronos.cron.persona_evolve import run_persona_evolution
@@ -173,6 +174,13 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # the owning agent: the daemon and image are per-host.
     scheduler.add_daily("sandbox-smoke", run_sandbox_smoke, hour_utc=8)
 
+    # MCP smoke — daily at 09:00 UTC, an hour after the sandbox probe so the
+    # three capability checks never overlap. The heaviest of them: it starts all
+    # eleven servers one at a time, about forty seconds. Guards inside to the
+    # owning agent — the binaries and the uv cache are per-host, and the one
+    # agent-scoped server is meant to be absent elsewhere.
+    scheduler.add_daily("mcp-smoke", run_mcp_smoke, hour_utc=9)
+
     # Swarm Retention — weekly Sunday 03:00 UTC. Prunes swarm_messages
     # older than MESSAGE_RETENTION_DAYS (90d). Safe on all 6 agents.
     scheduler.add_weekly("swarm-retention", run_swarm_retention, weekday=6, hour_utc=3)
@@ -212,6 +220,6 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         nexus_jobs_registered = 4
 
     total = (
-        24 + nexus_jobs_registered
-    )  # +reminders +plan-steps +handoff/council/memory intake +sla-escalation +swarm-weekly-report +persona-evolution +acquire-smoke +sandbox-smoke; signal-jobs, travel insights, people-scout and group-digest paused
+        25 + nexus_jobs_registered
+    )  # +reminders +plan-steps +handoff/council/memory intake +sla-escalation +swarm-weekly-report +persona-evolution +acquire-smoke +sandbox-smoke +mcp-smoke; signal-jobs, travel insights, people-scout and group-digest paused
     log.info("%d cron jobs registered for agent '%s'", total, me)

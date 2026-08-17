@@ -29,6 +29,7 @@ All core cron jobs are registered in `kronos/cron/setup.py` and run by the built
 | 21 | sla-escalation | Every 60 s | Periodic | `escalation.py` |
 | 22 | acquire-smoke | Daily 07:00 UTC (15:00 UTC+8) | Daily | `acquire_smoke.py` |
 | 23 | sandbox-smoke | Daily 08:00 UTC (16:00 UTC+8) | Daily | `sandbox_smoke.py` |
+| 24 | mcp-smoke | Daily 09:00 UTC (17:00 UTC+8) | Daily | `mcp_smoke.py` |
 
 Intake pollers registered alongside these: `user-reminders` (60 s),
 `handoff-intake`, `council-intake`, `memory-intake` (30 s each).
@@ -365,6 +366,31 @@ opposite things when they fail, and the message says which. See
 Run the same probe by hand with `kaos sandbox check`.
 
 **Notification:** only when a check's status *changes* — Telegram webhook plus
+NTFY, `high` priority when something is broken, `default` on recovery. Silence is
+the normal outcome.
+
+### 24. mcp-smoke
+**Schedule:** Daily 09:00 UTC (17:00 UTC+8)
+**Module:** `kronos/cron/mcp_smoke.py`
+
+Starts every known MCP server, one at a time, and reports which hand over tools.
+Guards internally to the `kronos` agent: the binaries and the uv cache are
+per-host, and the one agent-scoped server (`google-workspace`) is meant to be
+absent elsewhere.
+
+The heaviest of the three capability checks — about forty seconds for eleven
+servers, each bounded by a 60 s timeout so one that never answers cannot stall
+the job. It exists because two servers were dead for months: loading is
+resilient by design, so the agents came up with 102 tools instead of 113 and
+nothing said a word. See [MCP.md](MCP.md#checking-that-the-servers-still-work).
+
+A server missing from the built config reports `off` rather than being left out,
+so one that vanished with its API key is missed rather than forgotten. Failure
+details are stripped of the server's own credentials before reporting.
+
+Run the same probe by hand with `kaos mcp check`.
+
+**Notification:** only when a server's status *changes* — Telegram webhook plus
 NTFY, `high` priority when something is broken, `default` on recovery. Silence is
 the normal outcome.
 

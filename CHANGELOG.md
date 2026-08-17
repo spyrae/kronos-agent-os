@@ -4,6 +4,27 @@ All notable changes to Kronos Agent OS are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **A daily check that the MCP servers still hand over their tools** — the third
+  and last of the capability probes, and the one whose absence had already cost
+  something: two servers were dead for months and nothing said so. Loading is
+  resilient by design, so the agents came up with 102 tools instead of 113,
+  nothing errored, and the finance agent went on answering market questions from
+  news search alone. `kaos mcp check` and the `mcp-smoke` job start every known
+  server and report `ok` with a tool count, `broken` with the reason, or `off`
+  for one this deployment never configured. Two decisions carry it: a server
+  missing from the built config still gets a line, because a key dropped from
+  `.env` makes a server *vanish* and something that ceases to exist is exactly
+  what needs saying; and "started" is not "working" — a server that comes up
+  clean and exposes nothing is broken, however healthy it looks to a check that
+  stops at whether the process launched. Failure details are the exception's own
+  text and these configs carry API keys, so credentials are stripped by value
+  before anything is reported — including a token embedded inside a larger value.
+  Each server is bounded by a timeout; startup deliberately keeps none, since
+  giving up on a slow-but-working server at boot costs tools for the whole
+  session. Docs: [MCP](docs/MCP.md#checking-that-the-servers-still-work).
+
 ### Fixed
 
 - **Two MCP servers had been dead on every boot for months** — `fetch` and

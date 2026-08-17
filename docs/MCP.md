@@ -103,6 +103,57 @@ SERVER_REGISTRY_PATH=/path/to/servers.yaml
 
 Use `servers.example.yaml` as the public shape. Do not commit `servers.yaml`.
 
+## Checking that the servers still work
+
+Loading is resilient on purpose: each server is tried on its own, and one that
+will not start is skipped so the rest keep working. That is the right behaviour
+and it is also how two servers stayed dead for months. The agents came up with
+`Loaded 102 tools from 9/11 servers`, nothing errored, and the finance agent went
+on answering market questions from news search alone — because its tool filter
+also matched `brave`, so it kept being created with no market data in it.
+
+The break arrived without a deploy: `mcp-server-fetch` and `mcp-yahoo-finance`
+both declare `mcp>=1.6` with no upper bound, uv installed SDK 2.0, and the API
+each was written against was gone. A check that only ran at deploy time would
+have missed it too.
+
+```bash
+kaos mcp check          # start every server and see which hand over tools
+kaos mcp check --json   # same, machine-readable
+```
+
+Three outcomes per server:
+
+| | |
+|---|---|
+| `ok` | handed over N tools |
+| `broken` | failed to start, timed out, or **started and exposed nothing** |
+| `off` | not configured here — no credentials, or scoped to another agent |
+
+A server that has *vanished from the config* still gets a line. A key dropped
+from `.env` makes a server disappear entirely, and something that silently
+ceases to exist is exactly what needs saying — so the probe reports against the
+full `KNOWN_SERVERS` list rather than only what got built. A test keeps that list
+in step with the builder, since drift there would reopen the hole quietly.
+
+"Started" is deliberately not "working". A server that comes up clean and offers
+no tools contributes nothing while reading as healthy to any check that stops at
+whether the process launched.
+
+Failure details are the exception's own text, and server configs carry API keys
+in `env` — so credentials are stripped by value before anything is reported,
+including a token embedded inside a larger value (Notion's is inside a JSON
+header string). This report goes to Telegram; over-redacting an error message
+costs nothing.
+
+The same probe runs daily as the `mcp-smoke` cron job and **only speaks when
+something changes** — see [ACQUISITION.md](ACQUISITION.md#checking-that-it-still-works)
+for why silence is the design. It is the heaviest of the three capability
+checks: eleven servers started one at a time, about forty seconds, each bounded
+by a timeout so one that never answers cannot stall the job. Startup keeps no
+such timeout — giving up on a slow-but-working server at boot would cost tools
+for the whole session, which is a different decision from bounding a daily probe.
+
 ## Approvals, Audit, And Errors
 
 The current public posture is capability-gated:

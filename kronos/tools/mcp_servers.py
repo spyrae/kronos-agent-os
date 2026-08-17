@@ -42,6 +42,25 @@ def _find_uvx() -> str:
 # Drop the pin only after confirming the upstream release actually supports 2.x.
 SDK_1X = ["--with", "mcp<2"]
 
+# Every server this module can produce, configured or not. `build_mcp_config`
+# returns only the ones whose credentials are present, which means a server that
+# disappears — a key dropped from .env, a restored host missing one — leaves no
+# trace to compare against. The health check diffs against this list so that
+# vanishing reports as a capability lost rather than as nothing at all.
+KNOWN_SERVERS = (
+    "brave-search",
+    "exa",
+    "fetch",
+    "content-core",
+    "reddit",
+    "notion",
+    "google-workspace",
+    "youtube",
+    "markitdown",
+    "yahoo-finance",
+    "filesystem",
+)
+
 
 def build_mcp_config() -> dict:
     """Build MultiServerMCPClient configuration dict.
