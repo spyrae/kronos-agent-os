@@ -1819,18 +1819,26 @@ def run_acquire_check(as_json: bool) -> int:
     return 1 if broken else 0
 
 
-def run_mcp_check(as_json: bool) -> int:
+def run_mcp_check(as_json: bool, verbose: bool = False) -> int:
     """Which MCP servers still hand over their tools.
 
     Slow on purpose — it starts every server the way startup does, one at a
     time. Two of them were dead for months precisely because nothing ever asked.
+
+    The servers are chatty on stderr: node deprecation warnings, a startup banner
+    in ASCII art, forty-one lines of it around a twelve-line table. That stream
+    is taken rather than silenced, because when a server dies it is the only
+    thing that says why — the protocol reports "Connection closed" and no more.
+    Noise from a server that worked is dropped; last words from one that did not
+    are printed with it. `--verbose` leaves the stream alone for anyone who wants
+    all of it.
     """
     import asyncio
 
     from kronos.health import STATUS_BROKEN, STATUS_OFF
     from kronos.tools.manager import check_mcp_health
 
-    results = asyncio.run(check_mcp_health())
+    results = asyncio.run(check_mcp_health(capture_stderr=not verbose))
     broken = [r for r in results if r.status == STATUS_BROKEN]
 
     if as_json:
@@ -2300,6 +2308,11 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_sub = mcp_cmd.add_subparsers(dest="mcp_command")
     mcp_check = mcp_sub.add_parser("check", help="start every server and see which hand over tools")
     mcp_check.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+    mcp_check.add_argument(
+        "--verbose",
+        action="store_true",
+        help="let the servers' own stderr through instead of folding it into the report",
+    )
 
     sandbox_cmd = sub.add_parser("sandbox", help="the container the agent's own code runs in")
     sandbox_sub = sandbox_cmd.add_subparsers(dest="sandbox_command")
@@ -2531,7 +2544,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "mcp":
         if args.mcp_command == "check":
-            return run_mcp_check(args.as_json)
+            return run_mcp_check(args.as_json, args.verbose)
         parser.parse_args(["mcp", "--help"])
         return 0
     if args.command == "sandbox":

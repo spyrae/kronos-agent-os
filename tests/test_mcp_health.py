@@ -37,7 +37,7 @@ def loader(monkeypatch):
     def _respond(answers):
         calls = []
 
-        async def _load(name, config, timeout=None):
+        async def _load(name, config, timeout=None, capture_stderr=False):
             calls.append((name, timeout))
             return answers.get(name, ([FakeTool(name)], ""))
 
@@ -187,6 +187,85 @@ async def test_a_timeout_is_reported_as_broken(servers, loader):
     assert "no answer" in checks["fetch"].detail
 
 
+# --- saying why, not just that ------------------------------------------------
+
+
+def test_a_wrapper_exception_is_unwrapped_to_the_real_cause():
+    """anyio delivers a dead server as a TaskGroup ExceptionGroup.
+
+    "unhandled errors in a TaskGroup (1 sub-exception)" is true and useless, and
+    it is what this reported until the cause was dug out — the same cause that
+    only ever appeared in a journal traceback nobody read.
+    """
+    inner = AttributeError("'Server' object has no attribute 'list_tools'")
+    wrapped = BaseExceptionGroup("outer", [BaseExceptionGroup("inner", [inner])])
+
+    assert manager.describe_failure(wrapped) == "AttributeError: 'Server' object has no attribute 'list_tools'"
+
+
+def test_several_distinct_causes_are_all_named_once():
+    group = BaseExceptionGroup("outer", [ValueError("a"), ValueError("a"), KeyError("b")])
+
+    described = manager.describe_failure(group)
+
+    assert described.count("ValueError: a") == 1
+    assert "KeyError: 'b'" in described
+
+
+def test_a_plain_exception_is_left_alone():
+    assert manager.describe_failure(RuntimeError("boom")) == "RuntimeError: boom"
+
+
+def test_a_dying_server_s_last_words_reach_the_report():
+    """The protocol only knows "Connection closed"; the reason went to stderr.
+
+    Silencing that stream to clean up the table would have thrown away the one
+    thing worth reading, which is why it is captured rather than discarded.
+    """
+    said = "Traceback (most recent call last):\n  File x\nAttributeError: no attribute 'list_tools'\n"
+
+    detail = manager._with_last_words("McpError: Connection closed", said)
+
+    assert "Connection closed" in detail
+    assert "list_tools" in detail
+
+
+def test_last_words_are_stripped_of_terminal_colours():
+    """One server writes green ANSI codes; they are noise in a chat message."""
+    detail = manager._with_last_words("failed", "\x1b[32mProcessing request\x1b[0m\n")
+
+    assert "\x1b" not in detail
+    assert "Processing request" in detail
+
+
+def test_a_server_that_died_silently_gets_nothing_appended():
+    """No last words is not a reason to invent a dangling "server said:"."""
+    assert manager._with_last_words("McpError: Connection closed", "   \n\n") == "McpError: Connection closed"
+
+
+@pytest.mark.asyncio
+async def test_capture_is_off_unless_asked_for(monkeypatch):
+    """fd 2 belongs to the whole process.
+
+    Capturing it inside a running agent would swallow every other task's logging
+    for forty seconds a day, so the long-lived caller does not opt in.
+    """
+    seen = []
+
+    async def _load(name, config, timeout=None, capture_stderr=False):
+        seen.append(capture_stderr)
+        return [FakeTool()], ""
+
+    monkeypatch.setattr(manager, "build_mcp_config", lambda: {"fetch": {}})
+    monkeypatch.setattr(manager, "_load_server_tools", _load)
+
+    await manager.check_mcp_health()
+    async with manager.managed_mcp_tools():
+        pass
+
+    assert seen == [False, False]
+
+
 # --- startup keeps its own behaviour -------------------------------------------
 
 
@@ -199,7 +278,7 @@ async def test_startup_does_not_impose_the_probe_s_timeout(monkeypatch):
     """
     seen = []
 
-    async def _load(name, config, timeout=None):
+    async def _load(name, config, timeout=None, capture_stderr=False):
         seen.append(timeout)
         return [FakeTool()], ""
 
@@ -226,7 +305,7 @@ async def test_a_failure_report_never_carries_the_server_s_credentials(monkeypat
         lambda: {"brave-search": {"transport": "stdio", "env": {"BRAVE_API_KEY": secret}}},
     )
 
-    async def _load(name, config, timeout=None):
+    async def _load(name, config, timeout=None, capture_stderr=False):
         return [], f"RuntimeError: could not start with {config}"
 
     monkeypatch.setattr(manager, "_load_server_tools", _load)
@@ -251,7 +330,7 @@ async def test_a_credential_embedded_in_a_larger_value_is_redacted_too(monkeypat
         lambda: {"notion": {"transport": "stdio", "env": {"OPENAPI_MCP_HEADERS": header}}},
     )
 
-    async def _load(name, config, timeout=None):
+    async def _load(name, config, timeout=None, capture_stderr=False):
         return [], f"RuntimeError: rejected token {token}"
 
     monkeypatch.setattr(manager, "_load_server_tools", _load)

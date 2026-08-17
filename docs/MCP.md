@@ -140,11 +140,39 @@ in step with the builder, since drift there would reopen the hole quietly.
 no tools contributes nothing while reading as healthy to any check that stops at
 whether the process launched.
 
-Failure details are the exception's own text, and server configs carry API keys
-in `env` — so credentials are stripped by value before anything is reported,
-including a token embedded inside a larger value (Notion's is inside a JSON
-header string). This report goes to Telegram; over-redacting an error message
-costs nothing.
+### Saying why, not just that
+
+Two things had to be dug out before a failure line was worth reading.
+
+**The wrapper is not the cause.** anyio delivers a dead stdio server as
+`ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)` — true, and
+useless. The real exception sits nested inside, sometimes two groups deep, and
+it is unwrapped before being reported.
+
+**The protocol only knows "Connection closed".** When a server starts and then
+dies, the traceback explaining it goes to the server's own stderr, which this
+process inherits. That stream is therefore *captured*, not silenced: noise from
+a server that worked is dropped, and the last words of one that did not are
+printed with its failure. A real example, the historical yahoo-finance break:
+
+```
+[FAIL] yahoo-finance    McpError: Connection closed — server said:
+                        @server.list_tools() / AttributeError: 'Server' object
+                        has no attribute 'list_tools'
+```
+
+Capturing is at the file-descriptor level, because that is what a child
+inherits, and **only the CLI opts in**. fd 2 belongs to the whole process, so
+doing it inside a running agent would swallow every other task's logging for
+forty seconds a day. `kaos mcp check --verbose` leaves the stream alone for
+anyone who wants all of it; the daily job leaves server output in the journal
+where it belongs.
+
+Failure details are the exception's own text plus that captured tail, and server
+configs carry API keys in `env` — so credentials are stripped by value before
+anything is reported, including a token embedded inside a larger value (Notion's
+is inside a JSON header string). This report goes to Telegram; over-redacting an
+error message costs nothing.
 
 The same probe runs daily as the `mcp-smoke` cron job and **only speaks when
 something changes** — see [ACQUISITION.md](ACQUISITION.md#checking-that-it-still-works)
