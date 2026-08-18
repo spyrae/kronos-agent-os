@@ -6,6 +6,13 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Fixed
 
+- **Two analytics sources reported a crash instead of a refusal** — when the
+  Langfuse or Supabase API answered with something other than the expected
+  shape, `collect()` fell through to `'list' object has no attribute 'get'`
+  rather than naming the problem. Both now check the shape and say what was
+  wrong. Recovered, with their tests, from a month-old branch whose other work
+  had already reached main by another route.
+
 - **`kaos mcp check` drowned its own report** — the servers are chatty on the
   stderr this process inherits: node deprecation warnings, a startup banner in
   ASCII art, 41 lines of it around a 12-line table. Silencing the stream would
