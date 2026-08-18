@@ -243,6 +243,15 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Fixed
 
+- **`brave.search` handed back Exa's results unconverted on one path** — it
+  declares `list[brave.SearchResult]`, and two of its three paths get their
+  results from Exa, whose `SearchResult` carries identical fields but is a
+  different class. One path converted, the other did not, so equality and
+  `isinstance` silently broke for anyone who believed the signature. Only
+  reachable on a host with no `BRAVE_API_KEY`, which is why it went unseen — and
+  why the recovered test that caught it passed locally and failed in CI. Every
+  route out of `search` now goes through one conversion.
+
 - **Two analytics sources reported a crash instead of a refusal** — when the
   Langfuse or Supabase API answered with something other than the expected
   shape, `collect()` fell through to `'list' object has no attribute 'get'`
