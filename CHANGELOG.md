@@ -4,31 +4,6 @@ All notable changes to Kronos Agent OS are documented here.
 
 ## [Unreleased]
 
-### Fixed
-
-- **Two analytics sources reported a crash instead of a refusal** — when the
-  Langfuse or Supabase API answered with something other than the expected
-  shape, `collect()` fell through to `'list' object has no attribute 'get'`
-  rather than naming the problem. Both now check the shape and say what was
-  wrong. Recovered, with their tests, from a month-old branch whose other work
-  had already reached main by another route.
-
-- **`kaos mcp check` drowned its own report** — the servers are chatty on the
-  stderr this process inherits: node deprecation warnings, a startup banner in
-  ASCII art, 41 lines of it around a 12-line table. Silencing the stream would
-  have been the wrong fix, because when a server dies that stream is the *only*
-  thing that says why: the protocol reports `Connection closed` and no more, and
-  anyio wraps even that in `ExceptionGroup: unhandled errors in a TaskGroup`. So
-  the wrapper is now unwrapped to the real exception, and the stream is captured
-  rather than discarded — noise from a server that worked is dropped, last words
-  from one that did not are printed with its failure. The historical
-  yahoo-finance break now reads `McpError: Connection closed — server said:
-  AttributeError: 'Server' object has no attribute 'list_tools'` instead of a
-  wrapper and a wall of text. Capture is at the file-descriptor level and **only
-  the CLI opts in**: fd 2 belongs to the whole process, so doing it inside a
-  running agent would swallow every other task's logging. `--verbose` leaves the
-  stream alone. Measured on prod: stderr 41 lines → 0.
-
 ### Added
 
 - **A daily check that the MCP servers still hand over their tools** — the third
@@ -49,25 +24,6 @@ All notable changes to Kronos Agent OS are documented here.
   Each server is bounded by a timeout; startup deliberately keeps none, since
   giving up on a slow-but-working server at boot costs tools for the whole
   session. Docs: [MCP](docs/MCP.md#checking-that-the-servers-still-work).
-
-### Fixed
-
-- **Two MCP servers had been dead on every boot for months** — `fetch` and
-  `yahoo-finance` both declare `mcp>=1.6` with no upper bound, uv honoured that
-  literally and installed SDK 2.0, and the API each of them uses is gone there:
-  `mcp-server-fetch` dies importing `McpError`, `mcp-yahoo-finance` on
-  `Server.list_tools`. The tool manager handled it correctly — skip the server,
-  keep the rest — so nothing crashed and nobody noticed. The cost was 11 tools,
-  including every piece of market data the finance agent is built on: prices,
-  history, dividends, income statement, cash flow, earnings dates. It answered
-  finance questions from news search alone and never said it was doing so. The
-  SDK is now pinned inside each server's own ephemeral environment, which leaves
-  this process on the current SDK — the two halves talk over the wire protocol,
-  which negotiates. Verified by loading their tools through the app's own client
-  on a live host: `fetch` 0 → 1, `yahoo-finance` 0 → 10.
-
-### Added
-
 - **A sandbox check that runs code, because the readiness flag never could** —
   `sandbox_ready()` asks whether Docker and the image exist, and both of this
   subsystem's real failures answered that perfectly while every run inside
@@ -285,6 +241,55 @@ All notable changes to Kronos Agent OS are documented here.
 - `kaos doctor` reports the bundle schema version and available importers.
 - New docs: [Portability](docs/PORTABILITY.md).
 
+### Fixed
+
+- **Two analytics sources reported a crash instead of a refusal** — when the
+  Langfuse or Supabase API answered with something other than the expected
+  shape, `collect()` fell through to `'list' object has no attribute 'get'`
+  rather than naming the problem. Both now check the shape and say what was
+  wrong. Recovered, with their tests, from a month-old branch whose other work
+  had already reached main by another route.
+
+- **`kaos mcp check` drowned its own report** — the servers are chatty on the
+  stderr this process inherits: node deprecation warnings, a startup banner in
+  ASCII art, 41 lines of it around a 12-line table. Silencing the stream would
+  have been the wrong fix, because when a server dies that stream is the *only*
+  thing that says why: the protocol reports `Connection closed` and no more, and
+  anyio wraps even that in `ExceptionGroup: unhandled errors in a TaskGroup`. So
+  the wrapper is now unwrapped to the real exception, and the stream is captured
+  rather than discarded — noise from a server that worked is dropped, last words
+  from one that did not are printed with its failure. The historical
+  yahoo-finance break now reads `McpError: Connection closed — server said:
+  AttributeError: 'Server' object has no attribute 'list_tools'` instead of a
+  wrapper and a wall of text. Capture is at the file-descriptor level and **only
+  the CLI opts in**: fd 2 belongs to the whole process, so doing it inside a
+  running agent would swallow every other task's logging. `--verbose` leaves the
+  stream alone. Measured on prod: stderr 41 lines → 0.
+- **Two MCP servers had been dead on every boot for months** — `fetch` and
+  `yahoo-finance` both declare `mcp>=1.6` with no upper bound, uv honoured that
+  literally and installed SDK 2.0, and the API each of them uses is gone there:
+  `mcp-server-fetch` dies importing `McpError`, `mcp-yahoo-finance` on
+  `Server.list_tools`. The tool manager handled it correctly — skip the server,
+  keep the rest — so nothing crashed and nobody noticed. The cost was 11 tools,
+  including every piece of market data the finance agent is built on: prices,
+  history, dividends, income statement, cash flow, earnings dates. It answered
+  finance questions from news search alone and never said it was doing so. The
+  SDK is now pinned inside each server's own ephemeral environment, which leaves
+  this process on the current SDK — the two halves talk over the wire protocol,
+  which negotiates. Verified by loading their tools through the app's own client
+  on a live host: `fetch` 0 → 1, `yahoo-finance` 0 → 10.
+- Two agents could answer each other without end. A peer replying to my message
+  sets `reply_to_me` → `explicit_to_me` → Tier 1, and Tier 1 deliberately
+  bypasses the cooldown, the implicit-reply cap and arbitration; my answer is
+  itself a reply to theirs, so the loop had no exit. Peer-sourced Tier 1 is now
+  bounded per window (`MAX_PEER_EXCHANGES` / `PEER_EXCHANGE_WINDOW`); the user's
+  explicit address is untouched. Found by the new local swarm bus on its first
+  run.
+- `kronos.portability.export` and `import_` resolve `kronos.workspace.ws` at
+  call time instead of binding it at import time; a module-level binding
+  ignored a swapped workspace, which also made an earlier test pass against
+  the wrong directory.
+
 ### Changed
 
 - **The browser tier is installed by deploy, and reads pages through the API that
@@ -321,20 +326,6 @@ All notable changes to Kronos Agent OS are documented here.
   section in `policy.yaml`.
 - `kronos.audit.redact_secrets` is now public (was `_redact_string`'s inline
   loop) so exports and audit logs share one copy of the credential patterns.
-
-### Fixed
-
-- Two agents could answer each other without end. A peer replying to my message
-  sets `reply_to_me` → `explicit_to_me` → Tier 1, and Tier 1 deliberately
-  bypasses the cooldown, the implicit-reply cap and arbitration; my answer is
-  itself a reply to theirs, so the loop had no exit. Peer-sourced Tier 1 is now
-  bounded per window (`MAX_PEER_EXCHANGES` / `PEER_EXCHANGE_WINDOW`); the user's
-  explicit address is untouched. Found by the new local swarm bus on its first
-  run.
-- `kronos.portability.export` and `import_` resolve `kronos.workspace.ws` at
-  call time instead of binding it at import time; a module-level binding
-  ignored a swapped workspace, which also made an earlier test pass against
-  the wrong directory.
 
 ### Removed
 
