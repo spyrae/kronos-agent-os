@@ -4,6 +4,8 @@ All notable changes to Kronos Agent OS are documented here.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-18
+
 ### Added
 
 - **A daily check that the MCP servers still hand over their tools** — the third
