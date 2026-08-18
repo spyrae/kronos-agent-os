@@ -44,16 +44,22 @@ class SearchResult:
     description: str
 
 
-def _fallback_to_exa(query: str, count: int, freshness: str, reason: str) -> list[SearchResult]:
-    """Call Exa with the same Brave-compatible signature.
+def _as_brave_results(exa_results) -> list[SearchResult]:
+    """Exa's results in Brave's shape.
 
-    Translates Exa's SearchResult to Brave's SearchResult so callers
-    that expect ``kronos.tools.brave.SearchResult`` keep working
-    (the two dataclasses have identical fields).
+    The two dataclasses have identical fields but are different classes, so
+    handing Exa's straight back breaks equality and isinstance for every caller
+    that believed the declared return type. Every path out of `search` that got
+    its results from Exa goes through here — one of them used to not, and only
+    on hosts with no Brave key, which is why it survived so long.
     """
-    log.warning("Brave unavailable (%s) — falling back to Exa for '%s'", reason, query[:60])
-    exa_results = _exa.search(query, count=count, freshness=freshness)
     return [SearchResult(title=r.title, url=r.url, description=r.description) for r in exa_results]
+
+
+def _fallback_to_exa(query: str, count: int, freshness: str, reason: str) -> list[SearchResult]:
+    """Call Exa with the same Brave-compatible signature."""
+    log.warning("Brave unavailable (%s) — falling back to Exa for '%s'", reason, query[:60])
+    return _as_brave_results(_exa.search(query, count=count, freshness=freshness))
 
 
 def search(query: str, count: int = 10, freshness: str = "pd") -> list[SearchResult]:
@@ -73,8 +79,9 @@ def search(query: str, count: int = 10, freshness: str = "pd") -> list[SearchRes
     if _brave_unavailable_until > now_mono:
         if settings.brave_api_key:
             return _fallback_to_exa(query, count, freshness, "quota cooldown")
-        # No Brave key configured at all — go straight to Exa silently.
-        return _exa.search(query, count=count, freshness=freshness)
+        # No Brave key configured at all — go straight to Exa, without the
+        # warning that a key-holder would want to see.
+        return _as_brave_results(_exa.search(query, count=count, freshness=freshness))
 
     if not settings.brave_api_key:
         # No Brave key: try Exa instead of returning empty (preserves callers).
