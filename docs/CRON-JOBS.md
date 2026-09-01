@@ -7,16 +7,16 @@ All core cron jobs are registered in `kronos/cron/setup.py` and run by the built
 | # | Name | Schedule | Type | Module |
 |---|------|----------|------|--------|
 | 1 | heartbeat | Every 30 min | Periodic | `heartbeat.py` |
-| 2 | news-monitor | Daily 00:00 UTC (08:00 UTC+8) | Daily | `news_monitor.py` |
+| 2 | news-monitor | Weekly Sun 01:00 UTC (09:00 UTC+8) | Weekly | `news_monitor.py` |
 | 3 | personal-observer | Daily 23:00 UTC (07:00 UTC+8) | Daily | `personal_observer.py` |
 | 4 | group-digest | Daily 01:00 UTC (09:00 UTC+8) | Daily | `group_digest.py` |
 | 5 | signal-jobs | Paused | Daily | `signal_jobs.py` |
-| 6 | signal-ideas | Daily 04:00 UTC (12:00 UTC+8) | Daily | `signal_ideas.py` |
+| 6 | signal-ideas | Weekly Sun 01:00 UTC (09:00 UTC+8) | Weekly | `signal_ideas.py` |
 | 7 | signal-travel-insights | Paused | Daily | `signal_travel.py` |
 | 8 | daily-scope | Daily 14:00 UTC (22:00 UTC+8) | Daily | `personal_observer.py` |
 | 9 | email-expenses | Daily 00:00 UTC (08:00 UTC+8) | Daily | `email_expenses.py` |
 | 10 | sleep-compute | Daily 03:00 UTC (11:00 UTC+8) | Daily | `sleep_compute.py` |
-| 11 | self-improve | Daily 22:00 UTC (06:00 UTC+8) | Daily | `self_improve.py` |
+| 11 | self-improve | Paused (2026-09-01) | Daily | `self_improve.py` |
 | 12 | expense-digest | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `expense_digest.py` |
 | 13 | people-scout | Weekly Sun 02:00 UTC (10:00 UTC+8) | Weekly | `people_scout.py` |
 | 14 | skill-improve | Weekly Sun 20:00 UTC (04:00 UTC+8) | Weekly | `skill_improve.py` |
@@ -46,7 +46,7 @@ Reads `workspace/HEARTBEAT.md` tasks + queries Notion DB for current tasks. Send
 **Notification:** Webhook → Telegram DM
 
 ### 2. news-monitor
-**Schedule:** Daily 00:00 UTC
+**Schedule:** Weekly Sunday 01:00 UTC (09:00 UTC+8 — Бали). Daily 00:00 UTC until 2026-09-01.
 **Module:** `kronos/cron/news_monitor.py`
 
 Daily news digest pipeline:
@@ -119,7 +119,7 @@ Signal Intelligence hiring digest:
 **Notification:** Bot API → Telegram `Digest: Jobs` topic
 
 ### 5. signal-ideas
-**Schedule:** Daily 04:00 UTC
+**Schedule:** Weekly Sunday 01:00 UTC (09:00 UTC+8 — Бали), same slot as news-monitor. Daily 04:00 UTC until 2026-09-01.
 **Module:** `kronos/cron/signal_ideas.py`
 
 Product/business ideas digest:
@@ -176,7 +176,7 @@ Nightly memory consolidation:
 **Notification:** Webhook → Telegram DM (entities added, relations, insights)
 
 ### 9. self-improve
-**Schedule:** Daily 22:00 UTC
+**Schedule:** Paused since 2026-09-01 (was daily 22:00 UTC). Registration is commented out in `kronos/cron/setup.py`; the runner is intact.
 **Module:** `kronos/cron/self_improve.py`
 
 Daily agent self-improvement:
@@ -425,7 +425,7 @@ topics can be configured independently:
 |---------|-------------|-------------------------|-------------------|
 | `TOPIC_DIGEST_NEWS` | `Digest: News` | `TELEGRAM_DIGEST_NEWS_AGENT=kronos` | `news-monitor`, `group-digest` |
 | `TOPIC_JB_COMPETITORS` | `JB: Competitors Status` | `TELEGRAM_JB_COMPETITORS_AGENT=nexus` | paused |
-| `TOPIC_JB_SYSTEM` | `JB: System Status` | `TELEGRAM_JB_SYSTEM_AGENT=nexus` | analytics pulse/weekly/alerts, SEO/GEO |
+| `TOPIC_JB_SYSTEM` | `JB: System Status` | `TELEGRAM_JB_SYSTEM_AGENT=nexus` | analytics pulse/weekly/alerts (SEO/GEO paused 2026-09-01) |
 | `TOPIC_DIGEST_JOBS` | `Digest: Jobs` | `TELEGRAM_DIGEST_JOBS_AGENT=kronos` | `signal-jobs` |
 | `TOPIC_DIGEST_IDEAS` | `Digest: Product/Business Ideas` | `TELEGRAM_DIGEST_IDEAS_AGENT=kronos` | `signal-ideas` |
 | `TOPIC_JB_TRAVEL_INSIGHTS` | `JB: Travel Insights` | `TELEGRAM_JB_TRAVEL_INSIGHTS_AGENT=kronos` | paused |
