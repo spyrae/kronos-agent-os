@@ -10,16 +10,19 @@ from kronos.workspace import Workspace
 
 class SchedulerSpy:
     def __init__(self):
+        # jobs mirrors Scheduler.jobs — setup_cron_jobs logs len(scheduler.jobs).
+        self.jobs = {}
         self.daily = {}
 
-    def add_periodic(self, name, _func, interval_seconds):
-        pass
+    def add_periodic(self, name, func, interval_seconds):
+        self.jobs[name] = func
 
     def add_daily(self, name, func, hour_utc):
+        self.jobs[name] = func
         self.daily[name] = (func, hour_utc)
 
-    def add_weekly(self, name, _func, weekday, hour_utc):
-        pass
+    def add_weekly(self, name, func, weekday, hour_utc):
+        self.jobs[name] = func
 
 
 async def test_personal_observer_cron_scans_renders_and_sends(monkeypatch, tmp_path):

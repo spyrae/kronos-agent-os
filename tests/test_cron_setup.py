@@ -11,16 +11,21 @@ from kronos.cron.signal_travel import run_travel_insights_digest
 
 class _SchedulerSpy:
     def __init__(self) -> None:
-        self.names: list[str] = []
+        # Mirrors Scheduler.jobs — setup_cron_jobs logs len(scheduler.jobs).
+        self.jobs: dict[str, object] = {}
 
-    def add_periodic(self, name, _func, interval_seconds):
-        self.names.append(name)
+    @property
+    def names(self) -> list[str]:
+        return list(self.jobs)
 
-    def add_daily(self, name, _func, hour_utc):
-        self.names.append(name)
+    def add_periodic(self, name, func, interval_seconds):
+        self.jobs[name] = func
 
-    def add_weekly(self, name, _func, weekday, hour_utc):
-        self.names.append(name)
+    def add_daily(self, name, func, hour_utc):
+        self.jobs[name] = func
+
+    def add_weekly(self, name, func, weekday, hour_utc):
+        self.jobs[name] = func
 
 
 def test_nexus_exclusive_reports_register_only_enabled_jobs_on_nexus(monkeypatch):
