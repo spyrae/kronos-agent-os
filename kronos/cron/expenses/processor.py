@@ -57,7 +57,7 @@ from kronos.cron.expenses.extract import (
 from kronos.cron.expenses.gmail import archiving_enabled, get_gmail_client
 from kronos.cron.expenses.ledger import get_ledger
 from kronos.cron.notify import TOPIC_FINANCE, send_bot_api
-from kronos.tools.expense import USER_TZ
+from kronos.tools.expense import FALLBACK_RATE_NOTE, USER_TZ
 
 log = logging.getLogger("kronos.cron.expenses.processor")
 
@@ -142,9 +142,13 @@ class _Report:
         self.recorded: list[str] = []  # write result lines (real) / previews (dry)
         self.pending: list[str] = []  # lines for charges that could not be written
         self.sources: list[str] = []  # sources that returned mail
+        self.stale_rate: list[str] = []  # charges priced past the end of the budget
 
     def add_recorded(self, line: str) -> None:
         self.recorded.append(line)
+
+    def add_stale_rate(self, line: str) -> None:
+        self.stale_rate.append(line)
 
     def add_pending(self, line: str) -> None:
         self.pending.append(line)
@@ -390,6 +394,10 @@ def _handle_expense(
         return "error", None, None
 
     report.add_recorded(f"[{msg.source}] {result}{fallback_note}")
+    # add_expense converts past an exhausted budget rather than dropping the conversion;
+    # its marker is the only signal, so lift it into its own block in the report.
+    if FALLBACK_RATE_NOTE in result:
+        report.add_stale_rate(f"[{msg.source}] {exp.amount:,.0f} {exp.currency} — {exp.description}")
     counts["recorded"] += 1
     return "recorded", amount_idr, date
 
@@ -439,6 +447,14 @@ def _format_report(counts: dict[str, int], report: _Report, open_pending_rows, a
     ]
     if not report.dry_run and not archiving_on:
         lines.append("<i>Архивация выключена — письма остаются в инбоксе.</i>")
+
+    if report.stale_rate:
+        lines.append(
+            f"\n🏦 <b>Бюджет IDR исчерпан</b> — {len(report.stale_rate)} расход(ов) пересчитаны "
+            f"по курсу последнего транша:"
+        )
+        lines.extend(f"  {line}" for line in report.stale_rate)
+        lines.append("<i>Пополни бюджет, чтобы курс снова считался по факту покупки рупий.</i>")
 
     if report.recorded:
         lines.append("\n<b>Записано:</b>")

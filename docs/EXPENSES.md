@@ -42,35 +42,41 @@ IDR per 1 unit.
 Legacy tranches without a USD rate still produce `Amount_RUB`; `Amount_USD` and
 `Rate_USD` are left empty until the consumed tranche carries an IDR/USD rate.
 
-Important RUB invariant (only RUB, tranches untouched):
+Important RUB invariant (tranches read for rates, never spent):
 
 ```text
 Amount_RUB = original RUB amount
-Amount_IDR = empty      Amount_USD = empty
-Rate = empty            Rate_USD = empty
+Amount_USD = round(Amount_RUB / cross_rate, 2)   cross_rate = Rate_USD / Rate  (RUB per 1 USD)
+Amount_IDR = empty
+Rate, Rate_USD = the newest tranche's rates (so the cross rate stays visible)
 ```
 
-Example:
+Example (newest tranche 233.5 IDR/RUB, 16,300 IDR/USD → 69.81 RUB per USD):
 
 ```text
 496 ₽ JourneyBay hosting
-Amount_RUB = 496 ; everything else empty
+Amount_RUB = 496 ; Amount_USD = 7.11 ; Rate = 233.5 ; Rate_USD = 16,300
 ```
 
-Important USD invariant (only USD, tranches untouched):
+Important USD invariant (the mirror image):
 
 ```text
 Amount_USD = original USD amount
-Amount_IDR = empty      Amount_RUB = empty
-Rate = empty            Rate_USD = empty
+Amount_RUB = round(Amount_USD * cross_rate)
+Amount_IDR = empty
+Rate, Rate_USD = the newest tranche's rates
 ```
 
 Example:
 
 ```text
 $12.50 ChatGPT subscription
-Amount_USD = 12.5 ; everything else empty
+Amount_USD = 12.5 ; Amount_RUB = 873 ; Rate = 233.5 ; Rate_USD = 16,300
 ```
+
+With no `BUDGET.md`, no tranche, or only legacy tranches (no USD rate), there is
+no cross rate: the original amount is still written and the derived side stays
+empty. A RUB or USD charge never deducts from the IDR budget.
 
 ## FIFO budget rules
 
@@ -87,6 +93,14 @@ Amount_USD = 12.5 ; everything else empty
 - FIFO applies only to IDR expenses. RUB-native and USD-native expenses never
   read or update tranches.
 - FIFO consumes the oldest active tranche first.
+- **Budget deficit:** a charge larger than the remaining budget is never left
+  unconverted. FIFO drains what is available, prices the shortfall at the
+  **newest** tranche's rates, and drives that tranche's remainder negative. The
+  reply carries `FALLBACK_RATE_NOTE`, which the email pipeline lifts into a
+  dedicated "Бюджет IDR исчерпан" block in its Telegram report.
+- The parked negative remainder is a real debt — those rupiah were spent — so
+  `add_tranche` settles it out of the next top-up before crediting the rest.
+  Without that, the same money would be available to spend twice.
 - If an expense spans multiple tranches, `Rate`/`Rate_USD` are the **effective**
   IDR/RUB and IDR/USD rates for that expense.
 - `Amount_USD` is only written when **every** consumed tranche has a USD rate;
