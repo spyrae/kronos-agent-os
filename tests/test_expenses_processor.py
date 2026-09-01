@@ -422,3 +422,35 @@ async def test_already_processed_is_not_refetched(ledger, notes):
     assert counts["emails"] == 0
     assert writer.calls == []
     assert gmail.archived == []
+
+
+@pytest.mark.asyncio
+async def test_stale_rate_charges_get_their_own_report_block(ledger, notes):
+    """A charge converted past the exhausted budget is called out, not buried in the list."""
+    gmail = FakeGmail(
+        {"grab": [{"message_id": "g1", "thread_id": ""}]},
+        {"g1": EmailMessage("g1", "Grab receipt 250,000 IDR", "grab")},
+    )
+    mapping = {"g1": [ExtractedExpense("GrabFood", 250000, "IDR", "Food", 0.9, "2026-07-05")]}
+    writer = Writer(result=f"✅ 'GrabFood' — 250,000 IDR | {proc.FALLBACK_RATE_NOTE} (223,597 IDR сверх остатка)")
+
+    counts, _ = await _run(gmail, ledger, notes, mapping=mapping, writer=writer)
+
+    assert counts["recorded"] == 1
+    report = notes.captured[0][0]
+    assert "Бюджет IDR исчерпан" in report
+    assert "1 расход(ов) пересчитаны" in report
+    assert "[grab] 250,000 IDR — GrabFood" in report
+
+
+@pytest.mark.asyncio
+async def test_normal_charge_leaves_no_stale_rate_block(ledger, notes):
+    gmail = FakeGmail(
+        {"grab": [{"message_id": "g1", "thread_id": ""}]},
+        {"g1": EmailMessage("g1", "Grab receipt 41,500 IDR", "grab")},
+    )
+    mapping = {"g1": [ExtractedExpense("GrabFood", 41500, "IDR", "Food", 0.9, "2026-07-05")]}
+
+    await _run(gmail, ledger, notes, mapping=mapping, writer=Writer(result="✅ 'GrabFood' — 41,500 IDR = 191 ₽"))
+
+    assert "Бюджет IDR исчерпан" not in notes.captured[0][0]
