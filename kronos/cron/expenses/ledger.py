@@ -10,9 +10,11 @@ plus a small key/value ``meta`` table for the run watermark:
   later email (e.g. the bank's copy of a Grab charge) can be recognised as a
   cross-source duplicate.
 
-* ``pending_expenses`` — expenses whose category the extractor/auditor could not
-  determine confidently. Held here (NOT written to Notion, email NOT archived)
-  until the user resolves the category from chat, then promoted to a real expense.
+* ``pending_expenses`` — expenses the pipeline could not write: an unsupported
+  currency, or a charge the audit pass rejected. Held here (NOT written to
+  Notion, email NOT archived) until the user resolves it from chat, then
+  promoted to a real expense. An unclear category no longer lands here — it is
+  recorded under the fallback category instead.
 
 State machines::
 
