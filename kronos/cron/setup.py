@@ -102,15 +102,14 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # publishes to the same Digest:News topic at 00:00 UTC, so group-digest at
     # 01:00 produced a second, duplicate message. GROUPS.md Telegram sources are
     # kept intact for a future merge into Signal Intelligence. To re-enable:
-    # uncomment the import above + this line, bump the job count below back to
-    # 15, then restart the kronos agent.
+    # uncomment the import above + this line, then restart the kronos agent.
     # scheduler.add_daily("group-digest", run_group_digest, hour_utc=1)
 
     # Jobs Digest — daily at 02:00 UTC (dedicated Signal Intelligence topic).
     # DISABLED 2026-06-11: paused — job-search signals are not being collected
     # for now. The pipeline, config fields and Telegram topic stay intact.
-    # To re-enable: uncomment the import above + this line, bump the job count
-    # below back to 16, then restart the kronos agent.
+    # To re-enable: uncomment the import above + this line, then restart the
+    # kronos agent.
     # scheduler.add_daily("signal-jobs", run_jobs_digest, hour_utc=2)
 
     # Product/Business Ideas — weekly Sunday 01:00 UTC (09:00 WITA, Бали), the
@@ -120,8 +119,8 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
 
     # JourneyBay Travel Insights — daily at 05:00 UTC (dedicated topic).
     # DISABLED 2026-07-03: stop all collection/analysis/publication for now.
-    # To re-enable: uncomment the import above + this line, bump the job count
-    # below back to 17, then restart the kronos agent.
+    # To re-enable: uncomment the import above + this line, then restart the
+    # kronos agent.
     # scheduler.add_daily("signal-travel-insights", run_travel_insights_digest, hour_utc=5)
 
     # Daily Scope — daily at 14:00 UTC (22:00 UTC+8)
@@ -130,8 +129,8 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # Self-Improve — daily at 22:00 UTC (was: kronos-self-improve.timer).
     # DISABLED 2026-09-01: the daily self-improvement report is not wanted. The
     # runner, its learning records and the /self-improve entry points stay
-    # intact. To re-enable: uncomment the import above + this line, bump the job
-    # count below back to 25, then restart the agents.
+    # intact. To re-enable: uncomment the import above + this line, then restart
+    # the agents.
     # scheduler.add_daily("self-improve", run_self_improve, hour_utc=22)
 
     # Skill Improve — weekly Sunday 20:00 UTC (was: kronos-skill-improve.timer)
@@ -145,8 +144,8 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # DISABLED 2026-07-05: paused — LinkedIn profile discovery is not needed for
     # now. The runner, focus rotation, criteria and SEEN.md tracking stay intact.
     # To re-enable: uncomment the import above + this line, flip
-    # PEOPLE_SCOUT_ENABLED back to True in people_scout.py, bump the job count
-    # below back to 16, then restart the kronos agent.
+    # PEOPLE_SCOUT_ENABLED back to True in people_scout.py, then restart the
+    # kronos agent.
     # scheduler.add_weekly("people-scout", run_people_scout, weekday=6, hour_utc=2)
 
     # User Model — weekly Wednesday 20:00 UTC (was: kronos-user-model.timer)
@@ -203,8 +202,6 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     scheduler.add_weekly("swarm-weekly-report", run_swarm_weekly_report, weekday=6, hour_utc=6)
 
     # ── Agent-exclusive jobs (only registered on the owning agent) ──────
-    nexus_jobs_registered = 0
-
     if _AGENT_EXCLUSIVE_JOBS.get("analytics-weekly") == me:
         # Daily analytics pulse at 01:00 UTC = 04:00 MSK — before user wakes up.
         scheduler.add_daily("analytics-pulse", run_analytics_pulse, hour_utc=1)
@@ -220,18 +217,14 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
         # DISABLED 2026-09-01: weekly SEO/GEO report paused. The checker, its
         # keyword/question sets and the daily GSC refresh helper stay intact.
         # To re-enable: restore the `from kronos.cron.seo_geo_check import
-        # run_seo_geo_weekly` import above this block, uncomment this line, bump
-        # nexus_jobs_registered back to 4, then restart the nexus agent.
+        # run_seo_geo_weekly` import above this block, uncomment this line, then
+        # restart the nexus agent.
         # scheduler.add_weekly("seo-geo-weekly", run_seo_geo_weekly, weekday=0, hour_utc=3)
         # DISABLED 2026-07-03: stop all competitor collection/analysis/publication
         # for JB: Competitors Status. To re-enable: import
-        # run_competitor_weekly above, uncomment this line, bump
-        # nexus_jobs_registered back to 5, then restart the nexus agent.
+        # run_competitor_weekly above, uncomment this line, then restart the
+        # nexus agent.
         # scheduler.add_weekly("competitor-weekly", run_competitor_weekly, weekday=0, hour_utc=6)
         scheduler.add_weekly("analytics-weekly", run_analytics_weekly, weekday=0, hour_utc=9)
-        nexus_jobs_registered = 3
 
-    total = (
-        24 + nexus_jobs_registered
-    )  # +reminders +plan-steps +handoff/council/memory intake +sla-escalation +swarm-weekly-report +persona-evolution +acquire-smoke +sandbox-smoke +mcp-smoke; signal-jobs, travel insights, people-scout, group-digest, self-improve and seo-geo-weekly paused
-    log.info("%d cron jobs registered for agent '%s'", total, me)
+    log.info("%d cron jobs registered for agent '%s'", len(scheduler.jobs), me)
