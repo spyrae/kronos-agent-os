@@ -1,3 +1,11 @@
+# CI
+#
+# The PR is the gate; the merge push only produces the quality snapshot.
+# lockfile, evals and dashboard-ui are pull_request-only — re-running them on
+# the merge commit repeats checks the PR just passed (Actions quota, Sep 2026).
+# lint -> test -> quality-report stays on push: quality-report dispatches the
+# report to the FutureCraft dashboard, and it needs both as `needs`.
+
 name: CI
 
 on:
@@ -22,6 +30,7 @@ jobs:
 
   lockfile:
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -55,6 +64,7 @@ jobs:
 
   evals:
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     needs: lint
     steps:
       - uses: actions/checkout@v7
@@ -158,6 +168,7 @@ jobs:
 
   dashboard-ui:
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
