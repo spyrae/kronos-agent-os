@@ -246,26 +246,57 @@ async def test_cross_source_duplicate_not_written_twice(ledger, notes, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_low_confidence_goes_to_pending(ledger, notes):
+async def test_low_confidence_is_recorded_as_fallback_category(ledger, notes):
     gmail = FakeGmail(
         {"permata": [{"message_id": "p1"}]},
         {"p1": EmailMessage("p1", "Permata debit IDR 500,000 at ATM", "permata")},
     )
-    mapping = {"p1": [ExtractedExpense("ATM withdrawal", 500000, "IDR", "Other", 0.2, "2026-07-05")]}
+    # Confidence below the threshold — the charge is still written, as Other.
+    mapping = {"p1": [ExtractedExpense("ATM withdrawal", 500000, "IDR", "Food", 0.2, "2026-07-05")]}
 
     counts, writer = await _run(gmail, ledger, notes, mapping=mapping)
 
-    assert counts["pending"] == 1
-    assert counts["recorded"] == 0
-    assert writer.calls == []  # not written
-    assert gmail.archived == []  # not archived until resolved
-    assert ledger.is_processed("p1") is False
-    assert ledger.has_pending("p1") is True
+    assert counts["recorded"] == 1
+    assert counts["pending"] == 0
+    assert len(writer.calls) == 1
+    assert writer.calls[0]["category"] == "Other"
+    assert ledger.has_pending("p1") is False
+    assert ledger.is_processed("p1") is True
     report = notes.captured[0][0]
-    assert "Куда отнести эти траты?" in report
-    pid = ledger.list_pending()[0]["id"]
-    assert f"#{pid}" in report  # pending shown WITH its id so it can be resolved
-    assert "ATM withdrawal" in report
+    assert "Не удалось записать" not in report
+    assert "категория по умолчанию" in report
+
+
+@pytest.mark.asyncio
+async def test_missing_category_is_recorded_as_fallback_category(ledger, notes):
+    gmail = FakeGmail(
+        {"permata": [{"message_id": "p2"}]},
+        {"p2": EmailMessage("p2", "Permata debit IDR 120,000", "permata")},
+    )
+    # No category at all, but the extractor is confident about the charge.
+    mapping = {"p2": [ExtractedExpense("Opaque merchant", 120000, "IDR", None, 0.95, "2026-07-05")]}
+
+    counts, writer = await _run(gmail, ledger, notes, mapping=mapping)
+
+    assert counts["recorded"] == 1
+    assert counts["pending"] == 0
+    assert writer.calls[0]["category"] == "Other"
+
+
+@pytest.mark.asyncio
+async def test_audit_category_wins_over_fallback(ledger, notes):
+    gmail = FakeGmail(
+        {"permata": [{"message_id": "p3"}]},
+        {"p3": EmailMessage("p3", "Permata debit IDR 90,000 Warung", "permata")},
+    )
+    mapping = {"p3": [ExtractedExpense("Warung", 90000, "IDR", None, 0.1, "2026-07-05")]}
+
+    counts, writer = await _run(gmail, ledger, notes, mapping=mapping, auditor=_auditor(ok=True, category="Food"))
+
+    assert counts["recorded"] == 1
+    assert writer.calls[0]["category"] == "Food"
+    report = notes.captured[0][0]
+    assert "категория по умолчанию" not in report
 
 
 @pytest.mark.asyncio
@@ -280,14 +311,14 @@ async def test_reasks_open_pending_from_previous_runs(ledger, notes):
         amount_idr=494340,
         expense_date="2026-07-05",
         guessed_category="Other",
-        reason="low category confidence",
+        reason="unsupported currency SGD",
     )
     # This run finds nothing new — the report must still re-ask the old pending.
     gmail = FakeGmail({"grab": []}, {})
     counts, writer = await _run(gmail, ledger, notes, mapping={})
 
     report = notes.captured[0][0]
-    assert "Куда отнести эти траты?" in report
+    assert "Не удалось записать" in report
     assert f"#{old}" in report
     assert "PEYIA BALI" in report
 

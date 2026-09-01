@@ -13,7 +13,7 @@ Per email::
       └─ for each expense:
            unsupported currency        → pending
            cross-source dup (amt+date) → duplicate (archive, no write)
-           low category confidence     → pending
+           low category confidence     → category := Other (still recorded)
            audit fails (LLM, 2nd pass) → pending
            else                        → add_expense (FIFO IDR→RUB→USD)
       └─ if anything was recorded → archive email + mark processed
@@ -28,9 +28,15 @@ recorded whole (not split) — exactly "split only when it overlaps Maybank".
 Grab still precedes wondr/permata so its richer record wins over those banks
 (the user's "dedup by amount+date, keep the more detailed one" choice).
 
+An unrecognised category never blocks a charge: a missing category, or one the
+extractor is not confident about, is written as ``FALLBACK_CATEGORY`` instead of
+being parked for the user to classify from chat. Only what genuinely cannot be
+written — an unsupported currency, or an expense the audit pass rejected — still
+lands in the pending queue.
+
 Every run posts a report to the finance topic — always, even on empty runs —
 listing how many emails were scanned, what was recorded (with amounts), what was
-deduped/skipped, and what is waiting for a category. ``dry_run=True`` performs
+deduped/skipped, and what could not be written. ``dry_run=True`` performs
 extraction + audit but writes nothing and archives nothing: a safe way to see
 what a real run would do against the live mailbox.
 """
@@ -39,6 +45,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import replace
 from datetime import datetime
 
 from kronos.config import settings
@@ -55,6 +62,10 @@ from kronos.tools.expense import USER_TZ
 log = logging.getLogger("kronos.cron.expenses.processor")
 
 DEFAULT_CONFIDENCE_THRESHOLD = 0.6
+# Category used when the extractor returns none, or is not confident enough. The
+# charge is recorded under it rather than queued as a question in the chat: a
+# slightly-off category is cheaper to fix later than a missing expense.
+FALLBACK_CATEGORY = "Other"
 DEFAULT_LOOKBACK_DAYS = 2
 DEFAULT_SEARCH_LIMIT = 25
 
@@ -129,7 +140,7 @@ class _Report:
     def __init__(self, dry_run: bool):
         self.dry_run = dry_run
         self.recorded: list[str] = []  # write result lines (real) / previews (dry)
-        self.pending: list[str] = []  # queued-for-category lines
+        self.pending: list[str] = []  # lines for charges that could not be written
         self.sources: list[str] = []  # sources that returned mail
 
     def add_recorded(self, line: str) -> None:
@@ -324,19 +335,12 @@ def _handle_expense(
         counts["duplicates"] += 1
         return "duplicate", None, None
 
-    if exp.category is None or exp.confidence < threshold:
-        _queue_pending(
-            ledger,
-            msg,
-            exp,
-            amount_idr,
-            date,
-            reason="low category confidence",
-            counts=counts,
-            report=report,
-            dry_run=dry_run,
-        )
-        return "pending", None, None
+    # No category, or one the extractor is unsure of, is not a reason to stop:
+    # record it as FALLBACK_CATEGORY. The audit pass below still runs and its
+    # own category suggestion wins over the fallback when it has one.
+    used_fallback = exp.category is None or exp.confidence < threshold
+    if used_fallback:
+        exp = replace(exp, category=FALLBACK_CATEGORY)
 
     verdict = auditor(msg.text, exp, model=model)
     if not (verdict.ok and verdict.amount_matches and verdict.is_expense):
@@ -354,6 +358,9 @@ def _handle_expense(
         return "pending", None, None
 
     category = verdict.category or exp.category
+    # Flag only a charge that actually kept the fallback — an audit-supplied
+    # category means it was classified after all.
+    fallback_note = " ⟨категория по умолчанию⟩" if used_fallback and category == FALLBACK_CATEGORY else ""
 
     if dry_run:
         if amount_idr is not None:
@@ -361,7 +368,7 @@ def _handle_expense(
         split_note = " ÷2 split" if _is_split_source(msg.source) else ""
         report.add_recorded(
             f"🔎 [{msg.source}] {exp.amount:,.0f} {exp.currency}{split_note} — {exp.description} "
-            f"→ {category} (conf {exp.confidence:.0%}, audit ✓)"
+            f"→ {category} (conf {exp.confidence:.0%}, audit ✓){fallback_note}"
         )
         counts["recorded"] += 1
         return "recorded", amount_idr, date
@@ -382,7 +389,7 @@ def _handle_expense(
         counts["errors"] += 1
         return "error", None, None
 
-    report.add_recorded(f"[{msg.source}] {result}")
+    report.add_recorded(f"[{msg.source}] {result}{fallback_note}")
     counts["recorded"] += 1
     return "recorded", amount_idr, date
 
@@ -440,17 +447,19 @@ def _format_report(counts: dict[str, int], report: _Report, open_pending_rows, a
     if report.dry_run:
         # Preview only — nothing is in the ledger yet, so no ids.
         if report.pending:
-            lines.append(f"\n❓ <b>Требуют категории ({len(report.pending)}):</b>")
+            lines.append(f"\n⚠️ <b>Не удалось записать ({len(report.pending)}):</b>")
             lines.extend(f"  {line}" for line in report.pending)
     elif open_pending_rows:
-        # Ask about EVERY open pending (this run's + carried over), with ids,
-        # phrased as a question the user can answer directly in this topic.
-        lines.append(f"\n❓ <b>Куда отнести эти траты? ({len(open_pending_rows)})</b>")
+        # List EVERY open pending (this run's + carried over), with ids, so the
+        # user can clear it from this topic. These are charges the pipeline could
+        # not write at all — an unclear category is no longer among the reasons.
+        lines.append(f"\n⚠️ <b>Не удалось записать ({len(open_pending_rows)})</b>")
         for row in open_pending_rows:
             amount = row["amount"]
             amount_str = f"{amount:,.0f}" if amount is not None else "?"
+            reason = f" — {row['reason']}" if row["reason"] else ""
             lines.append(
-                f"  #{row['id']} [{row['source']}] {amount_str} {row['currency'] or ''} — {row['description']}"
+                f"  #{row['id']} [{row['source']}] {amount_str} {row['currency'] or ''} — {row['description']}{reason}"
             )
         lines.append(
             "\nОтветь прямо здесь: «#id категория» через запятую (напр. «#12 Travel, #13 Food»), или «пропусти #id»."

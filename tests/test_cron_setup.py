@@ -33,7 +33,8 @@ def test_nexus_exclusive_reports_register_only_enabled_jobs_on_nexus(monkeypatch
     assert "analytics-pulse" in scheduler.names
     assert "analytics-alerts" in scheduler.names
     assert "analytics-weekly" in scheduler.names
-    assert "seo-geo-weekly" in scheduler.names
+    # seo-geo-weekly is paused (2026-09-01) — не регистрируется даже на nexus.
+    assert "seo-geo-weekly" not in scheduler.names
 
 
 def test_jb_exclusive_reports_do_not_register_on_kronos(monkeypatch):
@@ -49,6 +50,7 @@ def test_jb_exclusive_reports_do_not_register_on_kronos(monkeypatch):
     assert "analytics-alerts" not in scheduler.names
     assert "analytics-weekly" not in scheduler.names
     assert "seo-geo-weekly" not in scheduler.names
+    assert "self-improve" not in scheduler.names
 
 
 @pytest.mark.asyncio

@@ -28,6 +28,16 @@ from kronos.signals.sources import SignalSource, load_sources
 from kronos.signals.store import SignalStore
 from kronos.signals.travel import is_travel_insight, travel_insight_score
 
+# A weekly digest has to sweep a week, and three separate windows decide what a
+# fetch can even see — so they widen together or the digest silently stays daily:
+#   * ``freshness``      — Brave/Exa time filter (search, Reddit, X)
+#   * ``lookback_hours`` — Telethon cutoff, carried per source in ``filters``
+#   * ``fetch_limit``    — items per source; a feed-shaped source (RSS, t.me/s)
+#                          has no time filter at all, so this cap IS its window
+WEEKLY_FRESHNESS = "pw"
+WEEKLY_LOOKBACK_HOURS = 24 * 7
+WEEKLY_FETCH_LIMIT = 20
+
 
 @dataclass(frozen=True)
 class SignalDigestRun:
@@ -54,6 +64,8 @@ async def run_signal_digest(
     fetchers: dict[str, Fetcher] | None = None,
     source_limit: int | None = None,
     fetch_limit: int = 8,
+    freshness: str = "pd",
+    lookback_hours: int | None = None,
     polish: bool = False,
     curate: bool = False,
 ) -> SignalDigestRun:
@@ -67,9 +79,16 @@ async def run_signal_digest(
     for source in sources:
         signal_store.upsert_source(source)
 
+    # Widen the per-source Telethon cutoff after the registry snapshot is stored,
+    # so the DB keeps the source as configured and only this run looks further back.
+    if lookback_hours is not None:
+        sources = tuple(
+            replace(source, filters={**source.filters, "lookback_hours": lookback_hours}) for source in sources
+        )
+
     fetch_results = await fetch_sources(
         tuple(sources),
-        options=FetchOptions(limit=fetch_limit),
+        options=FetchOptions(limit=fetch_limit, freshness=freshness),
         fetchers=fetchers,
     )
     _record_fetch_stats(signal_store, fetch_results)

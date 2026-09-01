@@ -3,7 +3,12 @@ import pytest
 from kronos.config import settings
 from kronos.signals.fetchers.base import FetchResult
 from kronos.signals.models import SignalItem
-from kronos.signals.pipeline import run_signal_digest
+from kronos.signals.pipeline import (
+    WEEKLY_FETCH_LIMIT,
+    WEEKLY_FRESHNESS,
+    WEEKLY_LOOKBACK_HOURS,
+    run_signal_digest,
+)
 from kronos.signals.store import SignalStore
 
 
@@ -235,3 +240,51 @@ async def test_run_signal_digest_filters_travel_noise(tmp_path, signal_store):
 
     assert travel_run.saved_item_count == 1
     assert "Что это значит для JourneyBay:" in travel_run.rendered.body
+
+
+@pytest.mark.asyncio
+async def test_weekly_window_reaches_every_fetcher(tmp_path, signal_store):
+    """A weekly digest must widen all three windows, not just one."""
+    sources_path = _write_sources(tmp_path)
+    seen: list[tuple] = []
+
+    async def fake_fetcher(source, options):
+        seen.append((source.platform, options.limit, options.freshness, source.filters.get("lookback_hours")))
+        return FetchResult(source=source, items=())
+
+    await run_signal_digest(
+        "news",
+        sources_path=sources_path,
+        dry_run=True,
+        send=False,
+        store=signal_store,
+        fetchers={"reddit": fake_fetcher, "x": fake_fetcher},
+        fetch_limit=WEEKLY_FETCH_LIMIT,
+        freshness=WEEKLY_FRESHNESS,
+        lookback_hours=WEEKLY_LOOKBACK_HOURS,
+    )
+
+    assert seen, "no source was fetched"
+    assert {(limit, fresh, lookback) for _, limit, fresh, lookback in seen} == {(WEEKLY_FETCH_LIMIT, "pw", 24 * 7)}
+
+
+@pytest.mark.asyncio
+async def test_default_window_stays_daily(tmp_path, signal_store):
+    sources_path = _write_sources(tmp_path)
+    seen: list[tuple] = []
+
+    async def fake_fetcher(source, options):
+        seen.append((options.limit, options.freshness, source.filters.get("lookback_hours")))
+        return FetchResult(source=source, items=())
+
+    await run_signal_digest(
+        "news",
+        sources_path=sources_path,
+        dry_run=True,
+        send=False,
+        store=signal_store,
+        fetchers={"reddit": fake_fetcher, "x": fake_fetcher},
+    )
+
+    # Unchanged for every other caller: past-day search, source-configured lookback.
+    assert {(fresh, lookback) for _, fresh, lookback in seen} == {("pd", None)}
