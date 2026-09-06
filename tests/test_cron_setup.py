@@ -91,6 +91,48 @@ async def test_disabled_travel_runner_does_not_collect_or_publish(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_source_quality_audit_stays_internal(monkeypatch):
+    from kronos.cron import source_quality_audit
+
+    monkeypatch.setattr(settings, "agent_name", "kronos")
+    sent: list[str] = []
+    built: list[dict] = []
+    store = object()
+
+    def build_audit(**kwargs):
+        built.append(kwargs)
+        return SimpleNamespace(
+            body="internal audit",
+            recommendations=(object(),),
+            saved_digest_id=42,
+        )
+
+    monkeypatch.setattr(
+        source_quality_audit,
+        "send_bot_api",
+        lambda text, **kwargs: sent.append(text) or True,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "kronos.signals.quality",
+        SimpleNamespace(
+            build_source_quality_audit=build_audit,
+            has_recent_source_quality_audit=lambda **kwargs: False,
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "kronos.signals.store",
+        SimpleNamespace(SignalStore=lambda: store),
+    )
+
+    await source_quality_audit.run_source_quality_audit()
+
+    assert built == [{"store": store, "dry_run": False}]
+    assert sent == []
+
+
+@pytest.mark.asyncio
 async def test_disabled_people_scout_runner_does_not_discover(monkeypatch):
     monkeypatch.setattr(settings, "agent_name", "kronos")
 
