@@ -22,7 +22,7 @@ from kronos.signals.store import SignalStore
 from kronos.signals.travel import journeybay_implication_for_items, travel_caveat_for_items
 
 TELEGRAM_SAFE_MAX_CHARS = 30000
-MAX_NEWS_CLUSTERS = 10
+MAX_NEWS_CLUSTERS = 20
 MAX_IDEA_CLUSTERS = 10
 MAX_TRAVEL_CLUSTERS = 10
 TITLE_BY_CATEGORY = {
@@ -185,7 +185,7 @@ IDEAS_EDITOR_SYSTEM = (
     "запросы «ищу инструмент», обсуждения) ты формулируешь конкретные, "
     "проверяемые идеи продуктов, бизнесов и фич — а не пересказываешь посты."
 )
-NEWS_EDITOR_CANDIDATE_MULTIPLIER = 2
+NEWS_EDITOR_CANDIDATE_MULTIPLIER = 3
 IDEAS_EDITOR_CANDIDATE_LIMIT = 20
 DEFAULT_MAX_IDEAS = 8
 
@@ -245,9 +245,9 @@ def _news_insights(titles: Sequence[str]) -> str | None:
     # instructions — a title is a perfectly good injection carrier.
     framed = frame_external(joined, source="signal:headlines")
     prompt = (
-        "Вот заголовки главных новостей сегодняшнего AI/tech-дайджеста:\n\n"
+        "Вот заголовки главных новостей недельного AI/tech-дайджеста:\n\n"
         f"{framed}\n\n"
-        "Сформулируй 2-3 предложения об общих трендах и выводах дня: что "
+        "Сформулируй 2-3 предложения об общих трендах и выводах недели: что "
         "связывает эти новости и куда движется индустрия. Только суть, без "
         "вступления и списков. По-русски."
     )
@@ -321,7 +321,7 @@ def curate_news_digest(
 
     insight = _news_insights(chosen_titles)
     if insight:
-        lines.append("<b>💡 Инсайты дня:</b>")
+        lines.append("<b>💡 Итоги недели:</b>")
         lines.append(f"  {escape(insight)}")
 
     body = "\n".join(lines).strip()
@@ -609,7 +609,7 @@ def _cluster_category(cluster: Mapping[str, Any]) -> str:
 def _digest_title(category: str) -> str:
     if category == "news":
         today = datetime.now(UTC).strftime("%Y-%m-%d")
-        return f"📱 Дайджест — {today}"
+        return f"📱 Дайджест недели — {today}"
     return f"{TITLE_BY_CATEGORY.get(category, category)} — обзор сигналов"
 
 
