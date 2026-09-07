@@ -4,7 +4,7 @@ import json
 import logging
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from kronos.config import settings
 
@@ -110,7 +110,7 @@ def collect() -> dict:
         # PostgREST evaluates filter values as literals, not SQL — passing
         # "now()-interval'24 hours'" made the request fail and the field come
         # back null, so the pulse reported no signups regardless of reality.
-        since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        since = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
 
         total_users = _count("global_users")
         new_users = _count("global_users", {"created_at": f"gte.{since}"})
