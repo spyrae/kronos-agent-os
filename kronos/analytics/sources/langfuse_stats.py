@@ -81,9 +81,28 @@ def collect() -> dict:
         latencies = [o.get("latency", 0) or 0 for o in obs_list if o.get("latency")]
         avg_latency_ms = round(sum(latencies) / len(latencies)) if latencies else None
 
-        # Error rate
-        errors = sum(1 for o in obs_list if o.get("level") == "ERROR")
-        error_rate = round(errors / len(obs_list) * 100, 1) if obs_list else 0
+        # Error rate over real model calls only.
+        #
+        # Two kinds of rows reach Langfuse without ever invoking a model, and
+        # counting them put the rate at 42.6% on a day with no product errors:
+        #   - requests the LiteLLM gateway rejected for having no API key —
+        #     scanners probing /azure/.env, /v1/models and friends;
+        #   - gateway probes (/health, /model/info), which arrive with no model
+        #     and the literal placeholder "default-message-value".
+        # They are reported separately so the scanning stays visible instead of
+        # masquerading as LLM quality.
+        def _is_unauthenticated(o: dict) -> bool:
+            return "no api key passed in" in str(o.get("statusMessage", "")).lower()
+
+        def _is_probe(o: dict) -> bool:
+            if o.get("model"):
+                return False
+            return "default-message-value" in str(o.get("input", ""))
+
+        scored = [o for o in obs_list if not _is_unauthenticated(o) and not _is_probe(o)]
+        unauthenticated = sum(1 for o in obs_list if _is_unauthenticated(o))
+        errors = sum(1 for o in scored if o.get("level") == "ERROR")
+        error_rate = round(errors / len(scored) * 100, 1) if scored else 0
 
         return {
             "traces_24h": total_traces,
@@ -91,6 +110,8 @@ def collect() -> dict:
             "sample_cost_usd": round(total_cost, 4),
             "avg_latency_ms": avg_latency_ms,
             "error_rate_pct": error_rate,
+            "error_sample_size": len(scored),
+            "unauthenticated_requests": unauthenticated,
         }
 
     except Exception as e:

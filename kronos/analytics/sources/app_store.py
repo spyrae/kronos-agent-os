@@ -55,8 +55,17 @@ def _fetch_android() -> dict:
     except ImportError:
         return {"error": "google-play-scraper not installed"}
 
+    # Read the package at call time, not at import. Module-level
+    # os.environ.get() runs before kronos.config's load_dotenv() has populated
+    # the environment, so the package came out empty and google-play-scraper
+    # answered the empty id with "App not found(404)" — which then suppressed
+    # the whole App Store section of the pulse.
+    package = os.environ.get("ANDROID_PACKAGE", "") or _ANDROID_PACKAGE
+    if not package:
+        return {"error": "ANDROID_PACKAGE not configured"}
+
     try:
-        data = gplay_app(_ANDROID_PACKAGE, lang="en", country="us")
+        data = gplay_app(package, lang="en", country="us")
         return {
             "android_rating": round(data.get("score", 0), 2) if data.get("score") else None,
             "android_reviews_count": data.get("reviews"),

@@ -71,7 +71,18 @@ Generate a concise daily pulse:
 9. ⚠️ Issues requiring attention (if any)
 10. 💡 One actionable insight based on the data
 
-If a data source returned an error, note it as "⚠️ Source unavailable" — don't skip the section.
+If a data source returned an error, you MUST write "⚠️ Source unavailable" for that
+section. Never invent, estimate or carry over numbers for a source that errored — a
+fabricated figure is worse than an admitted gap, because it gets acted on. This is not
+optional formatting advice: on 2026-09-01 ten of eleven sources were misconfigured and
+returned errors, and the pulse had been publishing plausible invented numbers for every
+section daily.
+
+Note: subscriptions and trials come from Supabase — `db_active_subscriptions`, `db_trial_subscriptions` and `db_active_trials` — and that is the source of truth. RevenueCat
+reports 0 active because the records were never mirrored into it; use RevenueCat only for
+MRR/revenue/new_customers, and never state "0 active subscriptions" on its authority.
+
+Note: report only fields that are actually present in the payload above. A field that is absent or null is unknown, not zero — write "n/a" for it. Do not derive DAU, trip counts, message counts or saved places from anything other than the matching `dau_24h`, `trips_24h`, `ai_messages_24h` and `saved_places_24h` fields, and never reuse a number from another section to fill a gap.
 
 Note: Zabbix `updates_available` = count of pending Docker image updates. It is informational ONLY — never treat it as a 🔴/🟡 signal, never list it under "Issues requiring attention", and never let it affect the overall status. Mention it at most as a neutral one-liner under Infrastructure.
 

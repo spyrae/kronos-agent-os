@@ -1,0 +1,5 @@
+# TruthGuard test configuration
+# The default "python -m pytest" assumes an activated virtualenv; hooks run
+# without one, and macOS has no bare `python`, so the check failed to start
+# (exit 127) and read as a test failure. Point it at the project venv.
+test_command: .venv/bin/python -m pytest -q
