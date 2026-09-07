@@ -33,7 +33,7 @@ class ChatCodexCLI(BaseChatModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    model_name: str = "gpt-5.5"
+    model_name: str = "gpt-5.6-terra"
     command: str = "codex"
     timeout_seconds: int = 180
     cwd: str = ""

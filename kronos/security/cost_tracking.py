@@ -50,6 +50,7 @@ _MODEL_PRICES: dict[str, tuple[float, float]] = {
     "gpt-4.1": (2.00, 8.00),
     # Codex CLI uses ChatGPT OAuth (subscription, not per-token API billing),
     # so its marginal cost is zero. Override via env if billed per token.
+    "gpt-5.6-terra": (0.0, 0.0),
     "gpt-5.5": (0.0, 0.0),
     "gpt-5": (0.0, 0.0),
 }

@@ -1,7 +1,7 @@
 """LLM factory with configurable provider chains and cooldown tracking.
 
 Default resolution order:
-  orchestrator: Codex CLI (gpt-5.5)      # top-level supervisor
+  orchestrator: Codex CLI (gpt-5.6-terra)  # top-level supervisor
   standard:     DeepSeek V3
   lite:         DeepSeek V3
 
@@ -333,7 +333,7 @@ _PRESETS: dict[str, dict[str, object]] = {
     },
     "codex_cli": {
         "adapter": "codex-cli",
-        "model": "gpt-5.5",
+        "model": "gpt-5.6-terra",
         "api_key_required": False,
         "max_tokens": 4096,
         "timeout_seconds": 180,
@@ -520,8 +520,12 @@ def resolve_provider_config(provider: str) -> ProviderConfig | None:
     timeout_seconds = _int_env(prefix + "TIMEOUT_SECONDS", int(preset.get("timeout_seconds", 180)))
 
     if provider_id == "codex_cli":
-        if not model:
-            model = settings.kaos_codex_model
+        # KAOS_CODEX_MODEL is the documented knob for the Codex backend, but the
+        # preset above always filled `model` first, so this only applied when
+        # both were empty — the setting never took effect and the model could
+        # not be changed without editing Python. The explicit per-provider
+        # override still wins over it.
+        model = str(_env(prefix + "MODEL", "")) or settings.kaos_codex_model or model
         command = command or settings.kaos_codex_command
         timeout_seconds = _int_env(prefix + "TIMEOUT_SECONDS", settings.kaos_codex_timeout_seconds)
 
