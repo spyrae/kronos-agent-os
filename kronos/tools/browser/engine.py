@@ -7,6 +7,8 @@ Provides low-level methods used by tool functions.
 import asyncio
 import logging
 
+from kronos.security.public_web import BROWSER_PROXY_ARGS, PublicWebBlockedError, PublicWebProxy
+
 log = logging.getLogger("kronos.tools.browser.engine")
 
 # Lazy import — playwright is optional
@@ -14,6 +16,7 @@ _pw = None
 _browser = None
 _page = None
 _profile_dir = None
+_proxy: PublicWebProxy | None = None
 _lock = asyncio.Lock()
 
 
@@ -33,9 +36,11 @@ async def _ensure_browser(profile_dir: str | None = None):
     page is live, ``None`` does start a throwaway browser: a session that died is
     then reported as expired, which is the safe direction to fail in.
     """
-    global _pw, _browser, _page, _profile_dir
+    global _pw, _browser, _page, _profile_dir, _proxy
 
     if _page and not _page.is_closed() and profile_dir in (None, _profile_dir):
+        if _proxy:
+            _proxy.raise_if_blocked()
         return _page
     if _page and profile_dir is not None and profile_dir != _profile_dir:
         log.info("Switching browser profile: %s -> %s", _profile_dir or "none", profile_dir or "none")
@@ -53,35 +58,46 @@ async def _ensure_browser(profile_dir: str | None = None):
         if not _pw:
             _pw = await async_playwright().start()
 
-        launch_args = [
-            "--disable-gpu",
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-extensions",
-        ]
+        if _proxy is not None:
+            await _proxy.close()
+        _proxy = await PublicWebProxy().start()
+        proxy_options = {"server": _proxy.url, "bypass": "<-loopback>"}
 
-        if profile_dir:
-            # A persistent context *is* the browser: cookies, storage and the
-            # signed-in session live in the directory, so nothing is kept here.
-            context = await _pw.chromium.launch_persistent_context(
-                profile_dir,
-                headless=True,
-                args=launch_args,
-                viewport={"width": 1280, "height": 720},
-            )
-            _browser = context.browser
-            _page = context.pages[0] if context.pages else await context.new_page()
-            log.info("Browser started with profile: %s", profile_dir)
-        else:
-            _browser = await _pw.chromium.launch(headless=True, args=launch_args)
-            context = await _browser.new_context(
-                viewport={"width": 1280, "height": 720},
-                user_agent="Mozilla/5.0 (X11; Linux x86_64) Kronos-II/0.1",
-                java_script_enabled=True,
-            )
-            _page = await context.new_page()
-            log.info("Browser started (headless Chromium)")
-        _profile_dir = profile_dir
+        try:
+            launch_args = [
+                "--disable-gpu",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-extensions",
+            ] + BROWSER_PROXY_ARGS
+
+            if profile_dir:
+                # A persistent context *is* the browser: cookies, storage and the
+                # signed-in session live in the directory, so nothing is kept here.
+                context = await _pw.chromium.launch_persistent_context(
+                    profile_dir,
+                    headless=True,
+                    args=launch_args,
+                    proxy=proxy_options,
+                    viewport={"width": 1280, "height": 720},
+                )
+                _browser = context.browser
+                _page = context.pages[0] if context.pages else await context.new_page()
+                log.info("Browser started with profile: %s", profile_dir)
+            else:
+                _browser = await _pw.chromium.launch(headless=True, args=launch_args, proxy=proxy_options)
+                context = await _browser.new_context(
+                    viewport={"width": 1280, "height": 720},
+                    user_agent="Mozilla/5.0 (X11; Linux x86_64) Kronos-II/0.1",
+                    java_script_enabled=True,
+                )
+                _page = await context.new_page()
+                log.info("Browser started (headless Chromium)")
+            _profile_dir = profile_dir
+
+        except BaseException:
+            await close()
+            raise
 
     return _page
 
@@ -102,14 +118,25 @@ async def navigate(url: str, wait_until: str = "domcontentloaded") -> str:
     except EgressBlockedError as e:
         return f"Navigation blocked: {e}"
 
-    page = await _ensure_browser()
     try:
+        page = await _ensure_browser()
         response = await page.goto(url, wait_until=wait_until, timeout=30000)
+        if _proxy:
+            _proxy.raise_if_blocked()
         status = response.status if response else "unknown"
         title = await page.title()
         log.info("Navigated to %s (status=%s)", url[:80], status)
         return f"Navigated to: {title} (status {status})"
     except Exception as e:
+        blocked = isinstance(e, PublicWebBlockedError)
+        if _proxy:
+            try:
+                _proxy.raise_if_blocked()
+            except PublicWebBlockedError:
+                blocked = True
+        if blocked:
+            await close()
+            return "Navigation blocked: public-web security check failed"
         return f"Navigation failed: {e}"
 
 
@@ -162,7 +189,13 @@ async def page_html() -> str:
 
     for attempt in (1, 2):
         try:
-            return await page.content()
+            html = await page.content()
+            if _proxy:
+                _proxy.raise_if_blocked()
+            return html
+        except PublicWebBlockedError:
+            await close()
+            raise
         except Exception as e:
             if attempt == 2:
                 return f"Could not read the page: {e}"
@@ -229,7 +262,7 @@ def is_running() -> bool:
 
 async def close():
     """Close browser and cleanup."""
-    global _pw, _browser, _page, _profile_dir
+    global _pw, _browser, _page, _profile_dir, _proxy
     if _page and not _page.is_closed():
         # A persistent context owns the profile directory; closing the context
         # is what flushes the session back to disk for the next run.
@@ -246,6 +279,14 @@ async def close():
     _page = None
     _profile_dir = None
     if _pw:
-        await _pw.stop()
-        _pw = None
+        try:
+            await _pw.stop()
+        finally:
+            _pw = None
+            if _proxy:
+                await _proxy.close()
+                _proxy = None
+    elif _proxy:
+        await _proxy.close()
+        _proxy = None
     log.info("Browser closed")
