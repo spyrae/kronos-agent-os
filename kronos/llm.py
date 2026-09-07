@@ -33,6 +33,16 @@ log = logging.getLogger("kronos.llm")
 COOLDOWN_SECONDS = 300  # 5 minutes
 RETRIABLE_STATUS_CODES = {408, 409, 425, 429}
 
+# A model the provider no longer serves is a fault of that provider, not of the
+# request, so the next provider in the chain should get a turn.
+MODEL_UNAVAILABLE_MARKERS = (
+    "model not found",
+    "model_not_found",
+    "does not exist or you do not have access",
+    "inaccessible",
+    "not deployed",
+)
+
 
 class ModelTier(str, Enum):
     LITE = "lite"
@@ -599,15 +609,7 @@ def is_retriable_llm_error(error: BaseException) -> bool:
             return True
         if status_code in RETRIABLE_STATUS_CODES:
             return True
-        if status_code == 404 and any(
-            marker in message
-            for marker in (
-                "model not found",
-                "model_not_found",
-                "inaccessible",
-                "not deployed",
-            )
-        ):
+        if status_code == 404 and any(marker in message for marker in MODEL_UNAVAILABLE_MARKERS):
             return True
         if 400 <= status_code < 500:
             return False
@@ -636,6 +638,12 @@ def is_retriable_llm_error(error: BaseException) -> bool:
         "blocked by shield",
         "content policy",
     )
+    # Checked before the generic markers: a retired model reports "404 Not
+    # Found", and the bare "not found" below would otherwise class it as
+    # non-retriable — leaving a dead first provider to fail the whole chain
+    # while a healthy fallback sat unused.
+    if any(marker in message for marker in MODEL_UNAVAILABLE_MARKERS):
+        return True
     if any(marker in message for marker in non_retriable_markers):
         return False
     return any(marker in message for marker in retriable_markers)
