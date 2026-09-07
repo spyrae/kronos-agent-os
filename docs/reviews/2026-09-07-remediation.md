@@ -10,7 +10,7 @@
 | F03 | Инструменты недоступны через supervisor | Исправлено локально |
 | F04 | Сбой извлечения расходов превращается в пустой результат | Исправлено локально |
 | F05 | Частичный успех обработки письма скрывает ошибки | Исправлено локально |
-| F06 | Конкурентные записи теряют изменения BUDGET.md | Ожидает |
+| F06 | Конкурентные записи теряют изменения BUDGET.md | Исправлено локально |
 | F07 | Ожидание подтверждения ошибочно завершает шаг плана | Ожидает |
 | F08 | Прерванный шаг навсегда остаётся running | Ожидает |
 | F09 | Результат считается доставленным до успешной отправки | Ожидает |
@@ -85,6 +85,20 @@
 - Проверено: 58 целевых тестов; полный набор — 2061 тест, Ruff. Gmail/Notion
   заменены заглушками; миграция проверена на временной копии старой схемы.
 
+## F06 — конкурентное изменение бюджета
+
+- IDR-расход, добавление и редактирование транша сериализованы на весь цикл
+  чтения/расчёта/записи. Общий sidecar-lock работает между потоками и процессами.
+- Канонизация пути объединяет symlink-алиасы; lock-файл сохраняет inode при
+  атомарной замене самого бюджета. Ожидание блокировки ограничено 30 секундами.
+- При невозможности захватить lock запись Notion не начинается. Ошибка освобождает
+  блокировки. Добавление/редактирование траншей теперь также используют атомарную
+  замену, без обрезания файла при сбое. RUB/USD не изменяют транши и не блокируются.
+- Ограничение: advisory lock защищает только соблюдающих протокол писателей;
+  разрыв транзакции между Notion и файлом при аварии остаётся отдельным риском F10.
+- Проверено: 31 целевой тест, включая два реальных отдельных процесса; полный
+  набор — 2070 тестов, Ruff и F821 без ошибок. Новых зависимостей/конфигурации нет.
+
 ## Изменённые файлы
 
 ### F01
@@ -134,6 +148,13 @@
 - `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/tests/test_expense_pending.py`
 - `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/docs/decisions/ADR-0003-email-expense-progress.md`
 
+### F06
+
+- `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/kronos/tools/budget_lock.py`
+- `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/kronos/tools/expense.py`
+- `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/tests/test_budget_concurrency.py`
+- `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/docs/decisions/ADR-0004-budget-transactions.md`
+
 Журнал исправлений: `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/docs/reviews/2026-09-07-remediation.md`.
 
 ## Как проверить
@@ -146,4 +167,4 @@ cd "/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app"
 
 Тестам public-web нужны временные сокеты на 127.0.0.1; в ограниченной песочнице
 для этого необходимо разрешение. Они не обращаются к внешним сайтам.
-Следующий пункт — F06: сериализация read/modify/write бюджета между потоками и процессами.
+Следующий пункт — F07: ожидание подтверждения не должно завершать шаг плана.

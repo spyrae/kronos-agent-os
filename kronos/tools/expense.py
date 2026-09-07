@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from langchain_core.tools import tool
 
 from kronos.config import settings
+from kronos.tools.budget_lock import BudgetLockError, budget_transaction
 
 log = logging.getLogger("kronos.tools.expense")
 
@@ -125,6 +126,14 @@ def _budget_path() -> str:
     from kronos.workspace import ws
 
     return str(ws.skill_ref("expense-tracker", "BUDGET"))
+
+
+def _with_budget_transaction(operation, *args, **kwargs) -> str:
+    try:
+        with budget_transaction(_budget_path()) as budget_file:
+            return operation(budget_file, *args, **kwargs)
+    except BudgetLockError as exc:
+        return f"[ERROR] {exc}"
 
 
 def _expenses_db_id() -> str:
@@ -576,6 +585,34 @@ def add_expense(
     if currency not in ("IDR", "RUB", "USD"):
         return f"[ERROR] Invalid currency '{currency}'. Must be IDR, RUB, or USD."
 
+    if currency != "IDR":
+        # RUB/USD only read an atomic rate snapshot; they never change tranches.
+        return _record_expense("", description, amount, currency, category, date, split, split_full, ref)
+    return _with_budget_transaction(
+        _record_expense,
+        description,
+        amount,
+        currency,
+        category,
+        date,
+        split,
+        split_full,
+        ref,
+    )
+
+
+def _record_expense(
+    budget_file: str,
+    description: str,
+    amount: float,
+    currency: str,
+    category: str,
+    date: str | None,
+    split: bool,
+    split_full: bool,
+    ref: str | None,
+) -> str:
+    """Record one expense; IDR callers must hold the budget transaction lock."""
     # Validate and sanitize date (catches LLM hallucinating wrong year/month)
     date, date_warning = _validate_date(date)
 
@@ -594,13 +631,11 @@ def add_expense(
     rate_idr_per_rub = None
     rate_idr_per_usd = None
     budget_updated = False
-    budget_file = ""
     budget_new_text = None
     deficit_idr = 0.0
     tranches: list[dict] = []
 
     if currency == "IDR":
-        budget_file = _budget_path()
         if os.path.isfile(budget_file):
             with open(budget_file) as f:
                 budget_text = f.read()
@@ -744,7 +779,17 @@ def add_tranche(
             Optional, but pass it with every new tranche so IDR expenses convert to USD too.
         note: Optional note (e.g. "Второй транш")
     """
-    budget_file = _budget_path()
+    return _with_budget_transaction(_add_tranche_locked, amount_idr, rate, rate_usd, note)
+
+
+def _add_tranche_locked(
+    budget_file: str,
+    amount_idr: float,
+    rate: float,
+    rate_usd: float | None,
+    note: str,
+) -> str:
+    """Append a tranche without overwriting concurrent expense deductions."""
     if not os.path.isfile(budget_file):
         return f"[ERROR] BUDGET.md not found at {budget_file}"
 
@@ -779,8 +824,7 @@ def add_tranche(
     )
 
     new_text = _update_budget(text, tranches)
-    with open(budget_file, "w") as f:
-        f.write(new_text)
+    _write_text_atomic(budget_file, new_text)
 
     total_remaining = sum(t["remaining"] for t in tranches)
     log.info("Tranche added: %s IDR at %s IDR/RUB, %s IDR/USD", amount_idr, rate, rate_usd or "—")
@@ -816,7 +860,25 @@ def replace_tranche(
         new_amount_idr: New IDR amount. If not provided, keeps the current remaining amount.
         note: Optional note for the new tranche.
     """
-    budget_file = _budget_path()
+    return _with_budget_transaction(
+        _replace_tranche_locked,
+        tranche_num,
+        new_rate,
+        new_rate_usd,
+        new_amount_idr,
+        note,
+    )
+
+
+def _replace_tranche_locked(
+    budget_file: str,
+    tranche_num: int,
+    new_rate: float,
+    new_rate_usd: float | None,
+    new_amount_idr: float | None,
+    note: str,
+) -> str:
+    """Apply rate/amount edits to the latest committed budget snapshot."""
     if not os.path.isfile(budget_file):
         return "[ERROR] BUDGET.md not found"
 
@@ -843,8 +905,7 @@ def replace_tranche(
         target["note"] = note
 
     new_text = _update_budget(text, tranches)
-    with open(budget_file, "w") as f:
-        f.write(new_text)
+    _write_text_atomic(budget_file, new_text)
 
     effective_rate_usd = target.get("rate_usd")
     log.info(
