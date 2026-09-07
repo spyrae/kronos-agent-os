@@ -9,7 +9,7 @@
 | F02 | Обход подтверждения для MCP/Notion-записей | Исправлено локально |
 | F03 | Инструменты недоступны через supervisor | Исправлено локально |
 | F04 | Сбой извлечения расходов превращается в пустой результат | Исправлено локально |
-| F05 | Частичный успех обработки письма скрывает ошибки | Ожидает |
+| F05 | Частичный успех обработки письма скрывает ошибки | Исправлено локально |
 | F06 | Конкурентные записи теряют изменения BUDGET.md | Ожидает |
 | F07 | Ожидание подтверждения ошибочно завершает шаг плана | Ожидает |
 | F08 | Прерванный шаг навсегда остаётся running | Ожидает |
@@ -70,6 +70,21 @@
 - Проверено: 61 целевой тест; общий набор — 2047 тестов, 44 integration-теста
   исключены (требуют отдельной среды/сервисов); Ruff. Production не проверялся.
 
+## F05 — отдельный результат каждой позиции письма
+
+- До записи сохраняются извлечённые позиции; повтор использует исходный снимок,
+  а не новый ответ LLM. Известные успешные позиции не записываются повторно.
+- Ошибка одной позиции не скрывается успехом другой; pending не блокирует повтор
+  неуспешного соседа. Ручное решение одной позиции не завершает письмо целиком.
+- Архивация разрешена только после завершения всех позиций. Незавершённый итог
+  письма восстанавливается после перезапуска без повторных внешних записей.
+- Неопределённый результат POST/прерванной записи требует сверки, а не слепого
+  повтора. Это не отменяет оставшиеся общие риски F10.
+- Схема расширяется отдельной идемпотентной миграцией; исторические записи
+  автоматически не переоткрываются. ADR-0003 описывает решение и ограничения.
+- Проверено: 58 целевых тестов; полный набор — 2061 тест, Ruff. Gmail/Notion
+  заменены заглушками; миграция проверена на временной копии старой схемы.
+
 ## Изменённые файлы
 
 ### F01
@@ -107,6 +122,18 @@
 - `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/tests/test_expenses_extract.py`
 - `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/tests/test_expenses_processor.py`
 
+### F05
+
+- `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/kronos/cron/expenses/ledger.py`
+- `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/kronos/cron/expenses/processor.py`
+- `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/kronos/cron/expenses/migrations/__init__.py`
+- `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/kronos/cron/expenses/migrations/v001_expense_items.py`
+- `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/kronos/tools/expense_pending.py`
+- `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/tests/test_expenses_ledger.py`
+- `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/tests/test_expenses_processor.py`
+- `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/tests/test_expense_pending.py`
+- `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/docs/decisions/ADR-0003-email-expense-progress.md`
+
 Журнал исправлений: `/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app/docs/reviews/2026-09-07-remediation.md`.
 
 ## Как проверить
@@ -119,5 +146,4 @@ cd "/Users/romanbelov/Documents/Projects/Projects/Kronos Agent OS/app"
 
 Тестам public-web нужны временные сокеты на 127.0.0.1; в ограниченной песочнице
 для этого необходимо разрешение. Они не обращаются к внешним сайтам.
-Следующий пункт — F05: учёт частичного результата письма по отдельным расходам,
-чтобы повтор не терял неуспешные позиции и не записывал успешные ещё раз.
+Следующий пункт — F06: сериализация read/modify/write бюджета между потоками и процессами.

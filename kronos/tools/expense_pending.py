@@ -77,48 +77,51 @@ async def resolve_pending_expense(pending_id: int, category: str) -> str:
     if row["currency"] not in SUPPORTED_CURRENCIES:
         return f"[ERROR] Валюта {row['currency']} не поддерживается для записи."
 
-    result = str(
-        add_expense.invoke(
-            {
-                "description": row["description"],
-                "amount": row["amount"],
-                "currency": row["currency"],
-                "category": category,
-                "date": row["expense_date"],
-                "split_full": _is_split_source(row["source"]),
-                "ref": row["message_id"],
-            }
+    if not ledger.claim_pending(pending_id):
+        return f"[ERROR] Трата #{pending_id} уже обрабатывается."
+    try:
+        result = str(
+            add_expense.invoke(
+                {
+                    "description": row["description"],
+                    "amount": row["amount"],
+                    "currency": row["currency"],
+                    "category": category,
+                    "date": row["expense_date"],
+                    "split_full": _is_split_source(row["source"]),
+                    "ref": ledger.pending_reference(pending_id),
+                }
+            )
         )
-    )
-    if result.startswith("[ERROR]"):
+    except Exception as exc:
+        log.warning("Pending write outcome unknown (%s)", type(exc).__name__)
+        result = "[ERROR] Failed to write to Notion: outcome unknown"
+    if not result.startswith("✅"):
+        uncertain = not result.startswith("[ERROR]") or result.startswith("[ERROR] Failed to write to Notion:")
+        ledger.release_pending_claim(pending_id, uncertain=uncertain)
+        if row["message_id"]:
+            ledger.finalize_message(row["message_id"], row["source"])
+        if uncertain:
+            return f"[ERROR] Результат записи траты #{pending_id} неизвестен; нужна сверка, повтор остановлен."
         return f"[ERROR] Не удалось записать трату #{pending_id}: {result}"
 
     ledger.resolve_pending(pending_id, category)
 
-    # Mark it processed so re-runs skip it. Archiving is opt-in (safety): only
-    # remove it from the inbox when EMAIL_EXPENSES_ARCHIVE is enabled.
+    # Resolving one charge must not consume its siblings. Derive the email
+    # state first, and archive only when every automatic/manual item is done.
     archived = False
     message_id = row["message_id"]
     if message_id:
-        if archiving_enabled():
+        status = ledger.finalize_message(message_id, row["source"])
+        if status in {"recorded", "duplicate"} and archiving_enabled():
             gmail = get_gmail_client()
             if gmail is not None:
                 try:
                     archived = await gmail.archive(message_id)
-                except Exception as e:
-                    log.warning("Archive after resolve failed for %s: %s", message_id, e)
-        ledger.record(
-            message_id=message_id,
-            source=row["source"],
-            status="archived" if archived else "recorded",
-            amount=row["amount"],
-            currency=row["currency"],
-            amount_idr=row["amount_idr"],
-            expense_date=row["expense_date"],
-            description=row["description"],
-            category=category,
-            archived=archived,
-        )
+                except Exception as exc:
+                    log.warning("Archive after resolve failed (%s)", type(exc).__name__)
+                if archived:
+                    ledger.mark_archived(message_id)
 
     tail = " Письмо в архиве." if archived else " (письмо оставлено в инбоксе)"
     return f"✅ Трата #{pending_id} записана как {category}.{tail}\n{result}"
@@ -138,9 +141,10 @@ def skip_pending_expense(pending_id: int) -> str:
     row = ledger.get_pending(pending_id)
     if row is None or row["status"] != "pending":
         return f"[ERROR] Pending трата #{pending_id} не найдена или уже обработана."
-    ledger.discard_pending(pending_id)
+    if not ledger.discard_pending(pending_id):
+        return f"[ERROR] Трата #{pending_id} уже обрабатывается."
     if row["message_id"]:
-        ledger.record(message_id=row["message_id"], source=row["source"], status="skipped")
+        ledger.finalize_message(row["message_id"], row["source"])
     return f"⏭ Трата #{pending_id} пропущена (не расход)."
 
 
