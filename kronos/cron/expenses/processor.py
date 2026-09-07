@@ -51,6 +51,7 @@ from datetime import datetime
 from kronos.config import settings
 from kronos.cron.expenses.extract import (
     SUPPORTED_CURRENCIES,
+    ExpenseExtractionError,
     audit_expense,
     extract_expenses,
 )
@@ -143,6 +144,7 @@ class _Report:
         self.pending: list[str] = []  # lines for charges that could not be written
         self.sources: list[str] = []  # sources that returned mail
         self.stale_rate: list[str] = []  # charges priced past the end of the budget
+        self.errors: list[str] = []
 
     def add_recorded(self, line: str) -> None:
         self.recorded.append(line)
@@ -192,6 +194,13 @@ async def run_email_expenses(
             mid = ref["message_id"]
             if mid and mid not in source_by_id:
                 source_by_id[mid] = source
+
+    # Retry known failures independently of Gmail's rolling lookback window.
+    for row in ledger.list_retryable(limit=DEFAULT_SEARCH_LIMIT):
+        source = row["source"] or "other"
+        source_by_id.setdefault(row["message_id"], source)
+        if source not in report.sources:
+            report.sources.append(source)
 
     # 2) Drop anything already handled or already queued as pending.
     todo = [mid for mid in source_by_id if not ledger.is_processed(mid) and not ledger.has_pending(mid)]
@@ -245,7 +254,20 @@ async def _process_email(
     dry_run,
     seen_dry,
 ) -> None:
-    expenses = extractor(msg, model=model)
+    try:
+        expenses = extractor(msg, model=model)
+        if not isinstance(expenses, list):
+            raise ExpenseExtractionError("extractor did not return a list")
+    except Exception as exc:
+        # A timeout/malformed answer is not evidence that this is non-expense
+        # mail. Keep it non-terminal and continue processing other messages.
+        reason = f"extraction failed: {type(exc).__name__}"
+        log.warning("Email expense %s", reason)
+        counts["errors"] += 1
+        report.errors.append(f"[{msg.source}] Не удалось разобрать письмо; будет повторная попытка.")
+        if not dry_run:
+            ledger.record(message_id=msg.message_id, source=msg.source, status="error", error=reason)
+        return
     if not expenses:
         # Not a spend email (top-up, transfer, marketing). Handled, not archived.
         if not dry_run:
@@ -459,6 +481,10 @@ def _format_report(counts: dict[str, int], report: _Report, open_pending_rows, a
     if report.recorded:
         lines.append("\n<b>Записано:</b>")
         lines.extend(f"  {line}" for line in report.recorded)
+
+    if report.errors:
+        lines.append("\n<b>Ошибки обработки:</b>")
+        lines.extend(f"  {line}" for line in report.errors)
 
     if report.dry_run:
         # Preview only — nothing is in the ledger yet, so no ids.

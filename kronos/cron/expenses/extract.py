@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 
@@ -138,6 +139,10 @@ class AuditVerdict:
     issues: str = ""
 
 
+class ExpenseExtractionError(Exception):
+    """Extraction failed; the email must remain eligible for retry."""
+
+
 def _parse_json_object(text: str) -> dict | None:
     match = re.search(r"\{[\s\S]*\}", text)
     if not match:
@@ -154,7 +159,7 @@ def _run_json(prompt: str, model=None, tier: ModelTier = ModelTier.STANDARD) -> 
     try:
         response = model.invoke([HumanMessage(content=prompt)])
     except Exception as e:
-        log.warning("LLM call failed: %s", e)
+        log.warning("LLM call failed (%s)", type(e).__name__)
         return None
     content = response.content if isinstance(response.content, str) else str(response.content)
     return _parse_json_object(content)
@@ -182,28 +187,28 @@ def _coerce_amount(value) -> float | None:
         amount = float(str(value).replace(",", "").replace(" ", ""))
     except (TypeError, ValueError):
         return None
-    return amount if amount > 0 else None
+    return amount if math.isfinite(amount) and amount > 0 else None
 
 
 def extract_expenses(email: EmailMessage, model=None) -> list[ExtractedExpense]:
-    """Extract 0..n expenses from a single email via the LLM."""
+    """Extract expenses, or raise on failure; only a valid empty list means none."""
     prompt = EXTRACT_PROMPT.format(email=email.text[:4000], categories=_CATEGORY_LIST)
     data = _run_json(prompt, model=model)
-    if not data:
-        return []
+    if data is None:
+        raise ExpenseExtractionError("extraction unavailable or invalid JSON")
 
     items = data.get("expenses")
     if not isinstance(items, list):
-        return []
+        raise ExpenseExtractionError("extraction response has no expenses list")
 
     out: list[ExtractedExpense] = []
     for item in items:
         if not isinstance(item, dict):
-            continue
+            raise ExpenseExtractionError("invalid expense item")
         amount = _coerce_amount(item.get("amount"))
         currency = _normalize_currency(item.get("currency"))
         if amount is None or currency is None:
-            continue
+            raise ExpenseExtractionError("expense has no valid amount or currency")
         category = _normalize_category(item.get("category"))
         try:
             confidence = float(item.get("category_confidence", 0.0))
