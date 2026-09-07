@@ -31,11 +31,13 @@ import json
 import logging
 import re
 import shlex
+from pathlib import Path
 
 from langchain_core.tools import tool
 
 from kronos.config import settings
 from kronos.health import STATUS_BROKEN, STATUS_OFF, STATUS_OK, HealthCheck
+from kronos.security.public_web import PublicWebBlockedError, PublicWebProxy, validate_public_url
 from kronos.security.untrusted import frame_external, mark_untrusted
 
 log = logging.getLogger("kronos.tools.acquire")
@@ -157,10 +159,17 @@ async def fetch_plain(url: str) -> tuple[int, str]:
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
     }
+    validate_public_url(url)
     timeout = aiohttp.ClientTimeout(total=FETCH_TIMEOUT_SECONDS)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(url, headers=headers, allow_redirects=True) as response:
-            return response.status, await response.text(errors="replace")
+    async with PublicWebProxy() as proxy, aiohttp.ClientSession(timeout=timeout) as session:
+        try:
+            async with session.get(url, headers=headers, proxy=proxy.url, allow_redirects=True) as response:
+                body = await response.text(errors="replace")
+                proxy.raise_if_blocked()
+                return response.status, body
+        except Exception:
+            proxy.raise_if_blocked()
+            raise
 
 
 def stealth_command(url: str) -> list[str] | None:
@@ -182,22 +191,26 @@ def stealth_command(url: str) -> list[str] | None:
 
 async def fetch_stealth(url: str) -> tuple[int, str]:
     """Fetch through the configured stealth backend."""
+    validate_public_url(url)
     command = stealth_command(url)
     if command is None:
         raise FetchBlockedError("no stealth backend configured (set STEALTH_FETCH_COMMAND)")
 
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=STEALTH_TIMEOUT_SECONDS)
-    except TimeoutError:
-        process.kill()
-        raise FetchBlockedError(f"stealth fetch timed out after {STEALTH_TIMEOUT_SECONDS}s") from None
+    # Only the maintained adapter guarantees that Chromium uses the guarded
+    # proxy. HTTP_PROXY alone is not an enforcement mechanism for arbitrary CLIs.
+    adapter = Path(__file__).resolve().parents[2] / "scripts" / "stealth_fetch.py"
+    if len(command) != 3 or Path(command[1]).resolve() != adapter or command[2] != url:
+        raise FetchBlockedError("unsupported stealth backend: use Python + scripts/stealth_fetch.py {url}")
 
-    if process.returncode != 0:
+    async with PublicWebProxy() as proxy:
+        try:
+            stdout, stderr, returncode = await _run_stealth_command([*command, "--proxy", proxy.url])
+        except Exception:
+            proxy.raise_if_blocked()
+            raise
+        proxy.raise_if_blocked()
+
+    if returncode != 0:
         detail = (stderr or b"").decode("utf-8", "replace").strip()[:300]
         raise FetchBlockedError(f"stealth backend failed: {detail or 'no output'}")
 
@@ -210,6 +223,23 @@ async def fetch_stealth(url: str) -> tuple[int, str]:
     if not _looks_like_a_page(body) or looks_blocked(200, body):
         raise FetchBlockedError(f"stealth backend returned no usable content: {body.strip()[:200] or 'empty output'}")
     return 200, body
+
+
+async def _run_stealth_command(command: list[str]) -> tuple[bytes, bytes, int]:
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=STEALTH_TIMEOUT_SECONDS)
+        return stdout, stderr, process.returncode
+    except TimeoutError:
+        raise FetchBlockedError(f"stealth fetch timed out after {STEALTH_TIMEOUT_SECONDS}s") from None
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
 
 
 def _looks_like_a_page(body: str) -> bool:
@@ -230,7 +260,12 @@ async def fetch_browser(url: str) -> tuple[int, str]:
     except Exception as e:  # pragma: no cover - optional extra
         raise FetchBlockedError(f"browser backend unavailable: {e}") from e
 
-    await engine.navigate(url)
+    validate_public_url(url)
+    navigation = await engine.navigate(url)
+    if not navigation.startswith("Navigated to:"):
+        if navigation.startswith("Navigation blocked:"):
+            raise PublicWebBlockedError(navigation)
+        raise FetchBlockedError(navigation)
     # The page's HTML, not a snapshot: every caller here runs html_to_text over
     # what comes back, and a compact accessibility tree is the wrong input for
     # extraction — it drops prices that live in attributes and markup.
@@ -249,6 +284,7 @@ async def fetch_browser(url: str) -> tuple[int, str]:
 
 async def fetch_tiered(url: str) -> tuple[str, str, list[str]]:
     """Try the cheap way first. Returns (tier, content, notes-on-what-failed)."""
+    validate_public_url(url)
     notes: list[str] = []
 
     try:
@@ -256,12 +292,16 @@ async def fetch_tiered(url: str) -> tuple[str, str, list[str]]:
         if not looks_blocked(status, body):
             return TIER_PLAIN, body, notes
         notes.append(f"plain fetch looked blocked (HTTP {status})")
+    except PublicWebBlockedError:
+        raise
     except Exception as e:
         notes.append(f"plain fetch failed: {e}")
 
     try:
         _, body = await fetch_stealth(url)
         return TIER_STEALTH, body, notes
+    except PublicWebBlockedError:
+        raise
     except FetchBlockedError as e:
         notes.append(str(e))
     except Exception as e:
@@ -270,6 +310,8 @@ async def fetch_tiered(url: str) -> tuple[str, str, list[str]]:
     try:
         _, body = await fetch_browser(url)
         return TIER_BROWSER, body, notes
+    except PublicWebBlockedError:
+        raise
     except FetchBlockedError as e:
         notes.append(str(e))
     except Exception as e:
@@ -391,13 +433,14 @@ async def fetch_page(url: str, selector: str = "") -> str:
     from kronos.security.egress import check_url
 
     try:
+        validate_public_url(url)
         check_url(url, tool="fetch_page")
     except Exception as e:
         return f"[ERROR] {e}"
 
     try:
         tier, raw, notes = await fetch_tiered(url)
-    except FetchBlockedError as e:
+    except (FetchBlockedError, PublicWebBlockedError) as e:
         return f"[ERROR] Could not fetch {url}: {e}"
 
     content = _select(raw, selector) if selector else raw

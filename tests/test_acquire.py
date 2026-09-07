@@ -228,7 +228,7 @@ def test_a_template_without_a_url_placeholder_is_refused(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_failing_backend_is_reported_not_raised(monkeypatch):
-    monkeypatch.setattr(settings, "stealth_fetch_command", "/usr/bin/env false {url}")
+    _install_stealth(monkeypatch, b"", b"backend unavailable", 1)
 
     from kronos.tools.acquire import fetch_stealth
 
@@ -238,9 +238,8 @@ async def test_a_failing_backend_is_reported_not_raised(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_working_backend_returns_its_stdout(monkeypatch):
-    # A page-sized body: anything tiny is treated as a wall, see the test below.
-    page = "<p>" + "содержимое " * 60 + "{url}</p>"
-    monkeypatch.setattr(settings, "stealth_fetch_command", f"/usr/bin/env echo {page}")
+    page = "<p>" + "содержимое " * 60 + "https://x.invalid/item</p>"
+    _install_stealth(monkeypatch, page.encode(), b"", 0)
 
     from kronos.tools.acquire import fetch_stealth
 
@@ -396,13 +395,25 @@ async def test_a_backend_that_exits_clean_with_advice_is_not_content(monkeypatch
     Accepting that would hand the model a 37-character non-answer as if it were
     the listing, and the tier would never escalate.
     """
-    monkeypatch.setattr(
-        settings,
-        "stealth_fetch_command",
-        "/usr/bin/env echo Install scrapling for CSS extraction {url}",
-    )
+    _install_stealth(monkeypatch, b"Install scrapling for CSS extraction", b"", 0)
 
     from kronos.tools.acquire import fetch_stealth
 
     with pytest.raises(FetchBlockedError, match="no usable content"):
         await fetch_stealth("https://x.invalid")
+
+
+def _install_stealth(monkeypatch, stdout, stderr, returncode):
+    from pathlib import Path
+
+    from kronos.tools import acquire
+
+    script = Path(acquire.__file__).resolve().parents[2] / "scripts" / "stealth_fetch.py"
+    monkeypatch.setattr(settings, "stealth_fetch_command", f'python "{script}" {{url}}')
+
+    async def run(command):
+        assert command[-2] == "--proxy"
+        assert command[-1].startswith("http://127.0.0.1:")
+        return stdout, stderr, returncode
+
+    monkeypatch.setattr(acquire, "_run_stealth_command", run)

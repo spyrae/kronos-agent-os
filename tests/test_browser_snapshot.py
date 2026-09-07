@@ -161,7 +161,7 @@ async def test_the_browser_tier_refuses_its_own_error_sentence(monkeypatch):
     from kronos.tools import acquire
 
     async def fake_navigate(url, wait_until="domcontentloaded"):
-        return "ok"
+        return "Navigated to: test (status 200)"
 
     async def fake_html():
         return "Could not read the page: navigating"
@@ -178,7 +178,7 @@ async def test_the_browser_tier_refuses_markup_with_no_words_in_it(monkeypatch):
     from kronos.tools import acquire
 
     async def fake_navigate(url, wait_until="domcontentloaded"):
-        return "ok"
+        return "Navigated to: test (status 200)"
 
     async def fake_html():
         return "<html><head>" + ("<script>x=1;</script>" * 3000) + "</head><body></body></html>"
@@ -194,7 +194,7 @@ async def test_a_real_page_through_the_browser_tier_is_accepted(monkeypatch):
     from kronos.tools import acquire
 
     async def fake_navigate(url, wait_until="domcontentloaded"):
-        return "ok"
+        return "Navigated to: test (status 200)"
 
     async def fake_html():
         return "<html><body><h1>ROG Ally X</h1><p>Rp 8.750.000 — ready stock</p></body></html>"
