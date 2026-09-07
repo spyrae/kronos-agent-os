@@ -174,3 +174,41 @@ def test_skip_discards_and_marks_skipped(ledger):
     assert res.startswith("⏭")
     assert ledger.get_pending(pid)["status"] == "discarded"
     assert ledger.is_processed("p1") is True  # skipped → not reprocessed
+
+
+async def test_resolving_one_legacy_pending_does_not_finish_its_sibling(ledger, add_expense, gmail, monkeypatch):
+    monkeypatch.setenv("EMAIL_EXPENSES_ARCHIVE", "true")
+    first, second = _seed(ledger), _seed(ledger)
+    await ep.resolve_pending_expense.ainvoke({"pending_id": first, "category": "Food"})
+    assert not ledger.is_processed("p1")
+    assert gmail.archived == []
+    ep.skip_pending_expense.invoke({"pending_id": second})
+    assert ledger.get("p1")["status"] == "recorded", "discarding a sibling must not erase the successful spend"
+
+
+def test_pending_claim_excludes_second_resolution_and_discard(ledger):
+    pid = _seed(ledger)
+    assert ledger.claim_pending(pid)
+    assert not ledger.claim_pending(pid)
+    assert not ledger.discard_pending(pid)
+    assert ledger.has_pending("p1")
+    ledger.release_pending_claim(pid)
+    assert ledger.get_pending(pid)["status"] == "pending"
+
+
+async def test_uncertain_pending_write_is_not_marked_resolved(ledger, gmail, monkeypatch):
+    from unittest.mock import Mock
+
+    add = Mock()
+    add.invoke.side_effect = TimeoutError("response lost")
+    monkeypatch.setattr(ep, "add_expense", add)
+    pid = _seed(ledger)
+    first = await ep.resolve_pending_expense.ainvoke({"pending_id": pid, "category": "Food"})
+    await ep.resolve_pending_expense.ainvoke({"pending_id": pid, "category": "Food"})
+    assert "нужна сверка" in first
+    add.invoke.assert_called_once()
+    assert not ledger.is_processed("p1")
+    assert ledger.has_pending("p1")
+    assert ledger.get_pending(pid)["status"] == "uncertain"
+    assert len(ledger.uncertain_items()) == 1
+    assert gmail.archived == []

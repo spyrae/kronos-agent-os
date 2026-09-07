@@ -16,9 +16,9 @@ Per email::
            low category confidence     → category := Other (still recorded)
            audit fails (LLM, 2nd pass) → pending
            else                        → add_expense (FIFO IDR→RUB→USD)
-      └─ if anything was recorded → archive email + mark processed
-         if only duplicates       → archive email + mark duplicate
-         if only pending          → leave email in inbox, keep it queued
+      └─ finish only when EVERY item is terminal; otherwise retain the email
+         retry definite failures from the frozen per-item snapshot
+         uncertain writes require reconciliation, never blind replay
 
 Ordering: Maybank is searched FIRST because it is the only split source and a
 Grab ride paid by the Maybank card arrives from BOTH Grab and Maybank — the
@@ -43,6 +43,7 @@ what a real run would do against the live mailbox.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import replace
@@ -52,6 +53,7 @@ from kronos.config import settings
 from kronos.cron.expenses.extract import (
     SUPPORTED_CURRENCIES,
     ExpenseExtractionError,
+    ExtractedExpense,
     audit_expense,
     extract_expenses,
 )
@@ -203,7 +205,7 @@ async def run_email_expenses(
             report.sources.append(source)
 
     # 2) Drop anything already handled or already queued as pending.
-    todo = [mid for mid in source_by_id if not ledger.is_processed(mid) and not ledger.has_pending(mid)]
+    todo = [mid for mid in source_by_id if ledger.needs_processing(mid)]
 
     # 3) Fetch full content and process each email deterministically.
     if todo:
@@ -229,6 +231,14 @@ async def run_email_expenses(
     # 4) Always post a report to the finance topic so the run is visible.
     #    A real run lists ALL open pending (with ids) so the agent re-asks the
     #    user every run until each is resolved from chat.
+    uncertain = ledger.uncertain_items()
+    counts["errors"] += len(uncertain)
+    for row in uncertain:
+        label = f"Позиция {row['item_index'] + 1}" if row["item_index"] >= 0 else "Запись"
+        report.errors.append(
+            f"[{row['source']}] {label} письма {row['message_id']}: "
+            "результат записи неизвестен; нужна сверка, автоматический повтор остановлен."
+        )
     open_pending_rows = [] if dry_run else ledger.list_pending()
     notifier(
         _format_report(counts, report, open_pending_rows, archiving_on=archiving_enabled()),
@@ -255,7 +265,14 @@ async def _process_email(
     seen_dry,
 ) -> None:
     try:
-        expenses = extractor(msg, model=model)
+        items = ledger.list_items(msg.message_id)
+        if items:
+            msg.source = items[0]["source"]
+        expenses = (
+            [ExtractedExpense(**json.loads(row["expense_json"])) for row in items]
+            if items
+            else extractor(msg, model=model)
+        )
         if not isinstance(expenses, list):
             raise ExpenseExtractionError("extractor did not return a list")
     except Exception as exc:
@@ -275,50 +292,50 @@ async def _process_email(
         counts["skipped"] += 1
         return
 
-    outcomes: list[str] = []
-    repr_amount_idr: float | None = None
-    repr_date: str | None = None
+    if not items and not dry_run:
+        # Freeze the extraction (including fallback dates) before any write;
+        # retries must not ask the LLM to invent a different item ordering.
+        expenses = [replace(exp, expense_date=exp.expense_date or _today()) for exp in expenses]
+        items = ledger.prepare_items(msg.message_id, msg.source, expenses)
+        msg.source = items[0]["source"]
+        expenses = [ExtractedExpense(**json.loads(row["expense_json"])) for row in items]
 
-    for exp in expenses:
-        outcome, amount_idr, date = _handle_expense(
-            msg,
-            exp,
-            ledger=ledger,
-            auditor=auditor,
-            expense_writer=expense_writer,
-            model=model,
-            threshold=threshold,
-            counts=counts,
-            report=report,
-            dry_run=dry_run,
-            seen_dry=seen_dry,
-        )
-        outcomes.append(outcome)
-        if outcome == "recorded" and repr_amount_idr is None and amount_idr is not None:
-            repr_amount_idr, repr_date = amount_idr, date
+    for index, exp in enumerate(expenses):
+        if items and items[index]["status"] not in {"ready", "error"}:
+            continue
+        if not dry_run and not ledger.claim_item(msg.message_id, index):
+            continue
+        try:
+            outcome, _, _ = _handle_expense(
+                msg,
+                exp,
+                ledger=ledger,
+                auditor=auditor,
+                expense_writer=expense_writer,
+                model=model,
+                threshold=threshold,
+                counts=counts,
+                report=report,
+                dry_run=dry_run,
+                seen_dry=seen_dry,
+                item_index=index,
+                ref=msg.message_id if len(expenses) == 1 else f"{msg.message_id}:{index + 1}",
+            )
+        except Exception as exc:
+            # An unexpected failure might happen after the write (e.g. while
+            # rendering its result). Never convert that into a blind retry.
+            log.warning("Expense outcome unknown (%s)", type(exc).__name__)
+            outcome = "uncertain"
+            if dry_run:
+                counts["errors"] += 1
+                report.errors.append(f"[{msg.source}] Проверка позиции {index + 1} не удалась; запись не выполнялась.")
+        if not dry_run:
+            ledger.finish_item(msg.message_id, index, outcome)
 
-    if dry_run:
-        return
-
-    if "recorded" in outcomes:
-        ledger.record(
-            message_id=msg.message_id,
-            source=msg.source,
-            status="recorded",
-            amount_idr=repr_amount_idr,
-            expense_date=repr_date,
-        )
-        await _archive(msg, gmail=gmail, ledger=ledger, counts=counts)
-    elif "error" in outcomes:
-        # Leave non-terminal so the next run retries. Notion dedup guards writes.
-        ledger.record(message_id=msg.message_id, source=msg.source, status="error", error="expense write failed")
-    elif "pending" in outcomes:
-        # Only unclear expenses — keep the email in the inbox until resolved.
-        # has_pending() guards against re-queueing on the next run.
-        return
-    else:  # all duplicates
-        ledger.record(message_id=msg.message_id, source=msg.source, status="duplicate")
-        await _archive(msg, gmail=gmail, ledger=ledger, counts=counts)
+    if not dry_run:
+        status = ledger.finalize_message(msg.message_id, msg.source)
+        if status in {"recorded", "duplicate"}:
+            await _archive(msg, gmail=gmail, ledger=ledger, counts=counts)
 
 
 def _handle_expense(
@@ -334,6 +351,8 @@ def _handle_expense(
     report,
     dry_run,
     seen_dry,
+    item_index: int,
+    ref: str,
 ) -> tuple[str, float | None, str | None]:
     """Decide + act on one extracted expense. Returns (outcome, amount_idr, date)."""
     date = exp.expense_date or _today()
@@ -346,6 +365,7 @@ def _handle_expense(
             exp,
             amount_idr,
             date,
+            item_index=item_index,
             reason=f"unsupported currency {exp.currency}",
             counts=counts,
             report=report,
@@ -353,10 +373,10 @@ def _handle_expense(
         )
         return "pending", None, None
 
-    dup_key = (amount_idr, date)
-    is_dup = ledger.find_recorded_duplicate(amount_idr, date) is not None
-    if dry_run and amount_idr is not None and dup_key in seen_dry:
-        is_dup = True
+    dup_key = (amount_idr, date, msg.message_id)
+    is_dup = ledger.find_recorded_duplicate(amount_idr, date, exclude_message_id=msg.message_id) is not None
+    if dry_run and amount_idr is not None:
+        is_dup = is_dup or any(key[:2] == dup_key[:2] and key[2] != msg.message_id for key in seen_dry)
     if is_dup:
         counts["duplicates"] += 1
         return "duplicate", None, None
@@ -368,7 +388,13 @@ def _handle_expense(
     if used_fallback:
         exp = replace(exp, category=FALLBACK_CATEGORY)
 
-    verdict = auditor(msg.text, exp, model=model)
+    try:
+        verdict = auditor(msg.text, exp, model=model)
+    except Exception as exc:
+        log.warning("Expense audit failed (%s)", type(exc).__name__)
+        counts["errors"] += 1
+        report.errors.append(f"[{msg.source}] Проверка позиции {item_index + 1} не удалась; будет повтор.")
+        return "error", None, None
     if not (verdict.ok and verdict.amount_matches and verdict.is_expense):
         _queue_pending(
             ledger,
@@ -376,6 +402,7 @@ def _handle_expense(
             exp,
             amount_idr,
             date,
+            item_index=item_index,
             reason=f"audit rejected: {verdict.issues or 'unverified'}",
             counts=counts,
             report=report,
@@ -399,21 +426,31 @@ def _handle_expense(
         counts["recorded"] += 1
         return "recorded", amount_idr, date
 
-    result = expense_writer(
-        {
-            "description": exp.description,
-            "amount": exp.amount,
-            "currency": exp.currency,
-            "category": category,
-            "date": exp.expense_date,  # None → add_expense uses today
-            "split_full": _is_split_source(msg.source),
-            "ref": msg.message_id,
-        }
-    )
+    try:
+        result = expense_writer(
+            {
+                "description": exp.description,
+                "amount": exp.amount,
+                "currency": exp.currency,
+                "category": category,
+                "date": exp.expense_date,
+                "split_full": _is_split_source(msg.source),
+                "ref": ref,
+            }
+        )
+    except Exception as exc:
+        log.warning("Expense write outcome unknown (%s)", type(exc).__name__)
+        return "uncertain", None, None
+    # The canonical writer may have sent a POST before losing its response.
+    # No automatic replay can safely decide whether that POST took effect.
+    if not isinstance(result, str) or result.startswith("[ERROR] Failed to write to Notion:"):
+        return "uncertain", None, None
     if result.startswith("[ERROR]"):
-        log.error("add_expense failed for %s: %s", msg.message_id, result)
         counts["errors"] += 1
+        report.errors.append(f"[{msg.source}] Позиция {item_index + 1} не записана; будет повтор.")
         return "error", None, None
+    if not result.startswith("✅"):
+        return "uncertain", None, None
 
     report.add_recorded(f"[{msg.source}] {result}{fallback_note}")
     # add_expense converts past an exhausted budget rather than dropping the conversion;
@@ -424,7 +461,7 @@ def _handle_expense(
     return "recorded", amount_idr, date
 
 
-def _queue_pending(ledger, msg, exp, amount_idr, date, *, reason, counts, report, dry_run) -> None:
+def _queue_pending(ledger, msg, exp, amount_idr, date, *, item_index, reason, counts, report, dry_run) -> None:
     if not dry_run:
         ledger.add_pending(
             message_id=msg.message_id,
@@ -436,6 +473,7 @@ def _queue_pending(ledger, msg, exp, amount_idr, date, *, reason, counts, report
             expense_date=date,
             guessed_category=exp.category,
             reason=reason,
+            item_index=item_index,
         )
     guess = exp.category or "?"
     report.add_pending(
