@@ -1,7 +1,7 @@
 """LLM factory with configurable provider chains and cooldown tracking.
 
 Default resolution order:
-  orchestrator: Codex CLI (gpt-5.5)      # top-level supervisor
+  orchestrator: Codex CLI (gpt-5.6-terra)  # top-level supervisor
   standard:     DeepSeek V3
   lite:         DeepSeek V3
 
@@ -32,6 +32,16 @@ log = logging.getLogger("kronos.llm")
 
 COOLDOWN_SECONDS = 300  # 5 minutes
 RETRIABLE_STATUS_CODES = {408, 409, 425, 429}
+
+# A model the provider no longer serves is a fault of that provider, not of the
+# request, so the next provider in the chain should get a turn.
+MODEL_UNAVAILABLE_MARKERS = (
+    "model not found",
+    "model_not_found",
+    "does not exist or you do not have access",
+    "inaccessible",
+    "not deployed",
+)
 
 
 class ModelTier(str, Enum):
@@ -333,7 +343,7 @@ _PRESETS: dict[str, dict[str, object]] = {
     },
     "codex_cli": {
         "adapter": "codex-cli",
-        "model": "gpt-5.5",
+        "model": "gpt-5.6-terra",
         "api_key_required": False,
         "max_tokens": 4096,
         "timeout_seconds": 180,
@@ -520,8 +530,12 @@ def resolve_provider_config(provider: str) -> ProviderConfig | None:
     timeout_seconds = _int_env(prefix + "TIMEOUT_SECONDS", int(preset.get("timeout_seconds", 180)))
 
     if provider_id == "codex_cli":
-        if not model:
-            model = settings.kaos_codex_model
+        # KAOS_CODEX_MODEL is the documented knob for the Codex backend, but the
+        # preset above always filled `model` first, so this only applied when
+        # both were empty — the setting never took effect and the model could
+        # not be changed without editing Python. The explicit per-provider
+        # override still wins over it.
+        model = str(_env(prefix + "MODEL", "")) or settings.kaos_codex_model or model
         command = command or settings.kaos_codex_command
         timeout_seconds = _int_env(prefix + "TIMEOUT_SECONDS", settings.kaos_codex_timeout_seconds)
 
@@ -595,15 +609,7 @@ def is_retriable_llm_error(error: BaseException) -> bool:
             return True
         if status_code in RETRIABLE_STATUS_CODES:
             return True
-        if status_code == 404 and any(
-            marker in message
-            for marker in (
-                "model not found",
-                "model_not_found",
-                "inaccessible",
-                "not deployed",
-            )
-        ):
+        if status_code == 404 and any(marker in message for marker in MODEL_UNAVAILABLE_MARKERS):
             return True
         if 400 <= status_code < 500:
             return False
@@ -632,6 +638,12 @@ def is_retriable_llm_error(error: BaseException) -> bool:
         "blocked by shield",
         "content policy",
     )
+    # Checked before the generic markers: a retired model reports "404 Not
+    # Found", and the bare "not found" below would otherwise class it as
+    # non-retriable — leaving a dead first provider to fail the whole chain
+    # while a healthy fallback sat unused.
+    if any(marker in message for marker in MODEL_UNAVAILABLE_MARKERS):
+        return True
     if any(marker in message for marker in non_retriable_markers):
         return False
     return any(marker in message for marker in retriable_markers)

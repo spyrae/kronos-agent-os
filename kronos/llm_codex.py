@@ -33,7 +33,7 @@ class ChatCodexCLI(BaseChatModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    model_name: str = "gpt-5.5"
+    model_name: str = "gpt-5.6-terra"
     command: str = "codex"
     timeout_seconds: int = 180
     cwd: str = ""
@@ -153,7 +153,13 @@ class ChatCodexCLI(BaseChatModel):
 def _read_codex_result(returncode: int | None, stdout: str, stderr: str, output_path: str) -> str:
     if returncode != 0:
         detail = (stderr or stdout).strip()
-        raise RuntimeError(f"Codex CLI failed ({returncode}): {detail[:1000]}")
+        # Keep the tail, not the head. Codex echoes the session banner and the
+        # entire prompt before it reports anything, so truncating from the
+        # front yields "Reading additional input from stdin..." and drops the
+        # actual cause — which hid a retired-model 404 from the logs and from
+        # is_retriable_llm_error, leaving the chain to re-raise instead of
+        # failing over to the next provider.
+        raise RuntimeError(f"Codex CLI failed ({returncode}): ...{detail[-1000:]}")
 
     text = Path(output_path).read_text(encoding="utf-8").strip() if os.path.exists(output_path) else ""
     if not text:

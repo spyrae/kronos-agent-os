@@ -19,8 +19,8 @@ class Settings(BaseSettings):
     kaos_lite_provider_chain: str = "deepseek"
     kaos_orchestrator_provider_chain: str = ""  # empty = standard tier
     kaos_vision_provider: str = "codex-cli"  # codex-cli | openai-api
-    kaos_codex_model: str = "gpt-5.5"
-    kaos_vision_model: str = "gpt-5.5"
+    kaos_codex_model: str = "gpt-5.6-terra"
+    kaos_vision_model: str = "gpt-5.6-terra"
     kaos_codex_command: str = "codex"
     kaos_codex_timeout_seconds: int = 180
     kaos_vision_timeout_seconds: int = 120

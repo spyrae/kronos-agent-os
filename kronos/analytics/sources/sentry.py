@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 import urllib.parse
 import urllib.request
 
@@ -51,12 +52,18 @@ def collect() -> dict:
             {"query": "is:unresolved lastSeen:-24h", "sort": "freq", "limit": "10"},
         )
 
-        # Project stats (events received in last 24h)
+        # Project stats (events received in last 24h).
+        #
+        # Hourly resolution, summed. At "1d" the endpoint returns a single
+        # bucket for the calendar day that has just begun, so anything that
+        # happened yesterday evening reads as zero — the pulse reported
+        # "events_24h: 0" next to an issue it had just listed as active.
         stats = _api_get(
             f"/projects/{org}/{project}/stats/",
-            {"stat": "received", "resolution": "1d"},
+            {"stat": "received", "resolution": "1h"},
         )
-        events_24h = stats[-1][1] if stats else 0
+        cutoff = time.time() - 24 * 3600
+        events_24h = sum(count for ts, count in stats if ts >= cutoff) if stats else 0
 
         # Top issues limited to those ACTIVE in the last 24h (a 9-day-dead issue
         # with a large all-time count must not surface as a fresh spike).

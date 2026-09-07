@@ -269,6 +269,21 @@ def test_retriable_llm_error_classification() -> None:
     assert is_retriable_llm_error(RuntimeError("blocked by shield")) is False
 
 
+def test_retired_model_falls_through_to_next_provider() -> None:
+    """A CLI provider reporting a retired model must not fail the whole chain.
+
+    The Codex backend surfaces this as a plain RuntimeError with no status
+    code, and the message contains "Not Found" — which the generic marker list
+    treats as non-retriable. In production that left the daily pulse dead while
+    a healthy DeepSeek fallback sat unused behind it.
+    """
+    error = RuntimeError(
+        "Codex CLI failed (1): ERROR: unexpected status 404 Not Found: "
+        "The model `gpt-5.5` does not exist or you do not have access to it."
+    )
+    assert is_retriable_llm_error(error) is True
+
+
 def test_provider_config_can_come_from_dotenv_without_settings_fields(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(
