@@ -454,3 +454,78 @@ async def test_normal_charge_leaves_no_stale_rate_block(ledger, notes):
     await _run(gmail, ledger, notes, mapping=mapping, writer=Writer(result="✅ 'GrabFood' — 41,500 IDR = 191 ₽"))
 
     assert "Бюджет IDR исчерпан" not in notes.captured[0][0]
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+async def test_extraction_failure_does_not_skip_or_archive_and_next_email_runs(ledger, notes, monkeypatch, dry_run):
+    monkeypatch.setenv("EMAIL_EXPENSES_ARCHIVE", "true")
+    gmail = FakeGmail(
+        {"grab": [{"message_id": "bad"}, {"message_id": "good"}]},
+        {"bad": EmailMessage("bad", "sensitive email"), "good": EmailMessage("good", "receipt")},
+    )
+
+    def extract(email, model=None):
+        if email.message_id == "bad":
+            raise TimeoutError("sensitive email must not appear in logs")
+        return [ExtractedExpense("Lunch", 42000, "IDR", "Food", 0.9, "2026-07-05")]
+
+    writer = Writer()
+    counts = await proc.run_email_expenses(
+        gmail_client=gmail,
+        ledger=ledger,
+        extractor=extract,
+        auditor=_auditor(),
+        expense_writer=writer,
+        notifier=notes,
+        dry_run=dry_run,
+    )
+    assert counts["errors"] == 1
+    assert counts["skipped"] == 0
+    assert counts["recorded"] == 1
+    assert not ledger.is_processed("bad")
+    assert "bad" not in gmail.archived
+    assert "повторная попытка" in notes.captured[0][0]
+    assert "sensitive email" not in notes.captured[0][0]
+    if dry_run:
+        assert ledger.get("bad") is None
+        assert writer.calls == []
+    else:
+        assert ledger.get("bad")["status"] == "error"
+        assert len(writer.calls) == 1
+
+    # The failed message must survive even after Gmail's lookback window ends.
+    if not dry_run:
+        gmail.by_source = {}
+        counts, retried = await _run(
+            gmail,
+            ledger,
+            notes,
+            mapping={
+                "bad": [ExtractedExpense("Retry", 43000, "IDR", "Food", 0.9, "2026-07-05")],
+            },
+        )
+        assert counts["emails"] == 1
+        assert len(retried.calls) == 1
+        assert ledger.is_processed("bad")
+
+
+async def test_real_extractor_timeout_keeps_email_nonterminal(ledger, notes):
+    from unittest.mock import Mock
+
+    model = Mock()
+    model.invoke.side_effect = TimeoutError("LLM unavailable")
+    gmail = FakeGmail({"grab": [{"message_id": "g1"}]}, {"g1": EmailMessage("g1", "receipt")})
+    writer = Writer()
+    counts = await proc.run_email_expenses(
+        gmail_client=gmail,
+        ledger=ledger,
+        model=model,
+        expense_writer=writer,
+        notifier=notes,
+    )
+    assert counts["errors"] == 1
+    assert counts["skipped"] == 0
+    assert not ledger.is_processed("g1")
+    assert ledger.get("g1")["status"] == "error"
+    assert writer.calls == []
+    assert gmail.archived == []

@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 
+import pytest
+
 from kronos.cron.expenses.extract import (
+    ExpenseExtractionError,
     ExtractedExpense,
     audit_expense,
     extract_expenses,
@@ -51,9 +54,10 @@ def test_extract_skips_non_expense_empty():
     assert extract_expenses(_email("Top-up successful"), model=model) == []
 
 
-def test_extract_drops_item_without_amount():
+def test_extract_retries_item_without_amount():
     model = FakeModel('{"expenses":[{"description":"?","currency":"IDR","category":"Food"}]}')
-    assert extract_expenses(_email(), model=model) == []
+    with pytest.raises(ExpenseExtractionError):
+        extract_expenses(_email(), model=model)
 
 
 def test_extract_unmapped_category_forces_low_confidence():
@@ -78,7 +82,8 @@ def test_extract_maps_category_alias():
 
 def test_extract_handles_non_json():
     model = FakeModel("sorry, I could not parse this email")
-    assert extract_expenses(_email(), model=model) == []
+    with pytest.raises(ExpenseExtractionError):
+        extract_expenses(_email(), model=model)
 
 
 def test_audit_ok_verdict():
@@ -114,3 +119,29 @@ def test_audit_fails_closed_without_json():
 
     assert verdict.ok is False
     assert verdict.issues == "audit unavailable"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{}",
+        '{"expenses":null}',
+        '{"expenses":{}}',
+        '{"expenses":[null]}',
+        '{"expenses":[{"amount":"NaN","currency":"IDR"}]}',
+        '{"expenses":[{"amount":"Infinity","currency":"IDR"}]}',
+        '{"expenses":[{"amount":10,"currency":"IDR"},{"currency":"IDR"}]}',
+    ],
+)
+def test_malformed_or_partial_extraction_is_not_an_empty_receipt(content):
+    with pytest.raises(ExpenseExtractionError):
+        extract_expenses(_email(), model=FakeModel(content))
+
+
+def test_llm_timeout_is_retryable_not_empty():
+    from unittest.mock import Mock
+
+    model = Mock()
+    model.invoke.side_effect = TimeoutError("provider timeout")
+    with pytest.raises(ExpenseExtractionError):
+        extract_expenses(_email(), model=model)

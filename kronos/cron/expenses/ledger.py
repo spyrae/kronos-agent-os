@@ -124,6 +124,14 @@ class ExpenseLedger:
             (message_id,),
         )
 
+    def list_retryable(self, limit: int = 25):
+        """Return failed emails even after they leave the Gmail search window."""
+        return self._db.read(
+            "SELECT message_id, source FROM processed_emails WHERE status = 'error' "
+            "ORDER BY updated_at, message_id LIMIT ?",
+            (limit,),
+        )
+
     def record(
         self,
         *,
