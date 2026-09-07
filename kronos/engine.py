@@ -12,6 +12,7 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from contextvars import ContextVar
@@ -236,8 +237,13 @@ def tool_requires_approval(tool: BaseTool, args: dict) -> bool:
         return bool(declared_attr)
 
     approval_names, action_prefixes, read_only_prefixes = _approval_lists()
-    name = tool.name.lower()
+    from kronos.security.mcp_tools import normalized_tool_name
+
+    name = normalized_tool_name(tool.name)
     if name in approval_names:
+        return True
+    # Notion/OpenAPI names are API-post-page / API-patch-page, not post_page.
+    if re.search(r"(?:^|_)api_(post|put|patch|delete)(?:_|$)", name):
         return True
     if name.startswith(read_only_prefixes):
         return False

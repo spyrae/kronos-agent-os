@@ -15,7 +15,7 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from kronos.config import settings
-from kronos.security.untrusted import mark_untrusted
+from kronos.security.mcp_tools import mark_mcp_tools
 from kronos.tools.mcp_servers import build_mcp_config
 
 log = logging.getLogger("kronos.tools.gateway")
@@ -127,7 +127,7 @@ class MCPGateway:
         # An MCP tool runs in another process and returns whatever that process
         # (or the site/API behind it) says. All of it is attacker-controllable, so
         # the whole surface is marked untrusted rather than enumerated per server.
-        mark_untrusted(self._tools, reason="mcp")
+        self._tools = mark_mcp_tools(self._tools)
 
         log.info("Loaded %d tools from %d servers", len(self._tools), len(combined))
         return self._tools
@@ -236,7 +236,7 @@ class MCPGateway:
             # Reload replaces the tool list, so the untrusted marking has to be
             # re-applied here too — otherwise a reload silently un-marks every
             # MCP tool and their output starts reaching the model as trusted text.
-            mark_untrusted(self._tools, reason="mcp")
+            self._tools = mark_mcp_tools(self._tools)
             msg = f"Reloaded: {len(self._tools)} tools from {len(combined)} servers"
             log.info(msg)
             return msg
