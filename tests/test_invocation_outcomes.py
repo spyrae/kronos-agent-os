@@ -32,7 +32,11 @@ def agent(tmp_path, monkeypatch):
     obj._external_tool_event_callback = None
     obj._durable_recovery_checked = True
     obj._last_pending_approval_id = None
-    return obj
+    import kronos.db as db_module
+
+    db_module._instances.clear()
+    yield obj
+    db_module._instances.clear()
 
 
 def _model(monkeypatch, responses):
@@ -120,7 +124,7 @@ async def test_validation_rejection_is_not_completion(agent, monkeypatch):
 async def test_approval_continuation_is_correlated_after_store_restart(agent, monkeypatch, approved):
     effects = _tool(agent)
     _model(monkeypatch, [_request(), AIMessage(content="final continuation")])
-    paused = await agent.ainvoke_outcome("do it", "plan:42")
+    paused = await agent.ainvoke_outcome("do it", "thread42")
     assert paused.status == "waiting_approval"
     assert paused.approval_id
     effects.assert_not_awaited()
@@ -128,7 +132,7 @@ async def test_approval_continuation_is_correlated_after_store_restart(agent, mo
     waiting = await agent.get_turn_outcome(paused.turn_id)
     assert waiting.status == "waiting_approval"
     assert waiting.approval_id == paused.approval_id
-    assert waiting.thread_id == "plan:42"
+    assert waiting.thread_id == "thread42"
     await agent.resolve_tool_approval(paused.approval_id, approved=approved)
     result = await agent.get_turn_outcome(paused.turn_id)
     assert result.status == ("completed" if approved else "rejected")
@@ -241,3 +245,329 @@ async def test_migration_retains_legacy_rows_and_is_concurrent_idempotent(tmp_pa
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT * FROM active_turns").fetchall() == [("old", "done", None)]
         assert sum(row[1] == "final_content" for row in db.execute("PRAGMA table_info(active_turns)")) == 1
+
+
+@pytest.fixture
+def plan_bridge(agent, monkeypatch):
+    from types import SimpleNamespace
+
+    from kronos import bridge
+    from kronos.cron import plans as poller
+
+    monkeypatch.setattr(settings, "agent_name", "kronos")
+    monkeypatch.setattr(settings, "tg_bot_token", "")
+    monkeypatch.setattr(settings, "allowed_users", "77")
+    client = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(id=10)))
+    monkeypatch.setattr(bridge, "_agent", agent)
+    monkeypatch.setattr(bridge, "_client", client)
+    monkeypatch.setattr(bridge, "_rate_limit_wait", AsyncMock())
+    monkeypatch.setattr(poller, "send_webhook", lambda *args, **kwargs: True)
+    return client
+
+
+def _plan_step():
+    from kronos import plans
+
+    plan_id = plans.create_plan(agent_name="kronos", goal="test goal", chat_id=77)
+    step_id = plans.add_step(plan_id, "test operation")
+    return plan_id, step_id
+
+
+async def test_plan_waits_until_approved_continuation_and_never_reinvokes(agent, plan_bridge, monkeypatch):
+    from kronos import plans
+    from kronos.cron import plans as poller
+
+    effects = _tool(agent)
+    model = _model(monkeypatch, [_request(), AIMessage(content="operation completed"), AIMessage(content="summary")])
+    plan_id, step_id = _plan_step()
+    dependent = plans.add_step(plan_id, "must wait", depends_on=[step_id])
+    await poller.run_due_plan_steps()
+    step = plans.get_step(step_id)
+    assert step["state"] == plans.STEP_APPROVAL
+    assert step["turn_id"] and step["approval_id"]
+    assert plan_bridge.send_message.await_count == 1
+    prompt = plan_bridge.send_message.call_args.args[1]
+    assert f"/approve {step['approval_id']}" in prompt
+    assert "buttons" not in plan_bridge.send_message.call_args.kwargs, "userbots need commands"
+    assert plans.get_plan(plan_id)["state"] == plans.PLAN_ACTIVE
+    assert plans.get_step(dependent)["attempts"] == 0
+    await poller.run_due_plan_steps()
+    assert plan_bridge.send_message.await_count == 1
+    assert model.ainvoke.await_count == 1
+    effects.assert_not_awaited()
+
+    # A restarted store sees the same approval, not a new invocation.
+    agent._session_store = SessionStore(agent._session_store.db_path)
+    await agent.resolve_tool_approval(step["approval_id"], approved=True, decided_by="77")
+    await poller.run_due_plan_steps()
+    assert plans.get_step(step_id)["state"] == plans.STEP_DONE
+    assert plans.get_step(step_id)["result"] == "operation completed"
+    assert effects.await_count == 1
+    assert plans.get_step(dependent)["attempts"] == 1
+
+
+@pytest.mark.parametrize("decision", ["rejected", "expired"])
+async def test_plan_refusal_is_terminal_not_automatic_reapproval(agent, plan_bridge, monkeypatch, decision):
+    from kronos import plans
+    from kronos.cron import plans as poller
+
+    effects = _tool(agent)
+    _model(monkeypatch, [_request(), AIMessage(content="not performed"), AIMessage(content="summary")])
+    plan_id, step_id = _plan_step()
+    await poller.run_due_plan_steps()
+    step = plans.get_step(step_id)
+    if decision == "rejected":
+        await agent.resolve_tool_approval(step["approval_id"], approved=False)
+    else:
+        with sqlite3.connect(agent._session_store.db_path) as db:
+            db.execute("UPDATE pending_approvals SET requested_at = datetime('now', '-2 hours')")
+    await poller.run_due_plan_steps()
+    assert plans.get_step(step_id)["state"] == plans.STEP_FAILED
+    assert plans.get_step(step_id)["attempts"] == 1
+    assert plans.get_plan(plan_id)["state"] == plans.PLAN_FAILED
+    assert decision in plans.get_step(step_id)["result"]
+    await poller.run_due_plan_steps()
+    effects.assert_not_awaited()
+
+
+async def test_unsent_approval_retries_delivery_not_execution(agent, plan_bridge, monkeypatch):
+    from kronos import plans
+    from kronos.cron import plans as poller
+
+    _tool(agent)
+    model = _model(monkeypatch, [_request()])
+    _, step_id = _plan_step()
+    plan_bridge.send_message.side_effect = [RuntimeError("offline"), object()]
+    await poller.run_due_plan_steps()
+    assert plans.get_step(step_id)["notified_approval_id"] == ""
+    await poller.run_due_plan_steps()
+    step = plans.get_step(step_id)
+    assert step["notified_approval_id"] == step["approval_id"]
+    assert plan_bridge.send_message.await_count == 2
+    assert model.ainvoke.await_count == 1
+
+
+async def test_crash_after_approval_before_poller_save_is_reconciled(agent, plan_bridge, monkeypatch):
+    from kronos import plans
+    from kronos.cron import plans as poller
+
+    _tool(agent)
+    model = _model(monkeypatch, [_request()])
+    plan_id, step_id = _plan_step()
+    assert plans.claim_step(step_id)
+    await agent.ainvoke_outcome(
+        "operation", f"plan:{plan_id}", on_turn_started=lambda turn_id: plans.link_turn(step_id, turn_id)
+    )
+    assert plans.get_step(step_id)["state"] == plans.STEP_RUNNING
+    agent._session_store = SessionStore(agent._session_store.db_path)
+    await poller.run_due_plan_steps()
+    assert plans.get_step(step_id)["state"] == plans.STEP_APPROVAL
+    assert model.ainvoke.await_count == 1
+    assert plan_bridge.send_message.await_count == 1
+
+
+async def test_cancelled_plan_cannot_execute_pending_approval_or_resume(agent, plan_bridge, monkeypatch):
+    from kronos import plans
+    from kronos.cron import plans as poller
+
+    effects = _tool(agent)
+    _model(monkeypatch, [_request()])
+    plan_id, step_id = _plan_step()
+    await poller.run_due_plan_steps()
+    step = plans.get_step(step_id)
+    plans.cancel_plan(plan_id, "kronos")
+    await agent.resolve_tool_approval(step["approval_id"], approved=True)
+    effects.assert_not_awaited()
+    assert not plans.update_linked_step(step_id, step["turn_id"], state=plans.STEP_DONE, result="wrong")
+    assert await agent.resume_interrupted_turn({"turn_id": step["turn_id"], "thread_id": f"plan:{plan_id}"}) is None
+    assert plans.get_plan(plan_id)["state"] == plans.PLAN_CANCELLED
+    effects.assert_not_awaited()
+
+
+async def test_concurrent_pollers_claim_only_one_plan_turn(agent, plan_bridge, monkeypatch):
+    from kronos import plans
+    from kronos.cron import plans as poller
+
+    _tool(agent)
+    model = _model(monkeypatch, [_request()])
+    _, step_id = _plan_step()
+    await asyncio.gather(poller.run_due_plan_steps(), poller.run_due_plan_steps())
+    assert plans.get_step(step_id)["attempts"] == 1
+    assert model.ainvoke.await_count == 1
+
+
+@pytest.mark.parametrize("sender_id,chat_id", [(78, 77), (77, 88)])
+async def test_plan_approval_command_rejects_wrong_user_or_destination(
+    agent,
+    plan_bridge,
+    monkeypatch,
+    sender_id,
+    chat_id,
+):
+    from types import SimpleNamespace
+
+    from kronos import plans
+    from kronos.bridge_plan_approval import handle_plan_approval_command
+    from kronos.cron import plans as poller
+
+    effects = _tool(agent)
+    _model(monkeypatch, [_request()])
+    _, step_id = _plan_step()
+    await poller.run_due_plan_steps()
+    step = plans.get_step(step_id)
+    event = SimpleNamespace(
+        raw_text=f"/approve {step['approval_id']}",
+        sender_id=sender_id,
+        chat_id=chat_id,
+        is_private=True,
+        respond=AsyncMock(),
+    )
+    assert await handle_plan_approval_command(event)
+    effects.assert_not_awaited()
+    event.respond.assert_not_awaited()
+    assert (await agent.get_turn_outcome(step["turn_id"])).status == "waiting_approval"
+
+
+async def test_owner_command_completes_real_plan_turn(agent, plan_bridge, monkeypatch):
+    from types import SimpleNamespace
+
+    from kronos import plans
+    from kronos.bridge_plan_approval import handle_plan_approval_command
+    from kronos.cron import plans as poller
+
+    effects = _tool(agent)
+    _model(monkeypatch, [_request(), AIMessage(content="completed"), AIMessage(content="summary")])
+    plan_id, step_id = _plan_step()
+    await poller.run_due_plan_steps()
+    step = plans.get_step(step_id)
+    event = SimpleNamespace(
+        raw_text=f"/approve {step['approval_id']}", sender_id=77, chat_id=77, is_private=True, respond=AsyncMock()
+    )
+    assert await handle_plan_approval_command(event)
+    assert effects.await_count == 1
+    await poller.run_due_plan_steps()
+    assert plans.get_step(step_id)["result"] == "completed"
+    assert plans.get_plan(plan_id)["state"] == plans.PLAN_DONE
+
+
+async def test_failed_turn_with_nonempty_answer_requires_review_not_rerun(agent, plan_bridge, monkeypatch):
+    from kronos import plans
+    from kronos.cron import plans as poller
+
+    model = _model(monkeypatch, [RuntimeError("provider unavailable")])
+    _, step_id = _plan_step()
+    await poller.run_due_plan_steps()
+    assert plans.get_step(step_id)["state"] == plans.STEP_REVIEW
+    await poller.run_due_plan_steps()
+    assert model.ainvoke.await_count == 1
+
+
+def test_plan_migration_retains_legacy_rows_and_is_repeatable(tmp_path):
+    from kronos.migrations.v002_plan_turns import migrate as migrate_plans
+
+    with sqlite3.connect(tmp_path / "plans.db", isolation_level=None) as db:
+        db.execute("CREATE TABLE plan_steps (id INTEGER PRIMARY KEY, state TEXT)")
+        db.execute("INSERT INTO plan_steps VALUES (1, 'running')")
+        migrate_plans(db)
+        migrate_plans(db)
+        assert db.execute("SELECT * FROM plan_steps").fetchall() == [(1, "running", "", "", "")]
+
+
+async def test_next_approval_notifies_once_and_still_blocks_plan(agent, plan_bridge, monkeypatch):
+    from kronos import plans
+    from kronos.cron import plans as poller
+
+    effects = _tool(agent)
+    # The second request has a different call id and arguments/tool scope would
+    # normally matter; create a second gate directly to exercise reconciliation.
+    _model(monkeypatch, [_request()])
+    _, step_id = _plan_step()
+    await poller.run_due_plan_steps()
+    step = plans.get_step(step_id)
+    store = agent._session_store
+    await store.claim_pending_approval(approval_id=step["approval_id"], decision="approved")
+    second_id = await store.create_pending_approval(
+        turn_id=step["turn_id"],
+        thread_id=f"plan:{step['plan_id']}",
+        tool_call_id="second",
+        tool_name="restart_service",
+        args={"target": "other"},
+    )
+    await poller.run_due_plan_steps()
+    await poller.run_due_plan_steps()
+    current = plans.get_step(step_id)
+    assert current["state"] == plans.STEP_APPROVAL
+    assert current["notified_approval_id"] == second_id
+    assert plan_bridge.send_message.await_count == 2
+    effects.assert_not_awaited()
+
+
+async def test_plan_callback_requires_owner_and_exact_topic(agent, plan_bridge, monkeypatch):
+    from types import SimpleNamespace
+
+    from kronos import bridge, plans
+    from kronos.cron import plans as poller
+
+    _tool(agent)
+    _model(monkeypatch, [_request()])
+    _, step_id = _plan_step()
+    await poller.run_due_plan_steps()
+    step = plans.get_step(step_id)
+    pending = await agent.get_pending_tool_approval(step["approval_id"])
+    event = SimpleNamespace(chat_id=77, is_private=True)
+    assert await bridge._approval_callback_allowed(event, sender_id=77, pending=pending)
+    assert not await bridge._approval_callback_allowed(event, sender_id=78, pending=pending)
+    event.chat_id = 99
+    assert not await bridge._approval_callback_allowed(event, sender_id=77, pending=pending)
+    event.chat_id = 77
+    monkeypatch.setattr(bridge, "_approval_callback_topic_id", AsyncMock(return_value=123))
+    assert not await bridge._approval_callback_allowed(event, sender_id=77, pending=pending)
+
+
+async def test_allow_all_chat_users_does_not_allow_plan_approval(agent, plan_bridge, monkeypatch):
+    from types import SimpleNamespace
+
+    from kronos import bridge, plans
+    from kronos.bridge_plan_approval import handle_plan_approval_command
+    from kronos.cron import plans as poller
+
+    effects = _tool(agent)
+    _model(monkeypatch, [_request()])
+    _, step_id = _plan_step()
+    await poller.run_due_plan_steps()
+    step = plans.get_step(step_id)
+    monkeypatch.setattr(settings, "allowed_users", "")
+    monkeypatch.setattr(settings, "allow_all_users", True)
+    event = SimpleNamespace(
+        raw_text=f"/approve {step['approval_id']}", sender_id=77, chat_id=77, is_private=True, respond=AsyncMock()
+    )
+    assert await handle_plan_approval_command(event)
+    pending = await agent.get_pending_tool_approval(step["approval_id"])
+    assert not await bridge._approval_callback_allowed(event, sender_id=77, pending=pending)
+    effects.assert_not_awaited()
+
+
+async def test_bot_plan_prompt_has_matching_inline_callback(agent, plan_bridge, monkeypatch):
+    from kronos import plans
+    from kronos.cron import plans as poller
+
+    monkeypatch.setattr(settings, "tg_bot_token", "test-token-not-real")
+    _tool(agent)
+    _model(monkeypatch, [_request()])
+    _, step_id = _plan_step()
+    await poller.run_due_plan_steps()
+    approval_id = plans.get_step(step_id)["approval_id"]
+    buttons = plan_bridge.send_message.call_args.kwargs["buttons"]
+    assert buttons[0][0].data == f"kaos:approval:approve:{approval_id}".encode()
+    assert buttons[0][1].data == f"kaos:approval:reject:{approval_id}".encode()
+
+
+async def test_concurrent_cold_stores_initialize_and_keep_every_turn(tmp_path):
+    for index in range(10):
+        path = str(tmp_path / f"cold-{index}.db")
+        stores = [SessionStore(path) for _ in range(4)]
+        turns = await asyncio.gather(*(store.begin_turn(f"thread:{i}", "hello") for i, store in enumerate(stores)))
+        assert len(set(turns)) == 4
+        with sqlite3.connect(path) as db:
+            assert db.execute("SELECT count(*) FROM active_turns").fetchone()[0] == 4
+            assert db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"

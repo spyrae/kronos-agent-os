@@ -391,6 +391,14 @@ class KronosAgent:
         if not self._session_store:
             return "Approval state недоступен: session store не настроен."
 
+        pending = await self._session_store.get_pending_approval(approval_id)
+        if pending and str(pending.get("thread_id", "")).startswith("plan:"):
+            from kronos import plans
+
+            plan = plans.plan_for_turn(str(pending["turn_id"]), settings.agent_name)
+            if not plan or pending["thread_id"] != f"plan:{plan['id']}":
+                return "План остановлен или связь с шагом потеряна. Approval не выполнен."
+
         pending = await self._session_store.claim_pending_approval(
             approval_id=approval_id,
             decision="approved" if approved else "rejected",
@@ -512,6 +520,14 @@ class KronosAgent:
         thread_id = str(turn.get("thread_id") or "")
         if not turn_id or not thread_id:
             return None
+
+        if thread_id.startswith("plan:"):
+            from kronos import plans
+
+            plan = plans.plan_for_turn(turn_id, settings.agent_name)
+            if not plan or thread_id != f"plan:{plan['id']}":
+                await self._session_store.fail_turn(turn_id, "plan_not_authorized_to_resume")
+                return None
 
         messages = await self._session_store.load_turn_messages(thread_id, turn_id)
         if not messages:

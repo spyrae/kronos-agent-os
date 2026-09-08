@@ -24,7 +24,7 @@
 | F04 | Ошибка extraction сохраняется для retry, не считается empty | Перенесён, regression пройден | Не развёрнуто; историческая сверка отдельно |
 | F05 | Per-item ledger; partial/unknown outcomes не теряются и не дублируются | Перенесён, regression пройден | Нужна миграция и сверка |
 | F06 | Межпроцессная сериализация всех budget writers | Перенесён, regression пройден | Не развёрнуто |
-| F07 | Approval wait не завершает шаг; approve/reject/restart согласованы | В работе: durable outcome API проверен; poller ещё не подключён | Ожидает |
+| F07 | Approval wait не завершает шаг; approve/reject/restart согласованы | Исправлено и проверено локально | Нужны миграции, rollout и Telegram smoke |
 | F08 | Отмена/падение шага восстанавливаются без слепого повтора эффектов | Ожидает | Ожидает |
 | F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | Ожидает | Ожидает |
 | F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | Ожидает | Ожидает |
@@ -117,3 +117,56 @@
   Ruff, F821 и diff-check чистые. ADR-0005 фиксирует контракт и ограничения.
 - **F07 ещё не закрыт:** poller пока использует строковый API. Следующий этап —
   миграция plan↔turn, ожидание/сверка approval и доставка кнопок владельцу.
+
+### F07 — этап 2: планировщик и подтверждения
+
+- `plan_steps` через миграцию получает `turn_id`, `approval_id` и подтверждение
+  доставки. Claim атомарный; связь записывается до model/tool calls. Новый
+  `awaiting_approval` не завершает шаг и блокирует другие ходы этого плана.
+- Poller сверяет конкретный durable turn, включая окно падения между созданием
+  approval и сохранением паузы. Approve ждёт завершения continuation; Reject/TTL
+  завершают шаг ошибкой, не повторным запросом. Следующий approval уведомляет снова.
+- Неотправленная approval-нотификация повторяется без повторения операции.
+  Для userbot добавлены `/approve <id>` / `/reject <id>`, для bot — также кнопки.
+  Проверяются явный owner allowlist и сохранённые chat/topic. ALLOW_ALL_USERS не
+  даёт права подтверждения. Аргументы берутся из durable approval, не webhook.
+- Отменённый/истёкший/несвязанный план не возобновляется через старый approval.
+  Паузы исключены из ready queue, поэтому не отнимают слоты у других планов.
+- Неопределённый результат, пустой ответ и ошибка после старта хода переводятся
+  в `needs_review`, не в автоматический новый turn с новым idempotency scope.
+- Конкурентный cold-start тест обнаружил прежнюю гонку SQLite WAL initialization:
+  добавлена проверка режима и ограниченное ожидание только SQLITE_BUSY. 10 новых
+  БД × 4 одновременно открываемых SessionStore сохраняют все ходы.
+- **79 целевых тестов прошли. Полный набор: 2112 passed, 44 integration deselected,
+  1 warning, 27.96 sec; exit 0.** Ruff, отдельный F821 и diff-check чистые.
+  F07 добавил суммарно 33 тестовых случая относительно предыдущего baseline.
+- Production не изменён; Telegram, модели и внешние эффекты в тестах заменены
+  mocks. Реальная доставка и rollout остаются самостоятельными проверками.
+
+Изменённые файлы F07:
+
+- `kronos/engine.py`, `kronos/graph.py`, `kronos/outcomes.py`: явный execution API.
+- `kronos/session.py`, `kronos/migrations/__init__.py`,
+  `kronos/migrations/v001_turn_outcome.py`: долговечный результат и миграция.
+- `kronos/plans.py`, `kronos/cron/plans.py`,
+  `kronos/migrations/v002_plan_turns.py`: состояния/связи/сверка шагов.
+- `kronos/bridge.py`, `kronos/bridge_plan_approval.py`: доставка и авторизация решений.
+- `tests/test_invocation_outcomes.py`, `tests/test_plan_poller.py`: regression.
+- `docs/decisions/ADR-0005-durable-invocation-outcomes.md`,
+  `docs/decisions/ADR-0006-plan-approval-reconciliation.md`, `docs/decisions/README.md`
+  и этот реестр: решения, границы и доказательства.
+
+Проверка: из worktree с существующим venv выполнить
+`KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python -m pytest -m 'not integration' -q`.
+Точечно — `tests/test_invocation_outcomes.py tests/test_plan_poller.py tests/test_plans.py`.
+
+Оставшиеся границы **не исключаются из цели**:
+
+- F08: lifecycle/ownership отменённого или упавшего live turn, legacy running без
+  связи, workflow для needs_review, уведомление об остановке, согласованное
+  завершение/retention истёкших pending approvals, корректность повторного park.
+- F09: настоящий outbox summary/progress/resume; approval prompt допускает повтор
+  при падении после фактической отправки, но до сохранения acknowledgement.
+- F10/F11: intent/effect reconciliation и единственный владелец resume. Локальный
+  статус completed означает завершение engine, а не доказательство всех заявлений
+  модели или exactly-once внешней операции.

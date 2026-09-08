@@ -4,6 +4,7 @@ Replaces LangGraph's AsyncSqliteSaver checkpointer.
 Stores messages as JSON in SQLite, keyed by thread_id.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -124,8 +125,22 @@ class SessionStore:
     async def _open_db(self):
         """Open a connection with WAL mode and generous busy timeout."""
         async with aiosqlite.connect(self.db_path, timeout=30) as db:
-            await db.execute("PRAGMA journal_mode=WAL")
             await db.execute("PRAGMA busy_timeout=30000")
+            deadline = asyncio.get_running_loop().time() + 30
+            while True:
+                try:
+                    async with db.execute("PRAGMA journal_mode") as cursor:
+                        mode = await cursor.fetchone()
+                    if mode[0].lower() != "wal":
+                        await db.execute("PRAGMA journal_mode=WAL")
+                    break
+                except sqlite3.OperationalError as error:
+                    # Concurrent first connections can both try the WAL mode
+                    # transition, which may fail immediately despite timeout.
+                    code = getattr(error, "sqlite_errorcode", 0) & 0xFF
+                    if code != sqlite3.SQLITE_BUSY or asyncio.get_running_loop().time() >= deadline:
+                        raise
+                    await asyncio.sleep(0.05)
             await db.execute("PRAGMA wal_autocheckpoint=100")
             yield db
 

@@ -50,6 +50,7 @@ from kronos.bridge_media import (
     _is_voice_message,
     _transcribe_voice,
 )
+from kronos.bridge_plan_approval import deliver_plan_approval, handle_plan_approval_command
 from kronos.bridge_topics import (
     TopicDecision,
     TopicRoute,
@@ -79,6 +80,7 @@ log = logging.getLogger("kronos.bridge")
 # Re-exported from the bridge_* helper modules so kronos.bridge.<name>
 # keeps resolving for callers and tests after the split.
 __all__ = [
+    "deliver_plan_approval",
     "APPROVAL_CALLBACK_PREFIX",
     "TopicDecision",
     "TopicRoute",
@@ -353,6 +355,14 @@ async def _approval_callback_allowed(
     pending: dict | None = None,
 ) -> bool:
     """Return whether a Telegram user may resolve this approval callback."""
+    if pending and str(pending.get("thread_id", "")).startswith("plan:"):
+        from kronos import plans
+
+        plan = plans.plan_for_turn(str(pending["turn_id"]), settings.agent_name)
+        if not plan or not _same_telegram_chat(getattr(event, "chat_id", None), plan["chat_id"]):
+            return False
+        topic = await _approval_callback_topic_id(event, pending)
+        return sender_id in settings.allowed_user_ids and (topic or None) == (plan.get("topic_id") or None)
     if settings.is_telegram_user_allowed(sender_id):
         return True
     if bool(getattr(event, "is_private", False)):
@@ -968,7 +978,10 @@ async def run_bridge(agent: KronosAgent) -> None:
         if not validation.is_clean:
             reply = validation.redacted_text
 
-        next_approval_id = _last_pending_approval_id()
+        # Plan gates are delivered by the poller from durable state, not the
+        # shared last-approval property, which another turn can change.
+        is_plan_approval = pending and str(pending.get("thread_id", "")).startswith("plan:")
+        next_approval_id = None if is_plan_approval else _last_pending_approval_id()
         buttons = _approval_buttons(next_approval_id) if next_approval_id else None
         bot_markup = _approval_bot_reply_markup(next_approval_id) if next_approval_id else None
         chat_id = int(getattr(event, "chat_id", 0) or 0)
@@ -1011,6 +1024,9 @@ async def run_bridge(agent: KronosAgent) -> None:
         text = event.raw_text
 
         if user_id == _my_id:
+            return
+
+        if await handle_plan_approval_command(event):
             return
 
         is_dm = event.is_private

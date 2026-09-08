@@ -28,6 +28,7 @@ import logging
 import time
 
 from kronos.db import get_db
+from kronos.migrations.v002_plan_turns import migrate as migrate_plan_turns
 
 log = logging.getLogger("kronos.plans")
 
@@ -40,6 +41,8 @@ PLAN_TERMINAL = (PLAN_DONE, PLAN_FAILED, PLAN_CANCELLED)
 STEP_PENDING = "pending"
 STEP_WAITING = "waiting"
 STEP_RUNNING = "running"
+STEP_APPROVAL = "awaiting_approval"
+STEP_REVIEW = "needs_review"
 STEP_DONE = "done"
 STEP_FAILED = "failed"
 # Terminal for dependency purposes: a dependent step may proceed once every step
@@ -99,6 +102,8 @@ def _init_schema(conn) -> None:
         CREATE INDEX IF NOT EXISTS idx_plans_open ON plans(agent_name, state);
         """
     )
+
+    migrate_plan_turns(conn)
 
 
 def _db():
@@ -261,15 +266,19 @@ def dependency_results(step: dict) -> list[dict]:
 
 
 def open_steps(agent_name: str) -> list[dict]:
-    """Every step of an active plan that has not finished, soonest wake first."""
+    """Schedulable open steps, excluding plans with an unresolved execution."""
     rows = _db().read(
         """
         SELECT s.* FROM plan_steps s
         JOIN plans p ON p.id = s.plan_id
         WHERE p.agent_name = ? AND p.state = ? AND s.state IN (?, ?)
+          AND NOT EXISTS (
+              SELECT 1 FROM plan_steps other WHERE other.plan_id = p.id
+                AND other.state IN (?, ?, ?)
+          )
         ORDER BY s.wake_at, s.seq
         """,
-        (agent_name, PLAN_ACTIVE, STEP_PENDING, STEP_WAITING),
+        (agent_name, PLAN_ACTIVE, STEP_PENDING, STEP_WAITING, STEP_RUNNING, STEP_APPROVAL, STEP_REVIEW),
     )
     return [dict(row) for row in rows]
 
@@ -296,6 +305,115 @@ def _dependencies_settled(step: dict) -> bool:
 
 
 # --- moving a step along ------------------------------------------------------
+
+
+def claim_step(step_id: int, now: float | None = None) -> bool:
+    """Claim a ready step once; never start another turn over a paused plan."""
+    stamp = _now(now)
+    cursor = _db().write(
+        """
+        UPDATE plan_steps SET state = ?, attempts = attempts + 1,
+            turn_id = '', approval_id = '', notified_approval_id = '', updated_at = ?
+        WHERE id = ? AND state = ? AND wake_at <= ?
+          AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at > ?)
+          AND NOT EXISTS (
+              SELECT 1 FROM plan_steps other WHERE other.plan_id = plan_steps.plan_id
+              AND other.state IN (?, ?, ?)
+          )
+        """,
+        (
+            STEP_RUNNING,
+            stamp,
+            step_id,
+            STEP_PENDING,
+            stamp,
+            PLAN_ACTIVE,
+            stamp,
+            STEP_RUNNING,
+            STEP_APPROVAL,
+            STEP_REVIEW,
+        ),
+    )
+    return cursor.rowcount == 1
+
+
+def link_turn(step_id: int, turn_id: str) -> None:
+    """Persist the correlation before model calls; fail closed if claim was lost."""
+    cursor = _db().write(
+        """UPDATE plan_steps SET turn_id = ?, updated_at = ?
+           WHERE id = ? AND state = ? AND turn_id = ''
+             AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at > ?)""",
+        (turn_id, _now(), step_id, STEP_RUNNING, PLAN_ACTIVE, _now()),
+    )
+    if cursor.rowcount != 1:
+        raise PlanError("plan step lost its execution claim")
+
+
+def steps_with_turn(agent_name: str, *, limit: int = 20) -> list[dict]:
+    """Linked unfinished steps, oldest reconciliation first (bounded and fair)."""
+    return [
+        dict(row)
+        for row in _db().read(
+            """SELECT s.* FROM plan_steps s JOIN plans p ON p.id = s.plan_id
+           WHERE p.agent_name = ? AND p.state = ? AND s.turn_id != ''
+             AND s.state IN (?, ?, ?)
+           ORDER BY s.updated_at, s.id LIMIT ?""",
+            (agent_name, PLAN_ACTIVE, STEP_RUNNING, STEP_APPROVAL, STEP_WAITING, limit),
+        )
+    ]
+
+
+def plan_for_turn(turn_id: str, agent_name: str) -> dict:
+    """Return the live plan authorized to continue this linked turn, if any."""
+    return _row(
+        _db().read_one(
+            """SELECT p.* FROM plans p JOIN plan_steps s ON p.id = s.plan_id
+           WHERE s.turn_id = ? AND p.agent_name = ? AND p.state = ?
+             AND p.expires_at > ? AND s.state IN (?, ?, ?)""",
+            (turn_id, agent_name, PLAN_ACTIVE, _now(), STEP_RUNNING, STEP_APPROVAL, STEP_WAITING),
+        )
+    )
+
+
+def update_linked_step(
+    step_id: int,
+    turn_id: str,
+    *,
+    state: str,
+    result: str = "",
+    approval_id: str = "",
+) -> bool:
+    """Compare-and-set a linked step; cancelled plans cannot be resurrected."""
+    if state not in {STEP_RUNNING, STEP_APPROVAL, STEP_DONE, STEP_FAILED, STEP_REVIEW}:
+        raise ValueError("invalid linked step state")
+    cursor = _db().write(
+        """UPDATE plan_steps SET state = ?, result = ?, approval_id = ?, updated_at = ?
+           WHERE id = ? AND turn_id = ? AND state IN (?, ?, ?)
+             AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at > ?)""",
+        (
+            state,
+            result,
+            approval_id,
+            _now(),
+            step_id,
+            turn_id,
+            STEP_RUNNING,
+            STEP_APPROVAL,
+            STEP_WAITING,
+            PLAN_ACTIVE,
+            _now(),
+        ),
+    )
+    return cursor.rowcount == 1
+
+
+def note_approval_delivered(step_id: int, turn_id: str, approval_id: str) -> None:
+    """Acknowledge only the approval actually delivered, not a newer pause."""
+    _db().write(
+        """UPDATE plan_steps SET notified_approval_id = ?
+           WHERE id = ? AND turn_id = ? AND approval_id = ? AND state = ?""",
+        (approval_id, step_id, turn_id, approval_id, STEP_APPROVAL),
+    )
 
 
 def mark_running(step_id: int, now: float | None = None) -> None:
@@ -386,8 +504,8 @@ def release_step(step_id: int, now: float | None = None) -> None:
     """The condition fired: the step is now merely pending."""
     stamp = _now(now)
     _db().write(
-        "UPDATE plan_steps SET state = ?, wait_json = '', wake_at = 0, updated_at = ? WHERE id = ?",
-        (STEP_PENDING, stamp, step_id),
+        "UPDATE plan_steps SET state = ?, wait_json = '', wake_at = 0, updated_at = ? WHERE id = ? AND state = ? AND turn_id = ''",
+        (STEP_PENDING, stamp, step_id, STEP_WAITING),
     )
 
 
@@ -415,7 +533,10 @@ def settle_plan(plan_id: int, now: float | None = None) -> str:
     if not steps or any(step["state"] not in STEP_TERMINAL for step in steps):
         return PLAN_ACTIVE
     state = PLAN_DONE if any(step["state"] == STEP_DONE for step in steps) else PLAN_FAILED
-    _db().write("UPDATE plans SET state = ?, updated_at = ? WHERE id = ?", (state, _now(now), plan_id))
+    _db().write(
+        "UPDATE plans SET state = ?, updated_at = ? WHERE id = ? AND state = ?",
+        (state, _now(now), plan_id, PLAN_ACTIVE),
+    )
     log.info("Plan #%s %s", plan_id, state)
     return state
 
@@ -461,8 +582,18 @@ def expire_plan(plan_id: int, now: float | None = None) -> None:
     _db().write_many(
         [
             (
-                "UPDATE plan_steps SET state = ?, result = ?, updated_at = ? WHERE plan_id = ? AND state IN (?, ?)",
-                (STEP_FAILED, "plan expired before this step could run", stamp, plan_id, STEP_PENDING, STEP_WAITING),
+                "UPDATE plan_steps SET state = ?, result = ?, updated_at = ? WHERE plan_id = ? AND state IN (?, ?, ?, ?, ?)",
+                (
+                    STEP_FAILED,
+                    "plan expired; execution may need reconciliation",
+                    stamp,
+                    plan_id,
+                    STEP_PENDING,
+                    STEP_WAITING,
+                    STEP_RUNNING,
+                    STEP_APPROVAL,
+                    STEP_REVIEW,
+                ),
             ),
             ("UPDATE plans SET state = ?, updated_at = ? WHERE id = ?", (PLAN_FAILED, stamp, plan_id)),
         ]

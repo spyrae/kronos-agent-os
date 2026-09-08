@@ -14,7 +14,8 @@ Three things keep the loop honest:
 * **One step per plan per cycle, a few steps in total.** Each step is a model
   call. Without the cap, one plan with forty ready steps would spend a day's
   budget in a minute and starve every other plan.
-* **Nothing is delivered unless it was asked for.** A step notifies only when it
+* **Routine progress is delivered only when asked for.** Approval requests
+  always notify the owner because work cannot continue without a decision. A step notifies only when it
   was created with ``notify``; what always arrives is the plan finishing. A
   week-long watch that sent a message every hour would be turned off in a day.
 """
@@ -25,6 +26,7 @@ import logging
 from kronos import plan_conditions, plans
 from kronos.config import settings
 from kronos.cron.notify import send_webhook
+from kronos.outcomes import InvocationOutcome
 
 log = logging.getLogger("kronos.cron.plans")
 
@@ -98,31 +100,97 @@ async def _run_step(plan: dict, step: dict, observation: str) -> None:
         log.warning("Plan step #%s skipped: agent not ready", step["id"])
         return
 
-    plans.mark_running(step["id"])
+    if not plans.claim_step(step["id"]):
+        return
     try:
-        result = await agent.ainvoke(
+        result = await agent.ainvoke_outcome(
             message=step_prompt(plan, step, observation),
             thread_id=plan_thread_id(plan["id"]),
             user_id="plan",
             session_id=str(plan["chat_id"] or plan["id"]),
             source_kind="user",
             persist_user_turn=True,
+            on_turn_started=lambda turn_id: plans.link_turn(step["id"], turn_id),
         )
     except Exception as e:
         log.error("Plan step #%s failed: %s", step["id"], e)
-        plans.fail_step(step["id"], str(e))
+        current = plans.get_step(step["id"])
+        if current.get("turn_id"):
+            plans.update_linked_step(
+                step["id"],
+                current["turn_id"],
+                state=plans.STEP_REVIEW,
+                result="Turn interrupted; effects may have occurred. Review before retrying.",
+            )
+        else:
+            plans.fail_step(step["id"], str(e))
         return
 
-    text = (result or "").strip()
-    if not text:
-        # An empty reply is not a result. Retrying is the right reading: the
-        # model was cut off, the provider hiccuped, the turn was blocked.
-        plans.fail_step(step["id"], "the agent returned nothing")
-        return
+    await _apply_outcome(plan, plans.get_step(step["id"]), result)
 
-    plans.finish_step(step["id"], text)
-    if step["notify"]:
-        await _deliver(plan, text)
+
+async def _apply_outcome(plan: dict, step: dict, outcome: InvocationOutcome) -> None:
+    """Advance only from execution evidence, never from nonempty reply text."""
+    turn_id = step.get("turn_id", "")
+    if outcome.thread_id != plan_thread_id(plan["id"]) or (outcome.turn_id or "") != turn_id:
+        plans.update_linked_step(
+            step["id"],
+            turn_id,
+            state=plans.STEP_REVIEW,
+            result="Turn correlation mismatch; review required.",
+        )
+        return
+    text = outcome.content.strip()
+    if outcome.status == "waiting_approval" and outcome.approval_id:
+        if not plans.update_linked_step(
+            step["id"],
+            turn_id,
+            state=plans.STEP_APPROVAL,
+            result=text,
+            approval_id=outcome.approval_id,
+        ):
+            return
+        if step.get("notified_approval_id") != outcome.approval_id:
+            from kronos.bridge import deliver_plan_approval
+
+            if await deliver_plan_approval(turn_id, outcome.approval_id):
+                plans.note_approval_delivered(step["id"], turn_id, outcome.approval_id)
+        return
+    if outcome.status == "running":
+        plans.update_linked_step(step["id"], turn_id, state=plans.STEP_RUNNING, result=step["result"])
+        return
+    if outcome.status == "completed" and text:
+        changed = plans.update_linked_step(step["id"], turn_id, state=plans.STEP_DONE, result=text)
+        if changed and step["notify"]:
+            await _deliver(plan, text)
+        return
+    if outcome.status in {"blocked", "rejected", "expired"}:
+        state = plans.STEP_FAILED
+        text = f"{outcome.status}: {text or 'operation not authorized'}"
+    else:
+        # A model failure/empty reply can follow real effects. A new turn would
+        # bypass the old turn's deduplication and must not be an automatic retry.
+        state = plans.STEP_REVIEW
+        text = f"Review required ({outcome.reason or outcome.status}): {text or 'the agent returned nothing'}"
+    plans.update_linked_step(step["id"], turn_id, state=state, result=text)
+
+
+async def _reconcile_turns() -> None:
+    """Observe approval continuations, including a crash before pause was saved."""
+    from kronos.bridge import get_agent
+
+    agent = get_agent()
+    if agent is None:
+        return
+    for step in plans.steps_with_turn(settings.agent_name):
+        plan = plans.get_plan(step["plan_id"])
+        try:
+            outcome = await agent.get_turn_outcome(step["turn_id"])
+            await _apply_outcome(plan, step, outcome)
+            plans.settle_plan(plan["id"])
+        except Exception:
+            # An unavailable DB is not permission to start a replacement turn.
+            log.exception("Plan step #%s reconciliation failed", step["id"])
 
 
 async def _deliver(plan: dict, text: str) -> None:
@@ -220,6 +288,7 @@ async def _deliver_pending_summaries(limit: int) -> int:
 async def run_due_plan_steps() -> None:
     """One cycle: retire what timed out, report what closed, run what is ready."""
     await _retire_expired()
+    await _reconcile_turns()
     # Last cycle's leftovers first: a finished plan is what the owner is waiting
     # for, and it should not queue behind other plans' steps.
     summaries = MAX_SUMMARIES_PER_CYCLE - await _deliver_pending_summaries(MAX_SUMMARIES_PER_CYCLE)

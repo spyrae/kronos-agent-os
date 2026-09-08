@@ -6,11 +6,14 @@ starves the rest; delivering each step's result turns a week-long watch into a
 reason to switch notifications off. Each has a test.
 """
 
+import uuid
+
 import pytest
 
 from kronos import plans
 from kronos.config import settings
 from kronos.cron import plans as poller
+from kronos.outcomes import InvocationOutcome
 
 AGENT = "kronos"
 
@@ -37,6 +40,13 @@ class FakeAgent:
         if isinstance(self.reply, Exception):
             raise self.reply
         return self.reply
+
+    async def ainvoke_outcome(self, **kwargs):
+        callback = kwargs.pop("on_turn_started")
+        content = await self.ainvoke(**kwargs)
+        turn_id = str(uuid.uuid4())
+        callback(turn_id)
+        return InvocationOutcome("completed", content, kwargs["thread_id"], turn_id)
 
 
 @pytest.fixture
@@ -136,7 +146,7 @@ async def test_an_empty_reply_is_not_a_result(agent):
 
     await poller.run_due_plan_steps()
 
-    assert plans.get_step(step_id)["state"] == plans.STEP_PENDING
+    assert plans.get_step(step_id)["state"] == plans.STEP_REVIEW
     assert "nothing" in plans.get_step(step_id)["result"]
 
 
@@ -314,3 +324,19 @@ def _condition(monkeypatch, *, fired: bool, detail: str = "", next_check_at: flo
 
     monkeypatch.setattr("kronos.plan_conditions.evaluate", fake_evaluate)
     return checked
+
+
+async def test_paused_plans_do_not_consume_other_plans_execution_slots(agent):
+    fake, _ = agent()
+    for index in range(poller.MAX_STEPS_PER_CYCLE):
+        plan_id = _plan(f"paused {index}")
+        step_id = plans.add_step(plan_id, "operation awaiting approval")
+        plans.add_step(plan_id, "independent pending operation")
+        assert plans.claim_step(step_id)
+        # No link means no observed outcome in this fixture; it still owns the
+        # plan execution slot and must not occupy the global ready queue.
+    available = _plan("available")
+    available_step = plans.add_step(available, "run now")
+    await poller.run_due_plan_steps()
+    assert plans.get_step(available_step)["state"] == plans.STEP_DONE
+    assert fake.calls[0]["thread_id"] == f"plan:{available}"
