@@ -25,9 +25,9 @@
 | F05 | Per-item ledger; partial/unknown outcomes не теряются и не дублируются | Перенесён, regression пройден | Нужна миграция и сверка |
 | F06 | Межпроцессная сериализация всех budget writers | Перенесён, regression пройден | Не развёрнуто |
 | F07 | Approval wait не завершает шаг; approve/reject/restart согласованы | Исправлено и проверено локально | Нужны миграции, rollout и Telegram smoke |
-| F08 | Отмена/падение шага восстанавливаются без слепого повтора эффектов | Ожидает | Ожидает |
+| F08 | Отмена/падение шага восстанавливаются без слепого повтора эффектов | В работе: подготовлена часть защиты F10; lease/recovery ещё нужны | Ожидает |
 | F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | Ожидает | Ожидает |
-| F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | Ожидает | Ожидает |
+| F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | В работе: intent/journal boundary проверен; полный перечень путей и reconciliation не закрыты | Ожидает |
 | F11 | Один resume на turn; live registry и atomic ownership | Ожидает | Ожидает |
 | F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | Ожидает | Ожидает |
 | F13 | Честный scoped reset по всем слоям, включая background writers | Ожидает | Ожидает |
@@ -170,3 +170,68 @@
 - F10/F11: intent/effect reconciliation и единственный владелец resume. Локальный
   статус completed означает завершение engine, а не доказательство всех заявлений
   модели или exactly-once внешней операции.
+
+### F10 — этап 1: намерение до внешнего действия (зависимость F08)
+
+- Миграция `v003_effect_intents` добавляет запись намерения: turn, tool, frozen args,
+  fingerprint, call id, owner token. Она коммитится **до** вызова инструмента.
+  Результат и закрытие намерения коммитятся вместе, только владельцем токена.
+- Таймаут, отмена, исключение и ошибка записи после dispatch не разрешают повтор.
+  Pending intent блокирует следующие мутации этого turn и ту же операцию в другом
+  turn. Старые записанные результаты сохраняются; legacy writer не обходит token.
+- Неопределённый intent нельзя удалить retention-ом или выдать за completed.
+  Resume проверяет его до вызова модели, поэтому даже ответ-заглушка «всё отправлено»
+  не превращает неизвестный исход в успех. CLI/API показывают pending отдельно.
+- Ошибки message journal и tool cache больше не проглатываются. Это останавливает
+  цепочку до следующих эффектов, сохраняя уже записанные результаты для сверки.
+- Ledger подключён к прямому Approve и наследуется вложенными ReAct loops, включая
+  custom signatures. Контекст очищается после tool call; durable errors не
+  превращаются в обычную строку ответа делегата.
+- Известные mutating built-ins защищаются и без side_effect metadata; выключенный
+  флаг approval не выключает ledger. MCP использует классификацию F02. Ephemeral
+  engine-путь без durable ledger не может выполнять мутацию.
+- Evals по-прежнему используют stub tools/model, но теперь с временным SQLite
+  ledger вместо обхода защитного контракта. Новых зависимостей/конфигурации нет.
+- Одинаковые args с новым call id неоднозначны: это может быть второй настоящий
+  расход, а не retry. Такой случай **не схлопывается молча** в один успешный вызов:
+  нужна сверка намерения. Явный business idempotency key разрешает переиспользование
+  результата при regenerated call id. Полноценная поддержка двух намеренных
+  одинаковых действий остаётся обязательным продолжением F10, не закрытым пунктом.
+- Проверено на финальном коде: **2131 passed, 45 integration deselected**, 24.44 sec.
+  Отдельно **6 integration SIGKILL/restart тестов прошли**, 4.02 sec, включая новое
+  окно «файл уже изменён, effect result ещё не закоммичен». Два новых процесса
+  не повторили действие и не отправили ложное подтверждение. Оставшиеся 39
+  integration cases не запускались; внешние API/production не вызывались.
+- Ruff, F821, `git diff --check` — чистые. 19 новых unit cases и новый SIGKILL case.
+
+Изменённые файлы этапа:
+
+- `kronos/effect_state.py`, `kronos/migrations/v003_effect_intents.py`,
+  `kronos/session.py`: intent protocol, fencing, inspection/retention guards.
+- `kronos/engine.py`, `kronos/graph.py`, `kronos/agents/supervisor.py`,
+  `kronos/security/effects.py`: execution boundary, approval/nested propagation.
+- `kronos/cli.py`, `kronos/evals/runner.py`: статусы и hermetic eval compatibility.
+- `tests/test_effect_intents.py`, `tests/test_external_effects.py`,
+  `tests/test_durable_turns.py`, `tests/test_durable_kill.py`,
+  `tests/helpers/durable_crash.py`, `tests/test_engine.py`,
+  `tests/test_engine_parallel.py`, `tests/test_subagent_approval.py`,
+  `tests/test_turns_cli.py`: fault injection и обновлённый безопасный контракт.
+- ADR-0007, индекс ADR и этот реестр: решение и ограничения.
+
+Проверка: команды полного regression выше; отдельно
+`KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python -m pytest tests/test_durable_kill.py -q`.
+
+**F08/F10/F11 ещё не закрыты. До rollout обязательны:**
+
+1. Lease/heartbeat и fencing живого turn, не только записи effect result;
+   восстановление plan step и обработка CancelledError/legacy orphans.
+2. Operator reconciliation с доказательством остановки исполнителя, upstream
+   idempotency там, где API её поддерживает, и distinct logical operation ids.
+   В том числе не делать автоматический replay неоднозначных одинаковых действий.
+3. Инвентаризация путей **в обход engine**: custom pipelines, прямые `.ainvoke()`
+   инструментов, внутренние API/cron writers. Например, knowledge_pipeline пишет
+   файлы/память напрямую; новая защита не покрывает это автоматически.
+4. Проверить retention глобальных business keys: старый finished-turn prune
+   удаляет recorded effects; нельзя обещать бессрочную дедупликацию такого ключа.
+5. F09 delivery/outbox, production-права/backup/migrations и live verification.
+   Этот этап не разрешает деплой и не доказывает exactly-once у внешнего провайдера.

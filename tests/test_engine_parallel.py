@@ -146,14 +146,33 @@ async def test_a_single_call_is_not_treated_as_a_batch():
 
 
 @pytest.mark.asyncio
-async def test_side_effecting_calls_do_not_overlap():
+async def test_side_effecting_calls_do_not_overlap(tmp_path):
     """Two sends must not race: the ledger and the outside world are ordered."""
     first, second = SlowTool(name="send_one"), SlowTool(name="send_two")
     first.spans, second.spans = [], []
     mark_side_effect([first, second])
     model = ScriptedModel([_call("send_one", "c1"), _call("send_two", "c2")])
 
-    await react_loop(model, [HumanMessage(content="отправь оба")], [first, second])
+    from kronos.session import SessionStore
+
+    store = SessionStore(str(tmp_path / "effects.db"))
+    turn_id = await store.begin_turn("thread", "send both")
+    await react_loop(
+        model,
+        [HumanMessage(content="отправь оба")],
+        [first, second],
+        turn_id=turn_id,
+        begin_external_effect=lambda key, name, args, call_id, dedupe_by_key: store.begin_external_effect(
+            key=key, turn_id=turn_id, tool=name, args=args, tool_call_id=call_id, dedupe_by_key=dedupe_by_key
+        ),
+        finish_external_effect=lambda key, token, name, result: store.finish_external_effect(
+            key=key,
+            token=token,
+            turn_id=turn_id,
+            tool=name,
+            result=result,
+        ),
+    )
 
     assert not _overlapping(first.spans + second.spans)
 

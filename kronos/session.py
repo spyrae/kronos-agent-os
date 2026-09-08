@@ -22,7 +22,9 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
+from kronos.effect_state import DurableStateError, EffectClaim, EffectUncertainError
 from kronos.migrations.v001_turn_outcome import migrate as migrate_turn_outcome
+from kronos.migrations.v003_effect_intents import migrate as migrate_effect_intents
 from kronos.outcomes import InvocationOutcome, InvocationStatus
 
 log = logging.getLogger("kronos.session")
@@ -258,6 +260,7 @@ class SessionStore:
             """)
             await db.commit()
             await migrate_turn_outcome(db)
+            await migrate_effect_intents(db)
             self._initialized = True
 
     async def begin_turn(self, thread_id: str, input_message: str) -> str:
@@ -496,6 +499,8 @@ class SessionStore:
                 SELECT turn_id FROM active_turns
                 WHERE status NOT IN ('running', 'resuming', 'waiting_approval')
                   AND COALESCE(completed_at, started_at) < datetime('now', ?)
+                  AND NOT EXISTS (SELECT 1 FROM effect_intents i
+                      WHERE i.turn_id = active_turns.turn_id AND i.status = 'pending')
                 """,
                 (cutoff,),
             )
@@ -507,6 +512,7 @@ class SessionStore:
             journal = await db.execute(f"DELETE FROM turn_journal WHERE turn_id IN ({placeholders})", turn_ids)
             results = await db.execute(f"DELETE FROM tool_results WHERE turn_id IN ({placeholders})", turn_ids)
             effects = await db.execute(f"DELETE FROM external_effects WHERE turn_id IN ({placeholders})", turn_ids)
+            await db.execute(f"DELETE FROM effect_intents WHERE turn_id IN ({placeholders})", turn_ids)
             turns = await db.execute(f"DELETE FROM active_turns WHERE turn_id IN ({placeholders})", turn_ids)
             await db.commit()
 
@@ -604,23 +610,130 @@ class SessionStore:
             self._record_durable_metric("durable_turns_resumed", len(claimed))
         return claimed
 
-    async def get_external_effect(self, key: str) -> str | None:
-        """Return the recorded result of a side-effecting call, if it already ran.
+    async def begin_external_effect(
+        self,
+        *,
+        key: str,
+        turn_id: str,
+        tool: str,
+        args: dict | None = None,
+        tool_call_id: str = "",
+        dedupe_by_key: bool = False,
+    ) -> EffectClaim:
+        """Claim an effect before dispatch, or reuse an already recorded result.
 
-        This is what makes re-running a turn safe: a message that was already
-        sent must not be sent twice just because the process died before the
-        journal recorded the answer.
+        Pending intents never expire into permission to retry. Even different
+        arguments must not bypass an unresolved effect in the same turn.
         """
-        if not key:
-            return None
+        if not key or not turn_id or not tool:
+            raise DurableStateError("effect intent requires key, turn and tool")
+        token = str(uuid.uuid4())
+        args_json = json.dumps(args or {}, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        fingerprint = hashlib.sha256(args_json.encode()).hexdigest()
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    """SELECT e.result, i.tool_call_id, i.dedupe_by_key FROM external_effects e
+                       LEFT JOIN effect_intents i ON i.idempotency_key = e.idempotency_key
+                       WHERE e.idempotency_key = ?""",
+                    (key,),
+                )
+                recorded = await cursor.fetchone()
+                if recorded:
+                    # Different model call ids may mean two intended identical
+                    # purchases, not a retry. Never silently count them as one.
+                    if not recorded[2] and recorded[1] and tool_call_id and recorded[1] != tool_call_id:
+                        raise EffectUncertainError("identical operation under a new call id; intent review required")
+                    await db.commit()
+                    return EffectClaim(result=str(recorded[0]))
+                cursor = await db.execute("SELECT status FROM active_turns WHERE turn_id = ?", (turn_id,))
+                turn = await cursor.fetchone()
+                if not turn or turn[0] not in {"running", "resuming"}:
+                    raise DurableStateError("external effect requires an active durable turn")
+                cursor = await db.execute(
+                    """SELECT 1 FROM effect_intents
+                       WHERE idempotency_key = ? OR (status = 'pending'
+                           AND (turn_id = ? OR (tool = ? AND args_fingerprint = ?))) LIMIT 1""",
+                    (key, turn_id, tool, fingerprint),
+                )
+                if await cursor.fetchone():
+                    raise EffectUncertainError("unresolved external effect; inspect before resuming")
+                await db.execute(
+                    """INSERT INTO effect_intents
+                           (idempotency_key, turn_id, tool, tool_call_id, dedupe_by_key, args_json, args_fingerprint, claim_token, status)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
+                    (key, turn_id, tool, tool_call_id, int(dedupe_by_key), args_json, fingerprint, token),
+                )
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
+        return EffectClaim(token=token)
+
+    async def finish_external_effect(
+        self,
+        *,
+        key: str,
+        token: str,
+        turn_id: str,
+        tool: str,
+        result: str,
+    ) -> None:
+        """Publish an effect result only for the owner of the pending intent."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    """UPDATE effect_intents SET status = 'recorded', completed_at = CURRENT_TIMESTAMP
+                       WHERE idempotency_key = ? AND claim_token = ? AND turn_id = ? AND tool = ?
+                         AND status = 'pending'""",
+                    (key, token, turn_id, tool),
+                )
+                if cursor.rowcount != 1:
+                    raise DurableStateError("effect claim lost; result was not published")
+                await db.execute(
+                    """INSERT INTO external_effects (idempotency_key, turn_id, tool, result)
+                       VALUES (?, ?, ?, ?)""",
+                    (key, turn_id, tool, result),
+                )
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
+
+    async def assert_turn_effects_settled(self, turn_id: str) -> None:
+        """Reject automatic continuation when an earlier dispatch is unresolved."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await self._assert_effects_settled(db, turn_id)
+
+    async def _assert_effects_settled(self, db: aiosqlite.Connection, turn_id: str) -> None:
+        cursor = await db.execute(
+            "SELECT 1 FROM effect_intents WHERE turn_id = ? AND status = 'pending' LIMIT 1",
+            (turn_id,),
+        )
+        if await cursor.fetchone():
+            raise EffectUncertainError("turn contains an unresolved external effect; review required")
+
+    async def get_external_effect(self, key: str) -> str | None:
+        """Read a completed result; never mistake an unfinished intent for absent."""
         async with self._open_db() as db:
             await self._ensure_table(db)
             cursor = await db.execute(
-                "SELECT result FROM external_effects WHERE idempotency_key = ?",
+                """SELECT e.result, i.status FROM (SELECT ? AS key) k
+                   LEFT JOIN external_effects e ON e.idempotency_key = k.key
+                   LEFT JOIN effect_intents i ON i.idempotency_key = k.key""",
                 (key,),
             )
-            row = await cursor.fetchone()
-        return str(row[0]) if row else None
+            result, intent_status = await cursor.fetchone()
+        if result is not None:
+            return str(result)
+        if intent_status is not None:
+            raise EffectUncertainError("external effect has no recorded result")
+        return None
 
     async def record_external_effect(self, *, key: str, turn_id: str, tool: str, result: str) -> bool:
         """Record that a side effect happened. Returns False if it already was.
@@ -636,27 +749,39 @@ class SessionStore:
                 """
                 INSERT OR IGNORE INTO external_effects
                     (idempotency_key, turn_id, tool, result)
-                VALUES (?, ?, ?, ?)
+                SELECT ?, ?, ?, ? WHERE NOT EXISTS (
+                    SELECT 1 FROM effect_intents WHERE idempotency_key = ?
+                )
                 """,
-                (key, turn_id, tool, result),
+                (key, turn_id, tool, result, key),
             )
             await db.commit()
             return bool(cursor.rowcount)
 
     async def list_external_effects(self, turn_id: str) -> list[dict]:
-        """Effects recorded for one turn (dashboard / debugging)."""
+        """Recorded results and unresolved intents; pending is not proof of failure."""
         async with self._open_db() as db:
             await self._ensure_table(db)
             cursor = await db.execute(
-                """
-                SELECT idempotency_key, tool, result, created_at
-                FROM external_effects WHERE turn_id = ? ORDER BY created_at
-                """,
-                (turn_id,),
+                """SELECT e.idempotency_key, e.tool, e.result, e.created_at, 'recorded', '{}'
+                   FROM external_effects e WHERE e.turn_id = ?
+                   UNION ALL
+                   SELECT i.idempotency_key, i.tool, '', i.created_at, i.status, i.args_json
+                   FROM effect_intents i WHERE i.turn_id = ? AND i.status = 'pending'
+                   ORDER BY 4""",
+                (turn_id, turn_id),
             )
             rows = await cursor.fetchall()
         return [
-            {"idempotency_key": row[0], "tool": row[1], "result": row[2], "created_at": str(row[3])} for row in rows
+            {
+                "idempotency_key": row[0],
+                "tool": row[1],
+                "result": row[2],
+                "created_at": str(row[3]),
+                "status": row[4],
+                "args": _safe_json(row[5]),
+            }
+            for row in rows
         ]
 
     def _pending_approval_from_row(self, row) -> dict | None:
@@ -896,6 +1021,8 @@ class SessionStore:
         """Mark a turn done and remove its ephemeral journal/cache rows."""
         async with self._open_db() as db:
             await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            await self._assert_effects_settled(db, turn_id)
             await db.execute(
                 """
                 UPDATE active_turns
@@ -930,6 +1057,8 @@ class SessionStore:
 
         async with self._open_db() as db:
             await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            await self._assert_effects_settled(db, turn_id)
             await db.execute(
                 """INSERT INTO sessions (thread_id, messages, updated_at)
                    VALUES (?, ?, CURRENT_TIMESTAMP)

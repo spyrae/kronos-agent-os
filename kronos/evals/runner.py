@@ -1,7 +1,8 @@
 """Replay a suite of golden scenarios and check expectations.
 
 The run is hermetic by construction: a scripted model, stub tools built from the
-scenario's recorded outputs, no network, no keys, no databases. What it exercises
+scenario's recorded outputs, no network, no keys, and an isolated temporary
+SQLite intent ledger. What it exercises
 is everything between the model and the user — tool wiring, call order, approval
 gating, loop detection, output compaction, untrusted framing — which is exactly
 the part that regresses silently.
@@ -12,6 +13,7 @@ substrings survived to the answer.
 """
 
 import logging
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,7 @@ from langchain_core.tools import BaseTool
 
 from kronos.engine import react_loop, tool_requires_approval
 from kronos.evals.scenario import Scenario, ScenarioError, ScriptedChatModel, discover
+from kronos.session import SessionStore
 
 log = logging.getLogger("kronos.evals.runner")
 
@@ -248,14 +251,33 @@ async def run_scenario(scenario: Scenario, *, max_turns: int = 12) -> ScenarioRe
         return False
 
     try:
-        outcome = await react_loop(
-            model,
-            [HumanMessage(content=scenario.input)],
-            tools,
-            max_turns=max_turns,
-            on_tool_event=on_tool_event,
-            needs_tool_approval=needs_approval,
-        )
+        with tempfile.TemporaryDirectory(prefix="kaos-eval-") as directory:
+            store = SessionStore(str(Path(directory) / "session.db"))
+            turn_id = await store.begin_turn("eval", scenario.input)
+            outcome = await react_loop(
+                model,
+                [HumanMessage(content=scenario.input)],
+                tools,
+                max_turns=max_turns,
+                on_tool_event=on_tool_event,
+                needs_tool_approval=needs_approval,
+                turn_id=turn_id,
+                begin_external_effect=lambda key, name, args, call_id, dedupe_by_key: store.begin_external_effect(
+                    key=key,
+                    turn_id=turn_id,
+                    tool=name,
+                    args=args,
+                    tool_call_id=call_id,
+                    dedupe_by_key=dedupe_by_key,
+                ),
+                finish_external_effect=lambda key, token, name, content: store.finish_external_effect(
+                    key=key,
+                    token=token,
+                    turn_id=turn_id,
+                    tool=name,
+                    result=content,
+                ),
+            )
         result.answer = outcome.content
         result.model_turns = model.calls
         if model.exhausted:

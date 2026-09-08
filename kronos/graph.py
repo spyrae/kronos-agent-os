@@ -27,6 +27,7 @@ from langchain_core.tools import BaseTool
 
 from kronos.audit import log_tool_event, reset_tool_audit_context, set_tool_audit_context
 from kronos.config import settings
+from kronos.effect_state import DurableStateError
 from kronos.engine import (
     AgentResult,
     SubAgentApprovalPause,
@@ -296,6 +297,25 @@ class KronosAgent:
                 result=result,
             )
 
+        async def begin_external_effect(key: str, tool_name: str, args: dict, tool_call_id: str, dedupe_by_key: bool):
+            return await self._session_store.begin_external_effect(
+                key=key,
+                turn_id=turn_id,
+                tool=tool_name,
+                args=args,
+                tool_call_id=tool_call_id,
+                dedupe_by_key=dedupe_by_key,
+            )
+
+        async def finish_external_effect(key: str, token: str, tool_name: str, result: str) -> None:
+            await self._session_store.finish_external_effect(
+                key=key,
+                token=token,
+                turn_id=turn_id,
+                tool=tool_name,
+                result=result,
+            )
+
         async def request_tool_approval(tool: BaseTool, tool_call: dict) -> str:
             # current_delegation() is set when the approval originates inside a
             # sub-agent — it records the parent delegate_to_X call so the resume
@@ -316,6 +336,8 @@ class KronosAgent:
             "request_tool_approval": request_tool_approval,
             "get_external_effect": get_external_effect,
             "record_external_effect": record_external_effect,
+            "begin_external_effect": begin_external_effect,
+            "finish_external_effect": finish_external_effect,
             "turn_id": turn_id,
         }
         if approved_tool_name:
@@ -426,50 +448,58 @@ class KronosAgent:
             approved_tool_args=args if approved else None,
         )
 
-        if delegation:
-            resumed = await self._resume_delegated_approval(
-                approved=approved,
-                turn_id=turn_id,
-                delegation=delegation,
-                request_tool_approval=react_loop_kwargs["request_tool_approval"],
-                needs_tool_approval=react_loop_kwargs.get("needs_tool_approval"),
-            )
-            if resumed.get("waiting_approval"):
-                self._last_pending_approval_id = resumed["approval_id"]
-                return resumed["content"]
-            tool_message = resumed["tool_message"]
-        elif approved:
-            tool = self._approval_tool_map().get(tool_name)
-            cached = await self._session_store.get_tool_result(turn_id, tool_call_id)
-            if cached is not None:
-                tool_message = ToolMessage(content=cached, tool_call_id=tool_call_id)
-            elif tool is None:
-                tool_message = ToolMessage(
-                    content=(f"[ERROR] Approved tool '{tool_name}' is no longer available after restart."),
-                    tool_call_id=tool_call_id,
-                )
-            else:
-                tool_message = await execute_tool(
-                    tool,
-                    {"name": tool_name, "id": tool_call_id, "args": args},
-                )
-                await self._session_store.save_tool_result(
+        try:
+            if delegation:
+                resumed = await self._resume_delegated_approval(
+                    approved=approved,
                     turn_id=turn_id,
-                    tool_call_id=tool_call_id,
-                    content=str(tool_message.content),
+                    delegation=delegation,
+                    request_tool_approval=react_loop_kwargs["request_tool_approval"],
+                    needs_tool_approval=react_loop_kwargs.get("needs_tool_approval"),
                 )
-        else:
-            tool_message = ToolMessage(
-                content="[REJECTED by user]",
-                tool_call_id=tool_call_id,
-            )
+                if resumed.get("waiting_approval"):
+                    self._last_pending_approval_id = resumed["approval_id"]
+                    return resumed["content"]
+                tool_message = resumed["tool_message"]
+            elif approved:
+                tool = self._approval_tool_map().get(tool_name)
+                cached = await self._session_store.get_tool_result(turn_id, tool_call_id)
+                if cached is not None:
+                    tool_message = ToolMessage(content=cached, tool_call_id=tool_call_id)
+                elif tool is None:
+                    tool_message = ToolMessage(
+                        content=(f"[ERROR] Approved tool '{tool_name}' is no longer available after restart."),
+                        tool_call_id=tool_call_id,
+                    )
+                else:
+                    tool_message = await execute_tool(
+                        tool,
+                        {"name": tool_name, "id": tool_call_id, "args": args},
+                        begin_external_effect=react_loop_kwargs["begin_external_effect"],
+                        finish_external_effect=react_loop_kwargs["finish_external_effect"],
+                        turn_id=turn_id,
+                    )
+                    await self._session_store.save_tool_result(
+                        turn_id=turn_id,
+                        tool_call_id=tool_call_id,
+                        content=str(tool_message.content),
+                    )
+            else:
+                tool_message = ToolMessage(
+                    content="[REJECTED by user]",
+                    tool_call_id=tool_call_id,
+                )
 
-        await self._session_store.append_turn_messages(
-            turn_id=turn_id,
-            thread_id=thread_id,
-            messages=[tool_message],
-        )
-        messages.append(tool_message)
+            await self._session_store.append_turn_messages(
+                turn_id=turn_id,
+                thread_id=thread_id,
+                messages=[tool_message],
+            )
+            messages.append(tool_message)
+        except DurableStateError:
+            await self._session_store.fail_turn(turn_id, "durable effect or journal failure; review required")
+            raise
+
         audit_token = set_tool_audit_context(
             agent=settings.agent_name,
             thread_id=thread_id,
@@ -507,11 +537,9 @@ class KronosAgent:
     async def resume_interrupted_turn(self, turn: dict) -> str | None:
         """Finish a turn whose process died mid-flight.
 
-        Safe to call because two guarantees are already in place: tool results are
-        memoized per turn (an answered call is not re-run) and side-effecting
-        tools consult the effects ledger (a sent message is not re-sent). Without
-        those, re-execution would duplicate real-world actions — which is why
-        this landed after the ledger, not before.
+        An unresolved effect intent blocks automatic continuation before any
+        model call. Recorded effects can be reused by engine-managed tools.
+        This does not replace exclusive turn ownership or upstream idempotency.
         """
         if not self._session_store:
             return None
@@ -528,6 +556,12 @@ class KronosAgent:
             if not plan or thread_id != f"plan:{plan['id']}":
                 await self._session_store.fail_turn(turn_id, "plan_not_authorized_to_resume")
                 return None
+
+        try:
+            await self._session_store.assert_turn_effects_settled(turn_id)
+        except DurableStateError:
+            await self._session_store.fail_turn(turn_id, "unresolved external effect; reconciliation required")
+            return None
 
         messages = await self._session_store.load_turn_messages(thread_id, turn_id)
         if not messages:
@@ -639,8 +673,12 @@ class KronosAgent:
 
         # Publish the exemption + approval channel so the re-run sub-agent
         # executes the approved call (and can pause anew for a different one).
+        durable = self._build_durable_react_loop_kwargs(turn_id=turn_id, thread_id=turn_id)
         ctx_token = publish_delegation_ctx(
             {
+                "begin_external_effect": durable["begin_external_effect"],
+                "finish_external_effect": durable["finish_external_effect"],
+                "turn_id": turn_id,
                 "request_tool_approval": request_tool_approval,
                 "needs_tool_approval": needs_tool_approval,
                 "tool_name": deleg_name,

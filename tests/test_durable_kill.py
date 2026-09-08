@@ -114,3 +114,22 @@ def test_a_second_resume_finds_nothing_to_do(workdir):
     assert "finished=1" in first.stdout
     assert "finished=0" in second.stdout
     assert len((workdir / "sent.log").read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_kill_after_dispatch_before_result_commit_refuses_blind_resume(workdir):
+    """The dangerous gap: real file mutation happened, result commit did not."""
+    import sqlite3
+
+    crashed = _run("crash-before-result", workdir)
+    assert crashed.returncode == -signal.SIGKILL, crashed.stderr[-2000:]
+    turn_id = (workdir / "crashed.txt").read_text().splitlines()[0]
+    for _ in range(2):
+        resumed = _run("resume", workdir)
+        assert "finished=0 delivered=0" in resumed.stdout, resumed.stderr[-2000:]
+    assert len((workdir / "sent.log").read_text().splitlines()) == 1
+    with sqlite3.connect(workdir / "session.db") as db:
+        assert db.execute("SELECT COUNT(*) FROM external_effects").fetchone()[0] == 0
+        assert db.execute("SELECT status FROM effect_intents").fetchone()[0] == "pending"
+        status, reason = db.execute("SELECT status, error FROM active_turns WHERE turn_id = ?", (turn_id,)).fetchone()
+    assert status == "failed"
+    assert "reconciliation required" in reason

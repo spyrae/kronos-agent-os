@@ -1391,9 +1391,9 @@ def run_turns_show(turn_id: str) -> int:
         for row in detail["tool_results"]:
             print(f"    {row['tool_call_id']}: {str(row['content'])[:80]}")
     if detail["effects"]:
-        print("\n  recorded external effects (will not repeat on resume):")
+        print("\n  external effects (pending requires reconciliation, not retry):")
         for row in detail["effects"]:
-            print(f"    {row['tool']}: {str(row['result'])[:60]}")
+            print(f"    {row['tool']} [{row.get('status', 'recorded')}]: {str(row['result'])[:60]}")
     return 0
 
 

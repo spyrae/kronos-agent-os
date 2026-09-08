@@ -5,10 +5,9 @@ runtime can tell "this call already happened" from "this call still needs to
 run" — otherwise a crash after sending a message but before journalling the
 result would send it twice on recovery.
 
-Marking is opt-in per tool, like ``needs_approval`` and ``untrusted_output``:
-the runtime cannot infer intent from a function signature, and guessing wrong in
-either direction is bad (a missed mark duplicates effects, a false mark silently
-skips real work).
+Explicit metadata is preferred. The engine also recognizes legacy mutation names;
+MCP tools receive local classification at import. Neither a function signature
+nor the presence of an approval prompt alone proves that an operation is safe.
 """
 
 import logging

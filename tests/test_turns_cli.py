@@ -182,7 +182,8 @@ def test_cli_list_and_show(store, capsys):
     assert main(["turns", "show", turn_id]) == 0
     shown = capsys.readouterr().out
     assert "get_expenses" in shown
-    assert "recorded external effects" in shown
+    assert "external effects" in shown
+    assert "[recorded]" in shown
     assert "send_message" in shown
 
 

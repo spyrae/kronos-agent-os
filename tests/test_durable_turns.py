@@ -279,10 +279,10 @@ async def test_agent_tool_series_executes_without_approval(tmp_path: Path, monke
     store = SessionStore(str(tmp_path / "session.db"))
     calls = 0
 
-    async def replace_tranche() -> str:
+    async def replace_tranche(tranche_id: int) -> str:
         nonlocal calls
         calls += 1
-        return f"tranche updated {calls}"
+        return f"tranche {tranche_id} updated {calls}"
 
     tool = StructuredTool.from_function(
         coroutine=replace_tranche,
@@ -291,8 +291,12 @@ async def test_agent_tool_series_executes_without_approval(tmp_path: Path, monke
     )
     model = _make_model(
         [
-            _ai_with_tool_call("replace_tranche", tool_call_id="call_15"),
-            _ai_with_tool_call("replace_tranche", tool_call_id="call_16"),
+            AIMessage(
+                content="", tool_calls=[{"name": "replace_tranche", "args": {"tranche_id": 15}, "id": "call_15"}]
+            ),
+            AIMessage(
+                content="", tool_calls=[{"name": "replace_tranche", "args": {"tranche_id": 16}, "id": "call_16"}]
+            ),
             AIMessage(content="готово"),
         ]
     )

@@ -61,7 +61,7 @@ def _sender(marker: Path):
     return tool
 
 
-async def _crash(workdir: Path) -> None:
+async def _crash(workdir: Path, *, before_result: bool = False) -> None:
     from kronos.engine import execute_tool, side_effect_key
     from kronos.session import SessionStore
 
@@ -79,13 +79,20 @@ async def _crash(workdir: Path) -> None:
 
     # Perform the real side effect and record it, exactly as react_loop would.
     tool = _sender(workdir / "sent.log")
+
+    async def finish_effect(key, token, name, result):
+        if before_result:
+            (workdir / "crashed.txt").write_text(f"{turn_id}\n{key}\n", encoding="utf-8")
+            os.kill(os.getpid(), signal.SIGKILL)
+        await store.finish_external_effect(key=key, token=token, turn_id=turn_id, tool=name, result=result)
+
     message = await execute_tool(
         tool,
         call,
-        get_external_effect=store.get_external_effect,
-        record_external_effect=lambda key, name, result: store.record_external_effect(
-            key=key, turn_id=turn_id, tool=name, result=result
+        begin_external_effect=lambda key, name, args, call_id, dedupe_by_key: store.begin_external_effect(
+            key=key, turn_id=turn_id, tool=name, args=args, tool_call_id=call_id, dedupe_by_key=dedupe_by_key
         ),
+        finish_external_effect=finish_effect,
         turn_id=turn_id,
     )
     await store.save_tool_result(turn_id=turn_id, tool_call_id=TOOL_CALL_ID, content=str(message.content))
@@ -147,8 +154,8 @@ def main() -> int:
     mode, workdir = sys.argv[1], Path(sys.argv[2])
     _configure(workdir)
 
-    if mode == "crash":
-        asyncio.run(_crash(workdir))
+    if mode in {"crash", "crash-before-result"}:
+        asyncio.run(_crash(workdir, before_result=mode == "crash-before-result"))
         return 0  # unreachable: the process is killed above
     if mode == "resume":
         return 0 if asyncio.run(_resume(workdir)) else 1

@@ -397,7 +397,7 @@ class TestReactLoop:
         assert "tool_approval_required" in [event for event, _ in events]
 
     @pytest.mark.asyncio
-    async def test_disabling_approvals_executes_risky_tool_immediately(self, monkeypatch):
+    async def test_disabling_approvals_executes_risky_tool_with_durable_ledger(self, monkeypatch, tmp_path):
         """TOOL_APPROVALS_ENABLED=false restores immediate execution for trusted deploys."""
         monkeypatch.setattr(settings, "tool_approvals_enabled", False)
         calls = 0
@@ -420,10 +420,25 @@ class TestReactLoop:
             ]
         )
 
+        from kronos.session import SessionStore
+
+        store = SessionStore(str(tmp_path / "effects.db"))
+        turn_id = await store.begin_turn("thread", "send")
         result = await react_loop(
             model,
             [HumanMessage(content="add server")],
             tools=[tool],
+            turn_id=turn_id,
+            begin_external_effect=lambda key, name, args, call_id, dedupe_by_key: store.begin_external_effect(
+                key=key, turn_id=turn_id, tool=name, args=args, tool_call_id=call_id, dedupe_by_key=dedupe_by_key
+            ),
+            finish_external_effect=lambda key, token, name, result: store.finish_external_effect(
+                key=key,
+                token=token,
+                turn_id=turn_id,
+                tool=name,
+                result=result,
+            ),
             needs_tool_approval=lambda tool, args: True,
             request_tool_approval=lambda tool, tool_call: approval_requests.append(tool.name) or "apr_1",
         )

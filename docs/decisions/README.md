@@ -11,3 +11,4 @@ gets a new record and marks the previous one superseded.
 | 0004 | [Budget transactions](ADR-0004-budget-transactions.md) | accepted | 2026-09-07 |
 | 0005 | [Durable invocation outcomes](ADR-0005-durable-invocation-outcomes.md) | accepted | 2026-09-08 |
 | 0006 | [Plan approval reconciliation](ADR-0006-plan-approval-reconciliation.md) | accepted | 2026-09-08 |
+| 0007 | [External effect intents](ADR-0007-external-effect-intents.md) | accepted | 2026-09-08 |
