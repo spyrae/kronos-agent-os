@@ -57,6 +57,7 @@ from kronos.skills.tools import (
     load_skill_reference,
 )
 from kronos.state import AgentState
+from kronos.turn_delivery import RecoveryDestination
 from kronos.turn_ownership import TurnBusyError, TurnOwnership, own_conversation
 
 log = logging.getLogger("kronos.graph")
@@ -593,6 +594,7 @@ class KronosAgent:
         turn: dict | str,
         *,
         max_attempts: int | None = None,
+        notify: bool = True,
         execution_ownership: TurnOwnership | None = None,
     ) -> str | None:
         """Exclusively resume an abandoned turn using its durable identity.
@@ -620,7 +622,10 @@ class KronosAgent:
         async def resume_owned(ownership: TurnOwnership) -> str | None:
             ownership.assert_held(self._session_store.db_path, detail["thread_id"])
             claimed = await self._session_store.claim_turn_for_resume(
-                turn_id, ownership=ownership, max_attempts=max_attempts
+                turn_id,
+                ownership=ownership,
+                max_attempts=max_attempts,
+                notify=notify and not detail["thread_id"].startswith("plan:"),
             )
             if not claimed:
                 return None
@@ -717,33 +722,24 @@ class KronosAgent:
         log.info("Resumed interrupted turn %s (attempt %s)", turn_id, turn.get("attempts"))
         return result.content
 
-    async def resume_abandoned_turns(self, *, deliver=None, max_attempts: int = 2) -> int:
-        """Claim and finish every interrupted turn. Returns how many completed.
+    async def resume_abandoned_turns(self, *, notify: bool = True, max_attempts: int = 2) -> int:
+        """Resume abandoned work; result/approval delivery is owned by SQLite.
 
-        ``deliver(thread_id, text)`` publishes the answer; without it the turn is
-        still completed and journalled, which is what a CLI or test wants.
+        No transport callback runs after finalization. Recovery records its duty
+        before the model call, and the independent worker drains even completed
+        turns after a restart. Legacy destinations remain explicitly unknown.
         """
         if not self._session_store:
             return 0
-
-        candidates = await self._session_store.resumable_turns()
         finished = 0
-        for turn in candidates:
+        for turn in await self._session_store.resumable_turns():
             try:
-                answer = await self.resume_interrupted_turn(turn, max_attempts=max_attempts)
+                await self.resume_interrupted_turn(turn, max_attempts=max_attempts, notify=notify)
             except TurnBusyError:
-                continue
-            if not answer:
                 continue
             outcome = await self.get_turn_outcome(turn["turn_id"])
             if outcome.status == "completed":
                 finished += 1
-            if deliver:
-                try:
-                    await deliver(turn["thread_id"], answer)
-                except Exception as e:
-                    # The turn is finished and journalled; only delivery failed.
-                    log.error("Could not deliver resumed answer for %s: %s", turn["turn_id"], e)
         return finished
 
     async def _resume_delegated_approval(
@@ -841,6 +837,7 @@ class KronosAgent:
         extra_system_context: str = "",
         on_tool_event: ToolEventCallback | None = None,
         force_tier: str | None = None,
+        recovery_destination: RecoveryDestination | None = None,
     ) -> str:
         """Process a message, preserving the legacy text-only API.
 
@@ -856,6 +853,7 @@ class KronosAgent:
             extra_system_context=extra_system_context,
             on_tool_event=on_tool_event,
             force_tier=force_tier,
+            recovery_destination=recovery_destination,
         )
         return outcome.content
 
@@ -879,6 +877,7 @@ class KronosAgent:
         on_turn_started: Callable[[str], None] | None = None,
         caller_key: str = "",
         execution_ownership: TurnOwnership | None = None,
+        recovery_destination: RecoveryDestination | None = None,
     ) -> InvocationOutcome:
         """Process raw input with call-local outcome and exclusive history writes.
 
@@ -897,6 +896,7 @@ class KronosAgent:
             extra_system_context=extra_system_context,
             on_tool_event=on_tool_event,
             force_tier=force_tier,
+            recovery_destination=recovery_destination,
             on_turn_started=on_turn_started,
             caller_key=caller_key,
         )
@@ -960,6 +960,7 @@ class KronosAgent:
         force_tier: str | None = None,
         on_turn_started: Callable[[str], None] | None = None,
         caller_key: str = "",
+        recovery_destination: RecoveryDestination | None = None,
     ) -> InvocationOutcome:
         """Process a message and return its explicit execution outcome.
 
@@ -992,6 +993,8 @@ class KronosAgent:
         route → store memory → compact → save history.
         """
         is_ephemeral = not persist_user_turn
+        if recovery_destination is not None and (is_ephemeral or source_kind != "user" or self._session_store is None):
+            raise ValueError("recovery provenance requires a durable user turn")
         if on_turn_started and (is_ephemeral or self._session_store is None):
             raise ValueError("on_turn_started requires a durable session store")
         self._last_pending_approval_id = None
@@ -1036,7 +1039,9 @@ class KronosAgent:
         turn_id: str | None = None
         react_loop_kwargs: dict[str, Any] = {}
         if self._session_store and not is_ephemeral:
-            turn_id = await self._session_store.begin_turn(thread_id, message, caller_key=caller_key)
+            turn_id = await self._session_store.begin_turn(
+                thread_id, message, caller_key=caller_key, recovery_destination=recovery_destination
+            )
             if on_turn_started is not None:
                 try:
                     on_turn_started(turn_id)

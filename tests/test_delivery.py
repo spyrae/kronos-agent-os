@@ -349,7 +349,15 @@ async def test_worker_survives_db_error_and_waits_for_transport_readiness(db, mo
             raise asyncio.CancelledError()
 
     monkeypatch.setattr(plans, "deliver_pending", deliver)
-    monkeypatch.setattr(worker, "asyncio", SimpleNamespace(sleep=sleep))
+    monkeypatch.setattr(
+        worker,
+        "asyncio",
+        SimpleNamespace(
+            sleep=sleep,
+            CancelledError=asyncio.CancelledError,
+            current_task=asyncio.current_task,
+        ),
+    )
     with pytest.raises(asyncio.CancelledError):
         await worker.run_delivery_worker()
     assert row(db)["state"] == "delivered"

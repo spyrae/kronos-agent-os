@@ -1366,7 +1366,8 @@ def run_turns_show(turn_id: str) -> int:
     """Show one turn: journal, memoized results, recorded effects."""
     import asyncio as _asyncio
 
-    detail = _asyncio.run(_session_store().get_turn_detail(turn_id))
+    store = _session_store()
+    detail = _asyncio.run(store.get_turn_detail(turn_id))
     if not detail:
         print(f"Turn not found: {turn_id}")
         return 1
@@ -1374,8 +1375,18 @@ def run_turns_show(turn_id: str) -> int:
     print(f"turn {detail['turn_id']}  [{detail['status']}]  thread={detail['thread_id']}")
     print(f"  started: {detail.get('started_at')}   completed: {detail.get('completed_at') or '—'}")
     print(f"  attempts: {detail.get('attempts', 0)}")
+    delivery = _asyncio.run(store.delivery_status(turn_id))
+    print(
+        f"  recovery delivery: {delivery['state']}; pending={delivery['pending']}; needs_review={delivery['needs_review']}"
+    )
+    print("  Delivery acknowledges Telegram acceptance, not that the user read it.")
+    if detail.get("final_content"):
+        print(f"  result: {detail['final_content']}")
     protocol = detail.get("effect_protocol", 0)
-    print(f"  effect protocol: {protocol}" + (" — legacy; missing intent is not proof of no effect" if not protocol else ""))
+    print(
+        f"  effect protocol: {protocol}"
+        + (" — legacy; missing intent is not proof of no effect" if not protocol else "")
+    )
     if detail.get("error"):
         print(f"  error: {detail['error']}")
     print(f"  input: {str(detail.get('input_message') or '')[:200]}")
@@ -1441,6 +1452,8 @@ def run_turns_resume(turn_id: str) -> int:
             except TurnBusyError:
                 print("Conversation has a live executor — resume was not started.")
                 return 1
+        delivery = await store.delivery_status(turn_id)
+        print(f"Recovery delivery: {delivery['state']}; accepted means transport receipt, not human read.")
         if not answer:
             outcome = await agent.get_turn_outcome(turn_id)
             print(f"Resume did not complete — outcome={outcome.status}; inspect the turn before retrying.")

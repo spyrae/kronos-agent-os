@@ -636,6 +636,7 @@ async def _ask_agent(
     persist_user_turn: bool = True,
     extra_system_context: str = "",
     force_tier: str | None = None,
+    recovery_owner_review: bool = False,
 ) -> str | None:
     """Send message to KronosAgent and return response text.
 
@@ -652,6 +653,8 @@ async def _ask_agent(
     This is the contract that stops peer text from polluting session
     history and causing verbatim-parrot replies.
     """
+    from kronos.bridge_recovery import recovery_route
+
     # Topic-aware thread isolation
     thread_id = _thread_id_for(chat_id, topic_id)
 
@@ -675,6 +678,9 @@ async def _ask_agent(
                 extra_system_context=extra_system_context,
                 on_tool_event=reporter.on_event,
                 force_tier=force_tier,
+                recovery_destination=recovery_route(chat_id, topic_id, owner_review=recovery_owner_review)
+                if persist_user_turn and source_kind == "user"
+                else None,
             )
     except Exception as e:
         log.error("Agent error: %s", e)
@@ -960,8 +966,20 @@ async def run_bridge(agent: KronosAgent) -> None:
             return
 
         topic_id = await _approval_callback_topic_id(event, pending)
+        from kronos.bridge_recovery import has_delivery_duty, recovery_decision_allowed
+
+        queued = await has_delivery_duty(_agent, pending)
+        if queued and not await recovery_decision_allowed(
+            _agent,
+            pending,
+            sender_id=sender_id,
+            chat_id=int(getattr(event, "chat_id", 0) or 0),
+            topic_id=await _approval_callback_topic_id(event),
+        ):
+            await event.answer("Not allowed", alert=True)
+            return
         approved = action == "approve"
-        await event.answer("Approved" if approved else "Rejected")
+        await event.answer("Обрабатываю решение" if queued else ("Approved" if approved else "Rejected"))
         # Serialize the resolve against new messages on the same thread.
         approval_thread = str(pending["thread_id"]) if pending else f"approval:{approval_id}"
         try:
@@ -974,6 +992,9 @@ async def run_bridge(agent: KronosAgent) -> None:
         except Exception as e:
             log.error("Approval callback failed: %s", e)
             reply = "Не удалось обработать approval callback. Проверь логи."
+
+        if queued:
+            return  # The durable worker, never this callback, sends the result.
 
         validation = validate_output(reply)
         if not validation.is_clean:
@@ -1027,6 +1048,10 @@ async def run_bridge(agent: KronosAgent) -> None:
         if user_id == _my_id:
             return
 
+        from kronos.bridge_recovery import handle_recovery_approval_command
+
+        if await handle_recovery_approval_command(event):
+            return
         if await handle_plan_approval_command(event):
             return
 
@@ -1461,6 +1486,9 @@ async def run_bridge(agent: KronosAgent) -> None:
                     persist_user_turn=invoke_persist,
                     extra_system_context=group_extra_context,
                     force_tier=degrade_tier,
+                    recovery_owner_review=bool(
+                        not is_dm and decision is not None and decision.topic_owner == settings.agent_name
+                    ),
                 )
 
         # Peer-reaction "PASS" protocol: the agent is instructed to reply

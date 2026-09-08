@@ -125,7 +125,11 @@ def test_live_executor_blocks_other_processes_until_sigkill(workdir, mode, expec
     env = {**os.environ, "PYTHONPATH": str(REPO_ROOT), "KAOS_ENV_FILE": "/dev/null"}
     process = subprocess.Popen(
         [sys.executable, "-m", HELPER, mode, str(workdir)],
-        cwd=REPO_ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
     try:
         ready = workdir / "holding.txt"
@@ -153,9 +157,10 @@ def test_live_executor_blocks_other_processes_until_sigkill(workdir, mode, expec
     resumed = _run("resume", workdir)
     assert "finished=1" in resumed.stdout, resumed.stderr[-2000:]
     with sqlite3.connect(workdir / "session.db") as db:
-        assert db.execute(
-            "SELECT status, attempts FROM active_turns WHERE turn_id = ?", (turn_id,)
-        ).fetchone() == ("done", expected_attempts)
+        assert db.execute("SELECT status, attempts FROM active_turns WHERE turn_id = ?", (turn_id,)).fetchone() == (
+            "done",
+            expected_attempts,
+        )
 
 
 def test_kill_after_dispatch_before_result_commit_refuses_blind_resume(workdir):
@@ -165,9 +170,10 @@ def test_kill_after_dispatch_before_result_commit_refuses_blind_resume(workdir):
     crashed = _run("crash-before-result", workdir)
     assert crashed.returncode == -signal.SIGKILL, crashed.stderr[-2000:]
     turn_id = (workdir / "crashed.txt").read_text().splitlines()[0]
-    for _ in range(2):
+    for attempt in range(2):
         resumed = _run("resume", workdir)
-        assert "finished=0 delivered=0" in resumed.stdout, resumed.stderr[-2000:]
+        expected_notices = 1 if attempt == 0 else 0
+        assert f"finished=0 delivered={expected_notices}" in resumed.stdout, resumed.stderr[-2000:]
     assert len((workdir / "sent.log").read_text().splitlines()) == 1
     with sqlite3.connect(workdir / "session.db") as db:
         assert db.execute("SELECT COUNT(*) FROM external_effects").fetchone()[0] == 0
@@ -175,6 +181,10 @@ def test_kill_after_dispatch_before_result_commit_refuses_blind_resume(workdir):
         status, reason = db.execute("SELECT status, error FROM active_turns WHERE turn_id = ?", (turn_id,)).fetchone()
     assert status == "failed"
     assert "reconciliation required" in reason
+
+    notice = (workdir / "delivered.log").read_text()
+    assert "Восстановление не завершено" in notice
+    assert "Отчёт отправлен, подтверждаю" not in notice
 
 
 @pytest.mark.parametrize("mode", ["crash-before-dispatch", "crash-before-cache"])

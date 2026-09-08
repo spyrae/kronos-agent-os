@@ -24,7 +24,7 @@ import signal
 import sys
 from pathlib import Path
 
-THREAD_ID = "kill-test"
+THREAD_ID = "77001"
 QUESTION = "отправь отчёт и подтверди"
 TOOL_CALL_ID = "call-1"
 
@@ -68,7 +68,9 @@ async def _crash(
     from kronos.session import SessionStore
 
     store = SessionStore(str(workdir / "session.db"), agent_name="killtest")
-    turn_id = await store.begin_turn(THREAD_ID, QUESTION)
+    from kronos.turn_delivery import RecoveryDestination
+
+    turn_id = await store.begin_turn(THREAD_ID, QUESTION, recovery_destination=RecoveryDestination(77001, 55))
 
     from langchain_core.messages import AIMessage
 
@@ -162,14 +164,20 @@ async def _resume(workdir: Path) -> int:
     )
     agent._get_system_prompt = lambda: "system"
 
+    from kronos import telegram_delivery
+
     delivered: list[str] = []
 
-    async def deliver(thread_id: str, text: str) -> None:
-        delivered.append(text)
+    async def deliver(chunk) -> int:
+        delivered.append(chunk.text)
         with open(workdir / "delivered.log", "a", encoding="utf-8") as handle:
-            handle.write(f"{thread_id}\t{text}\n")
+            handle.write(f"{chunk.chat_id}\t{chunk.text}\n")
+        return 100 + len(delivered)
 
-    finished = await agent.resume_abandoned_turns(deliver=deliver)
+    telegram_delivery.ready_sender = lambda: 55
+    telegram_delivery.send_chunk = deliver
+    finished = await agent.resume_abandoned_turns()
+    await store.deliver_pending()
     print(f"finished={finished} delivered={len(delivered)}")
     return finished
 
@@ -195,11 +203,14 @@ async def _hold(workdir: Path, *, resume: bool) -> None:
         return AgentResult(content="unreachable", messages=[])
 
     agent._run_model_loop = blocked_loop
+    from kronos.turn_delivery import RecoveryDestination
+
+    destination = RecoveryDestination(77001, 55)
     if resume:
-        turn_id = await store.begin_turn(THREAD_ID, QUESTION)
+        turn_id = await store.begin_turn(THREAD_ID, QUESTION, recovery_destination=destination)
         await agent.resume_interrupted_turn(turn_id)
     else:
-        await agent.ainvoke_outcome(QUESTION, THREAD_ID)
+        await agent.ainvoke_outcome(QUESTION, THREAD_ID, recovery_destination=destination)
 
 
 async def _report(workdir: Path) -> int:
@@ -215,8 +226,10 @@ async def _owned_crash(workdir: Path, *, mode: str) -> None:
 
     async with own_conversation(str(workdir / "session.db"), THREAD_ID):
         await _crash(
-            workdir, before_result=mode == "crash-before-result",
-            before_dispatch=mode == "crash-before-dispatch", before_cache=mode == "crash-before-cache",
+            workdir,
+            before_result=mode == "crash-before-result",
+            before_dispatch=mode == "crash-before-dispatch",
+            before_cache=mode == "crash-before-cache",
         )
 
 

@@ -94,17 +94,15 @@ def _ensure_data_dirs() -> None:
     log.info("Data dirs ready: %s (swarm=%s)", db_dir, settings.swarm_db_path)
 
 
-async def _deliver_resumed_answer(thread_id: str, text: str) -> None:
-    """Publish a resumed answer through the same self-webhook reminders use."""
-    import asyncio
+async def _run_startup_recovery(agent: KronosAgent, max_attempts: int) -> None:
+    """Run one recovery pass without waiting for the transport to become ready.
 
-    from kronos.cron.notify import send_webhook
-
-    chat_id, _, topic = thread_id.partition(":")
-    try:
-        await asyncio.to_thread(send_webhook, text, int(chat_id), None, int(topic) if topic else None)
-    except (TypeError, ValueError) as e:
-        log.warning("Cannot deliver resumed answer for thread %s: %s", thread_id, e)
+    Remain a live service after the pass, so successful one-shot completion does
+    not look like a stopped bridge to the application's FIRST_COMPLETED monitor.
+    """
+    finished = await agent.resume_abandoned_turns(notify=True, max_attempts=max_attempts)
+    log.info("Startup recovery completed: %d finished turn(s)", finished)
+    await asyncio.Event().wait()
 
 
 def _activate_policy_or_exit() -> None:
@@ -167,16 +165,9 @@ async def main():
         )
         log.info("Agent ready: %d tools, db=%s", len(tools), settings.db_path)
 
-        if durable.resume_mode == "resume":
-            # Resume needs a live agent (and its tools), so it happens here rather
-            # than next to the store. Delivery reuses the reminder path: the
-            # session layer must not learn about transports.
-            finished = await agent.resume_abandoned_turns(
-                deliver=_deliver_resumed_answer,
-                max_attempts=durable.max_resume_attempts,
-            )
-            if finished:
-                log.warning("Finished %d interrupted turn(s) after restart", finished)
+        # Startup owns reconciliation; the first incoming message must not
+        # run report-mode recovery against a concurrently resuming turn.
+        agent._durable_recovery_checked = True
 
         # Start cron scheduler
         scheduler = Scheduler()
@@ -205,18 +196,27 @@ async def main():
             asyncio.create_task(run_discord(agent), name="discord"),
             asyncio.create_task(scheduler.run(), name="scheduler"),
             asyncio.create_task(run_dashboard(scheduler=scheduler, agent=agent), name="dashboard"),
-            asyncio.create_task(run_delivery_worker(), name="delivery"),
+            asyncio.create_task(run_delivery_worker(session_store), name="delivery"),
         ]
+        if durable.resume_mode == "resume":
+            services.append(
+                asyncio.create_task(_run_startup_recovery(agent, durable.max_resume_attempts), name="recovery")
+            )
         stop_task = asyncio.create_task(stop_event.wait(), name="stop")
 
-        done, _pending = await asyncio.wait([*services, stop_task], return_when=asyncio.FIRST_COMPLETED)
-
-        # Signal received, or a service returned/crashed → tear everything down.
-        log.info("Shutting down services…")
-        scheduler.stop()
-        for task in (*services, stop_task):
-            task.cancel()
-        await asyncio.gather(*services, stop_task, return_exceptions=True)
+        try:
+            done, _pending = await asyncio.wait([*services, stop_task], return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            log.info("Shutting down services…")
+            scheduler.stop()
+            for task in (*services, stop_task):
+                task.cancel()
+            await asyncio.gather(*services, stop_task, return_exceptions=True)
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                try:
+                    loop.remove_signal_handler(sig)
+                except NotImplementedError:
+                    pass
 
         # Re-raise a genuine service crash (not a clean signal) so systemd's
         # Restart=on-failure can act on it.

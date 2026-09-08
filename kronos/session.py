@@ -12,6 +12,7 @@ import sqlite3
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 
 import aiosqlite
 from langchain_core.messages import (
@@ -27,8 +28,10 @@ from kronos.migrations.v001_turn_outcome import migrate as migrate_turn_outcome
 from kronos.migrations.v003_effect_intents import migrate as migrate_effect_intents
 from kronos.migrations.v004_effect_protocol import migrate as migrate_effect_protocol
 from kronos.migrations.v005_plan_execution import migrate_turns as migrate_caller_key
+from kronos.migrations.v008_turn_delivery import migrate as migrate_delivery
 from kronos.outcomes import InvocationOutcome, InvocationStatus
 from kronos.tool_history import trim_completed_history, unanswered_tool_calls
+from kronos.turn_delivery import RecoveryDestination, queue_approval, queue_result, suppress_approval
 from kronos.turn_ownership import TurnBusyError, TurnOwnership, own_conversation
 
 log = logging.getLogger("kronos.session")
@@ -289,20 +292,36 @@ class SessionStore:
             await migrate_effect_intents(db)
             await migrate_effect_protocol(db)
             await migrate_caller_key(db)
+            await migrate_delivery(db)
             self._initialized = True
 
-    async def begin_turn(self, thread_id: str, input_message: str, *, caller_key: str = "") -> str:
+    async def begin_turn(
+        self,
+        thread_id: str,
+        input_message: str,
+        *,
+        caller_key: str = "",
+        recovery_destination: RecoveryDestination | None = None,
+    ) -> str:
         """Open a turn, recording the caller's immutable correlation atomically."""
+        if recovery_destination is not None:
+            recovery_destination.assert_thread(thread_id)
         turn_id = str(uuid.uuid4())
         async with self._open_db() as db:
             await self._ensure_table(db)
             await db.execute(
                 """
                 INSERT INTO active_turns
-                    (turn_id, thread_id, status, input_message, effect_protocol, caller_key)
-                VALUES (?, ?, 'running', ?, 1, ?)
+                    (turn_id, thread_id, status, input_message, effect_protocol, caller_key, recovery_destination)
+                VALUES (?, ?, 'running', ?, 1, ?, ?)
                 """,
-                (turn_id, thread_id, input_message, caller_key),
+                (
+                    turn_id,
+                    thread_id,
+                    input_message,
+                    caller_key,
+                    recovery_destination.encode() if recovery_destination else "",
+                ),
             )
             await db.commit()
         return turn_id
@@ -436,13 +455,113 @@ class SessionStore:
         keys = ("turn_id", "thread_id", "status", "input_message", "attempts", "started_at", "completed_at", "error")
         return [dict(zip(keys, row, strict=False)) for row in rows]
 
+    async def recovery_destination(self, turn_id: str) -> RecoveryDestination | None:
+        """Read verified provenance; missing legacy routes never become guesses."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            async with db.execute(
+                "SELECT thread_id, recovery_destination FROM active_turns WHERE turn_id = ?", (turn_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+        if not row or not row[1]:
+            return None
+        destination = RecoveryDestination.decode(row[1])
+        destination.assert_thread(row[0])
+        return destination
+
+    async def delivery_status(self, turn_id: str) -> dict:
+        """Separate execution from transport acceptance, without exposing payloads."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute("BEGIN")
+            async with db.execute(
+                "SELECT delivery_requested, delivery_issue FROM active_turns WHERE turn_id = ?", (turn_id,)
+            ) as cursor:
+                turn = await cursor.fetchone()
+            async with db.execute(
+                "SELECT event_key, state, obsolete FROM delivery_outbox WHERE stream_key = ?",
+                (f"turn:{turn_id}",),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        counts = {key: 0 for key in ("pending", "delivered", "needs_review", "obsolete")}
+        state = "awaiting_result" if turn and turn[0] else "not_requested"
+        for key, delivery, obsolete in rows:
+            counts["obsolete" if obsolete else delivery] += 1
+            if key == f"turn:{turn_id}:result" and not obsolete:
+                state = delivery
+        return {"requested": bool(turn and turn[0]), "state": (turn[1] if turn else "turn_missing") or state, **counts}
+
+    async def deliver_pending(self) -> int:
+        """Drain this producer DB independently of model execution and webhooks."""
+        from kronos.db import SafeDB
+        from kronos.delivery import drain
+        from kronos.telegram_delivery import ready_sender, send_chunk
+
+        await self.expire_recovery_approvals()
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+        queue = SafeDB(Path(self.db_path))
+        try:
+            return await drain(queue, sender_id=ready_sender(), send=send_chunk)
+        finally:
+            queue.close()
+
+    async def expire_recovery_approvals(self, limit: int = 4) -> int:
+        """Reconcile expired recovery gates only after excluding a live owner."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            async with db.execute(
+                """SELECT p.approval_id, p.turn_id, p.thread_id, p.requested_at
+                   FROM pending_approvals p JOIN active_turns t ON t.turn_id = p.turn_id
+                   WHERE p.status = 'pending' AND t.delivery_requested = 1
+                   ORDER BY p.requested_at LIMIT ?""",
+                (limit,),
+            ) as cursor:
+                candidates = await cursor.fetchall()
+        expired = 0
+        for approval_id, turn_id, thread_id, requested in candidates:
+            if not _approval_is_stale(requested):
+                continue
+            try:
+                async with own_conversation(self.db_path, thread_id, wait=False):
+                    async with self._open_db() as db:
+                        await db.execute("BEGIN IMMEDIATE")
+                        async with db.execute(
+                            "SELECT requested_at FROM pending_approvals WHERE approval_id = ? AND status = 'pending'",
+                            (approval_id,),
+                        ) as cursor:
+                            row = await cursor.fetchone()
+                        if row and _approval_is_stale(row[0]):
+                            await self._expire_pending_approval(db, turn_id, approval_id)
+                            expired += 1
+                        await db.commit()
+            except TurnBusyError:
+                continue
+        return expired
+
+    @staticmethod
+    async def _expire_pending_approval(db, turn_id: str, approval_id: str) -> None:
+        await db.execute(
+            "UPDATE pending_approvals SET status = 'expired' WHERE approval_id = ? AND status = 'pending'",
+            (approval_id,),
+        )
+        await suppress_approval(db, turn_id, approval_id)
+        cursor = await db.execute(
+            """UPDATE active_turns SET status = 'failed', error = 'approval_expired', completed_at = CURRENT_TIMESTAMP
+               WHERE turn_id = ? AND status IN ('running', 'resuming', 'waiting_approval')""",
+            (turn_id,),
+        )
+        if cursor.rowcount:
+            await queue_result(db, turn_id, None, failed=True)
+
     async def get_turn_detail(self, turn_id: str) -> dict | None:
         """One turn with its journal, memoized tool results and effects."""
         async with self._open_db() as db:
             await self._ensure_table(db)
             cursor = await db.execute(
                 """
-                SELECT turn_id, thread_id, status, input_message, attempts, started_at, completed_at, error, effect_protocol, caller_key
+                SELECT turn_id, thread_id, status, input_message, attempts, started_at, completed_at, error, effect_protocol, caller_key,
+                       final_content, delivery_requested, delivery_issue
                 FROM active_turns WHERE turn_id = ?
                 """,
                 (turn_id,),
@@ -461,6 +580,9 @@ class SessionStore:
                 "error",
                 "effect_protocol",
                 "caller_key",
+                "final_content",
+                "delivery_requested",
+                "delivery_issue",
             )
             turn = dict(zip(keys, row, strict=False))
 
@@ -560,7 +682,7 @@ class SessionStore:
                 """
                 SELECT turn_id FROM active_turns
                 WHERE status NOT IN ('running', 'resuming', 'waiting_approval')
-                  AND caller_key = ''
+                  AND caller_key = '' AND delivery_requested = 0
                   AND COALESCE(completed_at, started_at) < datetime('now', ?)
                   AND NOT EXISTS (SELECT 1 FROM effect_intents i
                       WHERE i.turn_id = active_turns.turn_id AND i.status = 'pending')
@@ -600,7 +722,7 @@ class SessionStore:
             return [{"turn_id": row[0], "thread_id": row[1]} for row in await cursor.fetchall()]
 
     async def claim_turn_for_resume(
-        self, turn_id: str, *, ownership: TurnOwnership, max_attempts: int = 2
+        self, turn_id: str, *, ownership: TurnOwnership, max_attempts: int = 2, notify: bool = False
     ) -> dict | None:
         """Claim one abandoned turn while its conversation stays exclusively held.
 
@@ -633,6 +755,8 @@ class SessionStore:
                 if await cursor.fetchone():
                     await db.rollback()
                     return None
+                if notify:
+                    await db.execute("UPDATE active_turns SET delivery_requested = 1 WHERE turn_id = ?", (turn_id,))
                 newer = await db.execute(
                     "SELECT 1 FROM active_turns WHERE thread_id = ? AND rowid > ? LIMIT 1",
                     (thread_id, row_id),
@@ -660,6 +784,8 @@ class SessionStore:
                         "input_message": str(input_message or ""),
                         "attempts": int(attempts or 0) + 1,
                     }
+                if claimed is None:
+                    await queue_result(db, turn_id, None, failed=True)
                 await db.commit()
             except BaseException:
                 await db.rollback()
@@ -901,6 +1027,11 @@ class SessionStore:
 
         async with self._open_db() as db:
             await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute("SELECT thread_id, status FROM active_turns WHERE turn_id = ?", (turn_id,)) as cursor:
+                turn = await cursor.fetchone()
+            if not turn or turn[0] != thread_id or turn[1] not in {"running", "resuming", "waiting_approval"}:
+                raise DurableStateError("approval does not belong to an active turn")
             cursor = await db.execute(
                 """
                 SELECT approval_id FROM pending_approvals
@@ -914,6 +1045,7 @@ class SessionStore:
                     "UPDATE active_turns SET status = 'waiting_approval' WHERE turn_id = ?",
                     (turn_id,),
                 )
+                await queue_approval(db, turn_id, str(row[0]))
                 await db.commit()
                 return str(row[0])
 
@@ -939,6 +1071,7 @@ class SessionStore:
                 "UPDATE active_turns SET status = 'waiting_approval' WHERE turn_id = ?",
                 (turn_id,),
             )
+            await queue_approval(db, turn_id, str(inserted[0]) if inserted else approval_id)
             await db.commit()
 
         return str(inserted[0]) if inserted else approval_id
@@ -1000,7 +1133,8 @@ class SessionStore:
                     p.decided_by,
                     p.decision,
                     t.input_message,
-                    p.delegation_json
+                    p.delegation_json,
+                    t.status
                 FROM pending_approvals p
                 JOIN active_turns t ON t.turn_id = p.turn_id
                 WHERE p.approval_id = ? AND p.status = 'pending'
@@ -1009,6 +1143,11 @@ class SessionStore:
             )
             row = await cursor.fetchone()
             if not row:
+                await db.rollback()
+                return None
+
+            if row[13] not in {"running", "resuming", "waiting_approval"}:
+                await self._expire_pending_approval(db, str(row[1]), approval_id)
                 await db.commit()
                 return None
 
@@ -1016,10 +1155,7 @@ class SessionStore:
             # older than the TTL must not fire a (possibly mutating) tool long
             # after the prompt was shown, in a context that no longer holds.
             if _approval_is_stale(row[7]):
-                await db.execute(
-                    "UPDATE pending_approvals SET status = 'expired' WHERE approval_id = ? AND status = 'pending'",
-                    (approval_id,),
-                )
+                await self._expire_pending_approval(db, str(row[1]), approval_id)
                 await db.commit()
                 return None
 
@@ -1038,6 +1174,7 @@ class SessionStore:
                 "UPDATE active_turns SET status = 'running' WHERE turn_id = ?",
                 (row[1],),
             )
+            await suppress_approval(db, row[1], approval_id)
             await db.commit()
 
         claimed = self._pending_approval_from_row(row)
@@ -1082,6 +1219,13 @@ class SessionStore:
         async with self._open_db() as db:
             await self._ensure_table(db)
             await db.execute("BEGIN IMMEDIATE")
+            async with db.execute("SELECT status FROM active_turns WHERE turn_id = ?", (turn_id,)) as cursor:
+                row = await cursor.fetchone()
+            if row and row[0] == "waiting_approval":
+                raise DurableStateError("cannot finish an approval-waiting turn")
+            if not row or row[0] not in {"running", "resuming"}:
+                await db.rollback()
+                return
             await self._assert_effects_settled(db, turn_id)
             await db.execute(
                 """
@@ -1091,6 +1235,7 @@ class SessionStore:
                 """,
                 (turn_id,),
             )
+            await queue_result(db, turn_id, None)
             await db.execute("DELETE FROM turn_journal WHERE turn_id = ?", (turn_id,))
             await db.execute("DELETE FROM tool_results WHERE turn_id = ?", (turn_id,))
             await db.commit()
@@ -1118,6 +1263,21 @@ class SessionStore:
         async with self._open_db() as db:
             await self._ensure_table(db)
             await db.execute("BEGIN IMMEDIATE")
+            async with db.execute(
+                "SELECT thread_id, status, final_content, error FROM active_turns WHERE turn_id = ?", (turn_id,)
+            ) as cursor:
+                existing = await cursor.fetchone()
+            if not existing or existing[0] != thread_id:
+                raise DurableStateError("finalization does not match its durable turn")
+            if existing[1] not in {"running", "resuming"}:
+                if (
+                    existing[1] == ("failed" if failure_reason else "done")
+                    and existing[2] == content
+                    and (existing[3] or "") == failure_reason
+                ):
+                    await db.rollback()
+                    return
+                raise DurableStateError("cannot replace a terminal or approval-waiting result")
             await self._assert_effects_settled(db, turn_id)
             await db.execute(
                 """INSERT INTO sessions (thread_id, messages, updated_at)
@@ -1136,6 +1296,7 @@ class SessionStore:
                 """,
                 ("failed" if failure_reason else "done", failure_reason or None, content, turn_id),
             )
+            await queue_result(db, turn_id, content, failed=bool(failure_reason))
             await db.execute("DELETE FROM turn_journal WHERE turn_id = ?", (turn_id,))
             await db.execute("DELETE FROM tool_results WHERE turn_id = ?", (turn_id,))
             await db.commit()
@@ -1179,7 +1340,7 @@ class SessionStore:
             else:
                 reason = "approval_state_inconsistent"
         elif state == "failed":
-            status = "failed"
+            status = "expired" if error == "approval_expired" else "failed"
         elif state in {"recovered", "superseded"}:
             status = "interrupted"
         elif state == "done":
@@ -1279,16 +1440,19 @@ class SessionStore:
         """Mark a turn failed after a handled exception."""
         async with self._open_db() as db:
             await self._ensure_table(db)
-            await db.execute(
+            await db.execute("BEGIN IMMEDIATE")
+            changed = await db.execute(
                 """
                 UPDATE active_turns
                 SET status = 'failed',
                     completed_at = CURRENT_TIMESTAMP,
                     error = ?
-                WHERE turn_id = ?
+                WHERE turn_id = ? AND status IN ('running', 'resuming', 'waiting_approval')
                 """,
                 (error[:1000], turn_id),
             )
+            if changed.rowcount:
+                await queue_result(db, turn_id, None, failed=True)
             await db.commit()
 
     async def recover_abandoned_turns(self) -> int:
@@ -1404,6 +1568,7 @@ class SessionStore:
                     """,
                     (turn_id,),
                 )
+                await queue_result(db, turn_id, None, failed=True)
                 await db.commit()
             except BaseException:
                 await db.rollback()

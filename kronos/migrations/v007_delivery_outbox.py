@@ -2,12 +2,8 @@
 
 import sqlite3
 
-
-def migrate(conn: sqlite3.Connection) -> None:
-    """Add the reusable outbox and opt-in for new cancellation notices."""
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        conn.execute("""CREATE TABLE IF NOT EXISTS delivery_outbox (
+OUTBOX_SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS delivery_outbox (
             seq INTEGER PRIMARY KEY AUTOINCREMENT,
             event_key TEXT NOT NULL UNIQUE,
             stream_key TEXT NOT NULL,
@@ -25,9 +21,18 @@ def migrate(conn: sqlite3.Connection) -> None:
             last_error TEXT NOT NULL DEFAULT '',
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL
-        )""")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_due ON delivery_outbox(state, next_attempt, seq)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_stream ON delivery_outbox(stream_key, seq, state)")
+        )""",
+    """CREATE INDEX IF NOT EXISTS idx_delivery_due ON delivery_outbox(state, next_attempt, seq)""",
+    """CREATE INDEX IF NOT EXISTS idx_delivery_stream ON delivery_outbox(stream_key, seq, state)""",
+)
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    """Add the reusable outbox and opt-in for new cancellation notices."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for statement in OUTBOX_SCHEMA:
+            conn.execute(statement)
         columns = {row[1] for row in conn.execute("PRAGMA table_info(plans)")}
         if columns and "stop_notify" not in columns:
             conn.execute("ALTER TABLE plans ADD COLUMN stop_notify INTEGER NOT NULL DEFAULT 0")

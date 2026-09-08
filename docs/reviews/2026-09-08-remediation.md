@@ -26,7 +26,7 @@
 | F06 | Межпроцессная сериализация всех budget writers | Перенесён, regression пройден | Код присутствует; live приёмка не выполнена |
 | F07 | Approval wait не завершает шаг; approve/reject/restart согласованы | Исправлено и проверено локально | Нужны миграции, rollout и Telegram smoke |
 | F08 | Отмена/падение шага восстанавливаются без слепого повтора эффектов | В работе: claim/link recovery, live cancel/TTL и fenced cleanup проверены; operator reconciliation и гарантированное stop-уведомление ещё нужны | Ожидает |
-| F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | В работе: transactional outbox для итогов/progress/stop планов проверен; session resume и остальные producers ещё нужны | Ожидает |
+| F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | В работе: transactional outbox планов и восстановленных session turns проверен; обычные ответы, остальные producers и operator repair ещё нужны | Ожидает |
 | F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | В работе: intent/journal boundary проверен; полный перечень путей и reconciliation не закрыты | Ожидает |
 | F11 | Один resume на turn; live registry и atomic ownership | Исправлено и проверено локально | Нужен согласованный rollout без старых исполнителей |
 | F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | Ожидает | Ожидает |
@@ -647,3 +647,76 @@ producers. Нужны также operator reconciliation/repair без слеп�
 ротация cron history `f31f283` ещё не соответствует production-файлу scheduler.
 Перед будущим релизом по-прежнему обязательна безопасная сверка с изменяемым main;
 этот worktree нельзя автоматически деплоить поверх более новых runtime исправлений.
+
+### F09 — этап 2: transactional delivery восстановленных session turns
+
+- Миграция v008 добавляет outbox в **ту же** БД, что и SessionStore, frozen
+  transport provenance и признак обязанности доставки. Исходный Telegram turn
+  сохраняет проверенные chat/topic/account до вызова модели; user-facing resume
+  атомарно записывает обязанность вместе с claim. Числовой thread ID сам по себе
+  не считается разрешением отправить сообщение. Плановые turns не дублируют
+  очередь планов; старые записи не принимаются в доставку автоматически.
+- History, terminal outcome и сообщение коммитятся одной транзакцией.
+  Неизвестный/повреждённый маршрут и отсутствующий результат видны как отдельная
+  проблема, не fabricated delivered. Повторная финализация не заменяет результат;
+  поздний fail не превращает завершённый turn в ошибку. Report-mode recovery
+  завершает уже запрошенную обязанность честным уведомлением о прерывании.
+- Approval wait создаёт уведомление вместе с waiting state, а не готовый ответ.
+  Решение/завершение помечает старое уведомление obsolete, без поддельного receipt.
+  TTL обрабатывается ограниченным проходом под conversation ownership; старые
+  non-recovery approvals не исполняются и не отменяются автоматически.
+- `/approve`, `/reject` и callbacks проверяют явный owner allowlist, исходные
+  chat/topic/account. Callback использует фактический topic события. Результат
+  continuation отправляет только queue worker, без второго прямого ответа.
+  Обязательный dissent не обходится: соответствующий результат остаётся needs_review.
+- Bridge и recovery запускаются одновременно после установки shutdown handlers;
+  завершение одноразового resume не завершает процесс. Delivery имеет независимые
+  циклы для планов и session store. Ошибка одного producer и transport-originated
+  CancelledError не удаляют его цикл; настоящая отмена корректно завершает worker.
+- API, CLI и TurnsPage разделяют outcome и transport acceptance, показывают
+  сохранённый итог и состояние очереди. Delivered означает принятие Telegram,
+  не прочтение пользователем. Старый backend без metadata не отображается как
+  успешно доставивший сообщение.
+
+Проверки на локальном Python 3.13:
+
+- **2314 passed, 66 integration deselected, 1 warning**, 31.87 sec. Относительно
+  этапа 1 добавлены 39 unit cases. Первый финальный прогон в sandbox дал
+  2299 passed и 15 PermissionError (loopback/ps); повтор с разрешённым доступом
+  прошёл полностью. Защитные проверки не отключались.
+- **27 SIGKILL/restart tests passed**, 29.53 sec: 22 прежних + 5 новых. Проверены
+  rollback producer transaction, committed queue, send-before-ack, partial/final
+  receipts. После committed result модель не вызывается повторно; неподтверждённые
+  chunks используют прежние random IDs. SQLite quick_check остаётся ok.
+- Ruff, отдельный F821, diff-check, TypeScript app/node и полный UI ESLint — PASS.
+  UI проверен во временной копии с существующими зависимостями; tsbuildinfo не
+  записывался в исходный node_modules. Конфигурация/dependencies не менялись.
+- 39 внешних integration cases, реальные Telegram/MCP/model writes и production
+  не запускались. Эти результаты не заменяют Linux/Telegram/rollout-приёмку.
+
+Изменённые файлы этапа:
+
+- `kronos/migrations/v008_turn_delivery.py`, `v007_delivery_outbox.py`,
+  `kronos/turn_delivery.py`, `delivery.py`, `session.py`, `plans.py`, `db.py`:
+  миграции, единый enqueue-контракт, producer transactions и lifecycle соединения.
+- `kronos/bridge_recovery.py`, `bridge.py`, `graph.py`, `app.py`,
+  `cron/delivery.py`: доверенные маршруты, ownership, approvals и независимый запуск.
+- `dashboard/api/turns.py`, `dashboard-ui/src/pages/TurnsPage.tsx`, `kronos/cli.py`:
+  наблюдаемость результата и доставки.
+- `tests/test_turn_delivery.py`, `test_bridge_recovery.py`,
+  `test_recovery_startup.py`, `test_turn_delivery_kill.py`,
+  `helpers/turn_delivery_crash.py`: новые проверки. Существующие delivery,
+  durable resume/kill/helper и graph-contract tests обновлены на queue API.
+- ADR-0013, индекс архитектурных решений и этот реестр.
+
+Повторить: полный pytest как выше; crash suite —
+`tests/test_turn_delivery_kill.py tests/test_delivery_kill.py tests/test_plan_kill.py
+tests/test_durable_kill.py`. Локальные логи: `/tmp/kaos-turn-delivery-full-approved.txt`,
+`/tmp/kaos-turn-delivery-kill-final.txt`; UI scratch указан в `/tmp/kaos-turn-ui-path.txt`.
+
+**F09 всё ещё открыт:** обычные ответы, исходные non-recovery/plan approvals,
+остальные cron producers, operator adoption/reconciliation/review resolution,
+retention и scoped reset очереди. Requested turns временно не удаляются prune:
+это сохранение доказательств, а не завершённая политика хранения. Sync SafeDB I/O
+остаётся в F15. F17 optional-dashboard startup — отдельный следующий фикс.
+Ни production-конфигурация, ни main с незакоммиченными изменениями не тронуты.

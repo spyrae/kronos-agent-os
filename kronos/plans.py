@@ -36,6 +36,7 @@ from kronos.migrations.v002_plan_turns import migrate as migrate_plan_turns
 from kronos.migrations.v005_plan_execution import migrate_plans as migrate_execution
 from kronos.migrations.v006_plan_stop import migrate as migrate_stop
 from kronos.migrations.v007_delivery_outbox import migrate as migrate_delivery
+from kronos.migrations.v008_turn_delivery import migrate_queue
 from kronos.turn_ownership import TurnOwnership
 
 log = logging.getLogger("kronos.plans")
@@ -116,6 +117,7 @@ def _init_schema(conn) -> None:
     migrate_execution(conn)
     migrate_stop(conn)
     migrate_delivery(conn)
+    migrate_queue(conn)
 
 
 def _db():
