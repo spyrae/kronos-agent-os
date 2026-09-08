@@ -22,11 +22,15 @@ Three things keep the loop honest:
 
 import asyncio
 import logging
+import time
 
 from kronos import plan_conditions, plans
 from kronos.config import settings
 from kronos.cron.notify import send_webhook
 from kronos.outcomes import InvocationOutcome
+from kronos.policy import get_policy
+from kronos.session import SessionStore
+from kronos.turn_ownership import TurnBusyError, TurnOwnership, own_conversation
 
 log = logging.getLogger("kronos.cron.plans")
 
@@ -91,42 +95,72 @@ def step_prompt(plan: dict, step: dict, observation: str = "") -> str:
     return "\n".join(lines)
 
 
+async def _recover_unlinked(step: dict, store: SessionStore, ownership: TurnOwnership) -> dict | None:
+    """Repair the two-database crash window; absence alone is not legacy proof."""
+    if step.get("turn_id"):
+        return step
+    key = step.get("execution_key", "")
+    if not key:
+        plans.update_linked_step(
+            step["id"], "", state=plans.STEP_REVIEW,
+            result="Legacy unlinked execution; review effects before retrying.",
+        )
+        return None
+    turn = await store.get_turn_for_caller(key)
+    if turn is None:
+        plans.retry_unstarted_step(step, ownership=ownership)
+        return None
+    if turn["thread_id"] != plan_thread_id(step["plan_id"]):
+        plans.update_linked_step(step["id"], "", state=plans.STEP_REVIEW, result="Caller correlation mismatch.")
+        return None
+    plans.link_turn(step["id"], turn["turn_id"], execution_key=key)
+    return plans.get_step(step["id"])
+
+
 async def _run_step(plan: dict, step: dict, observation: str) -> None:
-    """Run one step as a turn. Its reply is the step's result."""
+    """Own the conversation before claiming work, through outcome persistence."""
     from kronos.bridge import get_agent
 
     agent = get_agent()
-    if agent is None:
-        log.warning("Plan step #%s skipped: agent not ready", step["id"])
+    if agent is None or agent.session_store is None:
+        log.warning("Plan step #%s skipped: durable agent not ready", step["id"])
         return
-
-    if not plans.claim_step(step["id"]):
-        return
+    store = agent.session_store
     try:
-        result = await agent.ainvoke_outcome(
-            message=step_prompt(plan, step, observation),
-            thread_id=plan_thread_id(plan["id"]),
-            user_id="plan",
-            session_id=str(plan["chat_id"] or plan["id"]),
-            source_kind="user",
-            persist_user_turn=True,
-            on_turn_started=lambda turn_id: plans.link_turn(step["id"], turn_id),
-        )
-    except Exception as e:
-        log.error("Plan step #%s failed: %s", step["id"], e)
-        current = plans.get_step(step["id"])
-        if current.get("turn_id"):
-            plans.update_linked_step(
-                step["id"],
-                current["turn_id"],
-                state=plans.STEP_REVIEW,
-                result="Turn interrupted; effects may have occurred. Review before retrying.",
-            )
-        else:
-            plans.fail_step(step["id"], str(e))
+        async with own_conversation(store.db_path, plan_thread_id(plan["id"]), wait=False) as ownership:
+            if not plans.claim_step(step["id"], ownership=ownership):
+                return
+            current = plans.get_step(step["id"])
+            try:
+                if await store.get_turn_for_caller(current["execution_key"]):
+                    linked = await _recover_unlinked(current, store, ownership)
+                    if linked:
+                        await _apply_outcome(plan, linked, await agent.get_turn_outcome(linked["turn_id"]))
+                    return
+                result = await agent.ainvoke_outcome(
+                    message=step_prompt(plan, current, observation),
+                    thread_id=plan_thread_id(plan["id"]), user_id="plan",
+                    session_id=str(plan["chat_id"] or plan["id"]),
+                    source_kind="user", persist_user_turn=True,
+                    caller_key=current["execution_key"], execution_ownership=ownership,
+                    on_turn_started=lambda turn_id: plans.link_turn(
+                        step["id"], turn_id, execution_key=current["execution_key"],
+                    ),
+                )
+            except Exception:
+                # CancelledError deliberately propagates: the next poll owns
+                # recovery only after this task has unwound and released flock.
+                log.exception("Plan step #%s interrupted", step["id"])
+                current = await _recover_unlinked(plans.get_step(step["id"]), store, ownership)
+                if current:
+                    plans.update_linked_step(
+                        step["id"], current["turn_id"], state=plans.STEP_INTERRUPTED,
+                        result="Execution interrupted; continuation must use the same turn.",
+                    )
+                return
+            await _apply_outcome(plan, plans.get_step(step["id"]), result)
+    except TurnBusyError:
         return
-
-    await _apply_outcome(plan, plans.get_step(step["id"]), result)
 
 
 async def _apply_outcome(plan: dict, step: dict, outcome: InvocationOutcome) -> None:
@@ -157,10 +191,11 @@ async def _apply_outcome(plan: dict, step: dict, outcome: InvocationOutcome) -> 
                 plans.note_approval_delivered(step["id"], turn_id, outcome.approval_id)
         return
     if outcome.status == "running":
-        plans.update_linked_step(step["id"], turn_id, state=plans.STEP_RUNNING, result=step["result"])
+        if step["state"] != plans.STEP_WAITING:
+            plans.update_linked_step(step["id"], turn_id, state=plans.STEP_RUNNING, result=step["result"])
         return
     if outcome.status == "completed" and text:
-        changed = plans.update_linked_step(step["id"], turn_id, state=plans.STEP_DONE, result=text)
+        changed = plans.complete_step_turn(step["id"], turn_id, text)
         if changed and step["notify"]:
             await _deliver(plan, text)
         return
@@ -175,22 +210,61 @@ async def _apply_outcome(plan: dict, step: dict, outcome: InvocationOutcome) -> 
     plans.update_linked_step(step["id"], turn_id, state=state, result=text)
 
 
-async def _reconcile_turns() -> None:
-    """Observe approval continuations, including a crash before pause was saved."""
+async def _reconcile_turns() -> set[int]:
+    """Reconcile stopped executors under the same lock and the configured policy.
+
+    Returns plans whose continuation consumed this cycle's execution budget.
+    """
     from kronos.bridge import get_agent
 
+    attempted: set[int] = set()
     agent = get_agent()
-    if agent is None:
-        return
-    for step in plans.steps_with_turn(settings.agent_name):
-        plan = plans.get_plan(step["plan_id"])
+    if agent is None or agent.session_store is None:
+        return attempted
+    store = agent.session_store
+    policy = get_policy().durable
+    for candidate in plans.steps_to_reconcile(settings.agent_name):
         try:
-            outcome = await agent.get_turn_outcome(step["turn_id"])
-            await _apply_outcome(plan, step, outcome)
-            plans.settle_plan(plan["id"])
+            plan_id = candidate["plan_id"]
+            async with own_conversation(store.db_path, plan_thread_id(plan_id), wait=False) as ownership:
+                step = plans.get_step(candidate["id"])
+                if not step or not (
+                    step["state"] in {plans.STEP_RUNNING, plans.STEP_APPROVAL, plans.STEP_INTERRUPTED}
+                    or (step["state"] == plans.STEP_WAITING and step["turn_id"])
+                ):
+                    continue
+                plan = plans.get_plan(plan_id)
+                if not plan or plan["state"] != plans.PLAN_ACTIVE or plan["expires_at"] <= time.time():
+                    continue
+                step = await _recover_unlinked(step, store, ownership)
+                if not step:
+                    plans.settle_plan(plan_id)
+                    continue
+                outcome = await agent.get_turn_outcome(step["turn_id"])
+                if outcome.status == "running":
+                    if policy.resume_mode != "resume":
+                        plans.update_linked_step(
+                            step["id"], step["turn_id"], state=plans.STEP_INTERRUPTED,
+                            result="Execution stopped; report policy requires explicit turn resume.",
+                        )
+                        continue
+                    if plan_id in attempted or len(attempted) >= MAX_STEPS_PER_CYCLE:
+                        continue
+                    attempted.add(plan_id)
+                    await agent.resume_interrupted_turn(
+                        step["turn_id"], max_attempts=policy.max_resume_attempts,
+                        execution_ownership=ownership,
+                    )
+                    outcome = await agent.get_turn_outcome(step["turn_id"])
+                await _apply_outcome(plan, plans.get_step(step["id"]), outcome)
+                plans.settle_plan(plan_id)
+        except TurnBusyError:
+            pass  # A live executor is never abandoned, regardless of its age.
         except Exception:
-            # An unavailable DB is not permission to start a replacement turn.
-            log.exception("Plan step #%s reconciliation failed", step["id"])
+            log.exception("Plan step #%s reconciliation failed", candidate["id"])
+        finally:
+            plans.note_reconciled(candidate)
+    return attempted
 
 
 async def _deliver(plan: dict, text: str) -> None:
@@ -257,8 +331,7 @@ async def _check_condition(plan: dict, step: dict) -> tuple[bool, str]:
         log.info("Step #%s condition notes: %s", step["id"], "; ".join(verdict.notes))
 
     if verdict.fired:
-        plans.release_step(step["id"])
-        return True, verdict.detail
+        return plans.release_step(step["id"]), verdict.detail
 
     plans.note_check(step["id"], verdict.next_check_at)
     return False, ""
@@ -288,7 +361,7 @@ async def _deliver_pending_summaries(limit: int) -> int:
 async def run_due_plan_steps() -> None:
     """One cycle: retire what timed out, report what closed, run what is ready."""
     await _retire_expired()
-    await _reconcile_turns()
+    resumed = await _reconcile_turns()
     # Last cycle's leftovers first: a finished plan is what the owner is waiting
     # for, and it should not queue behind other plans' steps.
     summaries = MAX_SUMMARIES_PER_CYCLE - await _deliver_pending_summaries(MAX_SUMMARIES_PER_CYCLE)
@@ -297,9 +370,9 @@ async def run_due_plan_steps() -> None:
     if not ready:
         return
 
-    ran = 0
+    ran = len(resumed)
     checks = 0
-    seen_plans: set[int] = set()
+    seen_plans: set[int] = set(resumed)
     touched_plans: set[int] = set()
 
     for step in ready:
@@ -313,7 +386,13 @@ async def run_due_plan_steps() -> None:
         if not plan or plan["state"] != plans.PLAN_ACTIVE:
             continue
 
-        if plans.wait_spec(step):
+        spec = plans.wait_spec(step)
+        if step.get("wait_json") and not spec:
+            plans.update_linked_step(
+                step["id"], "", state=plans.STEP_REVIEW, result="Unreadable condition; review required.",
+            )
+            continue
+        if spec:
             if checks >= MAX_CHECKS_PER_CYCLE:
                 break
             checks += 1

@@ -56,7 +56,7 @@ from kronos.skills.tools import (
     load_skill_reference,
 )
 from kronos.state import AgentState
-from kronos.turn_ownership import TurnBusyError, own_conversation
+from kronos.turn_ownership import TurnBusyError, TurnOwnership, own_conversation
 
 log = logging.getLogger("kronos.graph")
 
@@ -238,6 +238,11 @@ class KronosAgent:
             )
             log.info("System prompt: %d chars, skills: %d chars", len(self._system_prompt), len(catalog))
         return self._system_prompt
+
+    @property
+    def session_store(self) -> SessionStore | None:
+        """The runtime's durable store, shared with caller-specific recovery."""
+        return self._session_store
 
     @property
     def last_pending_approval_id(self) -> str | None:
@@ -558,7 +563,10 @@ class KronosAgent:
         )
         return result.content
 
-    async def resume_interrupted_turn(self, turn: dict | str, *, max_attempts: int | None = None) -> str | None:
+    async def resume_interrupted_turn(
+        self, turn: dict | str, *, max_attempts: int | None = None,
+        execution_ownership: TurnOwnership | None = None,
+    ) -> str | None:
         """Exclusively resume an abandoned turn using its durable identity.
 
         A caller-supplied snapshot is never execution authority. Status and
@@ -571,17 +579,30 @@ class KronosAgent:
         detail = await self._session_store.get_turn_detail(turn_id)
         if not detail:
             return None
+        if detail["thread_id"].startswith("plan:"):
+            from kronos import plans
+
+            if not plans.plan_for_turn(turn_id, settings.agent_name):
+                return None
         if max_attempts is None:
             from kronos.policy import get_policy
 
             max_attempts = get_policy().durable.max_resume_attempts
-        async with own_conversation(self._session_store.db_path, detail["thread_id"], wait=False) as ownership:
+        async def resume_owned(ownership: TurnOwnership) -> str | None:
+            ownership.assert_held(self._session_store.db_path, detail["thread_id"])
             claimed = await self._session_store.claim_turn_for_resume(
                 turn_id, ownership=ownership, max_attempts=max_attempts
             )
             if not claimed:
                 return None
+            if detail["thread_id"].startswith("plan:"):
+                plans.note_turn_resuming(turn_id, settings.agent_name)
             return await self._resume_claimed_turn(claimed)
+
+        if execution_ownership is not None:
+            return await resume_owned(execution_ownership)
+        async with own_conversation(self._session_store.db_path, detail["thread_id"], wait=False) as ownership:
+            return await resume_owned(ownership)
 
     async def _resume_claimed_turn(self, turn: dict) -> str | None:
         """Finish a turn whose process died mid-flight.
@@ -818,6 +839,8 @@ class KronosAgent:
         on_tool_event: ToolEventCallback | None = None,
         force_tier: str | None = None,
         on_turn_started: Callable[[str], None] | None = None,
+        caller_key: str = "",
+        execution_ownership: TurnOwnership | None = None,
     ) -> InvocationOutcome:
         """Process raw input with call-local outcome and exclusive history writes.
 
@@ -830,8 +853,13 @@ class KronosAgent:
             message=message, thread_id=thread_id, user_id=user_id, session_id=session_id,
             source_kind=source_kind, persist_user_turn=persist_user_turn,
             extra_system_context=extra_system_context, on_tool_event=on_tool_event,
-            force_tier=force_tier, on_turn_started=on_turn_started,
+            force_tier=force_tier, on_turn_started=on_turn_started, caller_key=caller_key,
         )
+        if execution_ownership is not None:
+            if not self._session_store or not persist_user_turn:
+                raise ValueError("borrowed ownership requires a durable invocation")
+            execution_ownership.assert_held(self._session_store.db_path, thread_id)
+            return await self._invoke_owned(**kwargs)
         if self._session_store and persist_user_turn:
             if not getattr(self, "_durable_recovery_checked", False):
                 await self._session_store.recover_abandoned_turns()
@@ -852,6 +880,7 @@ class KronosAgent:
         on_tool_event: ToolEventCallback | None = None,
         force_tier: str | None = None,
         on_turn_started: Callable[[str], None] | None = None,
+        caller_key: str = "",
     ) -> InvocationOutcome:
         """Process a message and return its explicit execution outcome.
 
@@ -942,7 +971,7 @@ class KronosAgent:
         turn_id: str | None = None
         react_loop_kwargs: dict[str, Any] = {}
         if self._session_store and not is_ephemeral:
-            turn_id = await self._session_store.begin_turn(thread_id, message)
+            turn_id = await self._session_store.begin_turn(thread_id, message, caller_key=caller_key)
             if on_turn_started is not None:
                 try:
                     on_turn_started(turn_id)

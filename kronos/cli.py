@@ -1634,10 +1634,16 @@ def run_plans_resume(plan_id: int, step_id: int) -> int:
         print(f"Plan #{plan_id} has no waiting steps.")
         return 1
 
+    released = 0
     for step in waiting:
-        plans.release_step(step["id"])
+        if not plans.release_step(step["id"]):
+            continue
+        released += 1
         label = step["title"] or f"step {step['seq']}"
         print(f"Released step #{step['id']} ({label})")
+    if not released:
+        print("No steps released: execution is unresolved or the plan expired.")
+        return 1
     print("The next poller cycle picks them up.")
     return 0
 

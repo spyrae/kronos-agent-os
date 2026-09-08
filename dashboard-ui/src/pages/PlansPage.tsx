@@ -16,6 +16,9 @@ interface Step {
   title: string;
   prompt: string;
   state: string;
+  turn_id: string;
+  last_turn_id: string;
+  repark_requested: boolean;
   depends_on: number[];
   waiting_for: string;
   wake_at: number;
@@ -49,6 +52,9 @@ const STATE_COLOR: Record<string, string> = {
   pending: '#94a3b8',
   waiting: '#f59e0b',
   running: '#22d3ee',
+  interrupted: '#f59e0b',
+  awaiting_approval: '#f59e0b',
+  needs_review: '#ef4444',
 };
 
 const card: React.CSSProperties = {
@@ -194,7 +200,31 @@ export default function PlansPage() {
                         → {step.result}
                       </div>
                     )}
-                    {step.state === 'waiting' && (
+                    {step.repark_requested && (
+                      <div style={{ color: '#f59e0b', fontSize: '0.72rem' }}>
+                        Will wait after the current turn finishes.
+                      </div>
+                    )}
+                    {(step.turn_id || step.last_turn_id) && (
+                      <div style={{ color: '#777', fontSize: '0.72rem', overflowWrap: 'anywhere' }}>
+                        {step.turn_id ? 'Turn' : 'Last turn'}: {step.turn_id || step.last_turn_id}
+                      </div>
+                    )}
+                    {step.state === 'interrupted' && step.turn_id && plan.state === 'active' && (
+                      <button
+                        style={{ ...ghost, marginTop: '0.35rem', fontSize: '0.7rem' }}
+                        disabled={busy}
+                        onClick={() => act(async () => {
+                          const result = await api<{ status: string }>(
+                            `/api/turns/${encodeURIComponent(step.turn_id)}/resume`, { method: 'POST' },
+                          );
+                          if (!['completed', 'waiting_approval'].includes(result.status)) {
+                            throw new Error(`Turn did not complete: ${result.status}`);
+                          }
+                        })}
+                      >Continue the same turn</button>
+                    )}
+                    {step.state === 'waiting' && !step.turn_id && plan.state === 'active' && (
                       <button
                         style={{ ...ghost, marginTop: '0.35rem', fontSize: '0.7rem' }}
                         disabled={busy}

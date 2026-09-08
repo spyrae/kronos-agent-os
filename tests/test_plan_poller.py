@@ -6,14 +6,13 @@ starves the rest; delivering each step's result turns a week-long watch into a
 reason to switch notifications off. Each has a test.
 """
 
-import uuid
-
 import pytest
 
 from kronos import plans
 from kronos.config import settings
 from kronos.cron import plans as poller
 from kronos.outcomes import InvocationOutcome
+from kronos.session import SessionStore
 
 AGENT = "kronos"
 
@@ -34,6 +33,7 @@ class FakeAgent:
     def __init__(self, reply="сделано"):
         self.reply = reply
         self.calls: list[dict] = []
+        self.session_store = SessionStore(settings.db_path)
 
     async def ainvoke(self, **kwargs):
         self.calls.append(kwargs)
@@ -41,10 +41,13 @@ class FakeAgent:
             raise self.reply
         return self.reply
 
+    async def get_turn_outcome(self, turn_id):
+        return await self.session_store.get_turn_outcome(turn_id)
+
     async def ainvoke_outcome(self, **kwargs):
         callback = kwargs.pop("on_turn_started")
         content = await self.ainvoke(**kwargs)
-        turn_id = str(uuid.uuid4())
+        turn_id = await self.session_store.begin_turn(kwargs["thread_id"], kwargs["message"], caller_key=kwargs["caller_key"])
         callback(turn_id)
         return InvocationOutcome("completed", content, kwargs["thread_id"], turn_id)
 
@@ -127,7 +130,7 @@ async def test_an_agent_that_is_not_up_yet_costs_the_step_nothing(monkeypatch):
     assert step["state"] == plans.STEP_PENDING
 
 
-async def test_a_step_whose_turn_raised_is_retried(agent):
+async def test_a_failure_before_turn_creation_is_retried(agent):
     agent(RuntimeError("provider down"))
     plan_id = _plan()
     step_id = plans.add_step(plan_id, "поищи")
@@ -136,7 +139,7 @@ async def test_a_step_whose_turn_raised_is_retried(agent):
 
     step = plans.get_step(step_id)
     assert step["state"] == plans.STEP_PENDING
-    assert "provider down" in step["result"]
+    assert "before turn creation" in step["result"]
 
 
 async def test_an_empty_reply_is_not_a_result(agent):

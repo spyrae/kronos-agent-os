@@ -26,6 +26,7 @@ from kronos.effect_state import DurableStateError, EffectClaim, EffectUncertainE
 from kronos.migrations.v001_turn_outcome import migrate as migrate_turn_outcome
 from kronos.migrations.v003_effect_intents import migrate as migrate_effect_intents
 from kronos.migrations.v004_effect_protocol import migrate as migrate_effect_protocol
+from kronos.migrations.v005_plan_execution import migrate_turns as migrate_caller_key
 from kronos.outcomes import InvocationOutcome, InvocationStatus
 from kronos.tool_history import trim_completed_history, unanswered_tool_calls
 from kronos.turn_ownership import TurnBusyError, TurnOwnership, own_conversation
@@ -286,23 +287,37 @@ class SessionStore:
             await migrate_turn_outcome(db)
             await migrate_effect_intents(db)
             await migrate_effect_protocol(db)
+            await migrate_caller_key(db)
             self._initialized = True
 
-    async def begin_turn(self, thread_id: str, input_message: str) -> str:
-        """Open a durable turn record and return its id."""
+    async def begin_turn(self, thread_id: str, input_message: str, *, caller_key: str = "") -> str:
+        """Open a turn, recording the caller's immutable correlation atomically."""
         turn_id = str(uuid.uuid4())
         async with self._open_db() as db:
             await self._ensure_table(db)
             await db.execute(
                 """
                 INSERT INTO active_turns
-                    (turn_id, thread_id, status, input_message, effect_protocol)
-                VALUES (?, ?, 'running', ?, 1)
+                    (turn_id, thread_id, status, input_message, effect_protocol, caller_key)
+                VALUES (?, ?, 'running', ?, 1, ?)
                 """,
-                (turn_id, thread_id, input_message),
+                (turn_id, thread_id, input_message, caller_key),
             )
             await db.commit()
         return turn_id
+
+    async def get_turn_for_caller(self, caller_key: str) -> dict | None:
+        """Read identity only, so corrupt journal content cannot hide a claim."""
+        if not caller_key:
+            return None
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                "SELECT turn_id, thread_id, status, caller_key FROM active_turns WHERE caller_key = ?",
+                (caller_key,),
+            )
+            row = await cursor.fetchone()
+        return dict(zip(("turn_id", "thread_id", "status", "caller_key"), row, strict=True)) if row else None
 
     async def append_turn_messages(
         self,
@@ -426,7 +441,7 @@ class SessionStore:
             await self._ensure_table(db)
             cursor = await db.execute(
                 """
-                SELECT turn_id, thread_id, status, input_message, attempts, started_at, completed_at, error, effect_protocol
+                SELECT turn_id, thread_id, status, input_message, attempts, started_at, completed_at, error, effect_protocol, caller_key
                 FROM active_turns WHERE turn_id = ?
                 """,
                 (turn_id,),
@@ -444,6 +459,7 @@ class SessionStore:
                 "completed_at",
                 "error",
                 "effect_protocol",
+                "caller_key",
             )
             turn = dict(zip(keys, row, strict=False))
 
@@ -524,6 +540,8 @@ class SessionStore:
     async def prune_turn_history(self, *, older_than_days: int = 30) -> dict:
         """Delete finished turns and whatever still hangs off them.
 
+        Caller-owned identities are retained: deleting one could turn a lost
+        reverse link into false proof that its external work never started.
         Only finished turns: a running or resuming turn is live state, and an
         unfinished turn older than the window is a bug to look at, not garbage to
         sweep.
@@ -541,6 +559,7 @@ class SessionStore:
                 """
                 SELECT turn_id FROM active_turns
                 WHERE status NOT IN ('running', 'resuming', 'waiting_approval')
+                  AND caller_key = ''
                   AND COALESCE(completed_at, started_at) < datetime('now', ?)
                   AND NOT EXISTS (SELECT 1 FROM effect_intents i
                       WHERE i.turn_id = active_turns.turn_id AND i.status = 'pending')
@@ -569,12 +588,13 @@ class SessionStore:
         return pruned
 
     async def resumable_turns(self) -> list[dict]:
-        """List candidates only; a running status is not proof of abandonment."""
+        """List unowned candidates; plan recovery must reconcile its claim first."""
         async with self._open_db() as db:
             await self._ensure_table(db)
             cursor = await db.execute(
                 """SELECT turn_id, thread_id FROM active_turns
-                   WHERE status IN ('running', 'resuming') ORDER BY rowid ASC"""
+                   WHERE status IN ('running', 'resuming') AND caller_key = ''
+                     AND thread_id NOT LIKE 'plan:%' ORDER BY rowid ASC"""
             )
             return [{"turn_id": row[0], "thread_id": row[1]} for row in await cursor.fetchall()]
 

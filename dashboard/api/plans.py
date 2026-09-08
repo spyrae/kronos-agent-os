@@ -26,6 +26,9 @@ def _step_view(step: dict) -> dict:
         "title": step["title"],
         "prompt": step["prompt"],
         "state": step["state"],
+        "turn_id": step["turn_id"],
+        "last_turn_id": step["last_turn_id"],
+        "repark_requested": bool(step["repark_requested"]),
         "depends_on": plans.dependency_ids(step),
         "waiting_for": plan_conditions.describe(spec) if spec else "",
         "wake_at": step["wake_at"],
@@ -97,10 +100,11 @@ async def resume_plan(plan_id: int, step: int = Query(0, description="one step, 
     if not waiting:
         raise HTTPException(status_code=404, detail="nothing is waiting on this plan")
 
-    for parked in waiting:
-        plans.release_step(parked["id"])
-    log.info("Plan #%s: released %d step(s) from the dashboard", plan_id, len(waiting))
-    return {"released": [s["id"] for s in waiting], "plan": _plan_view(plans.get_plan(plan_id))}
+    released = [s["id"] for s in waiting if plans.release_step(s["id"])]
+    if not released:
+        raise HTTPException(status_code=409, detail="waiting steps are executing or the plan expired")
+    log.info("Plan #%s: released %d step(s) from the dashboard", plan_id, len(released))
+    return {"released": released, "plan": _plan_view(plans.get_plan(plan_id))}
 
 
 @router.delete("/{plan_id}")

@@ -25,7 +25,7 @@
 | F05 | Per-item ledger; partial/unknown outcomes не теряются и не дублируются | Перенесён, regression пройден | Нужна миграция и сверка |
 | F06 | Межпроцессная сериализация всех budget writers | Перенесён, regression пройден | Не развёрнуто |
 | F07 | Approval wait не завершает шаг; approve/reject/restart согласованы | Исправлено и проверено локально | Нужны миграции, rollout и Telegram smoke |
-| F08 | Отмена/падение шага восстанавливаются без слепого повтора эффектов | В работе: intents, ownership и восстановление tool batch проверены; lifecycle шагов и operator workflow ещё нужны | Ожидает |
+| F08 | Отмена/падение шага восстанавливаются без слепого повтора эффектов | В работе: claim/link recovery, policy-aware resume и park/release реализованы; live cancel/TTL и operator reconciliation ещё нужны | Ожидает |
 | F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | Ожидает | Ожидает |
 | F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | В работе: intent/journal boundary проверен; полный перечень путей и reconciliation не закрыты | Ожидает |
 | F11 | Один resume на turn; live registry и atomic ownership | Исправлено и проверено локально | Нужен согласованный rollout без старых исполнителей |
@@ -400,3 +400,63 @@ KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python -m pytest test
    business keys. Этот риск остаётся частью F08/F10/V03.
 4. Инвентаризация прямых/custom writers вне engine, distinct logical operation ids,
    provider idempotency, F09 transport readiness/outbox и live rollout verification.
+
+### F08 — plan-owned recovery and park/release lifecycle
+
+- Conversation ownership is acquired before claiming a step and lent to the
+  runtime as a task-bound capability. A live or lock-waiting executor cannot be
+  mistaken for an abandoned step. Cancelled tasks propagate cancellation and
+  leave recovery to a later lock owner.
+- Migration v005 correlates a plan execution with turn creation across the two
+  SQLite databases. The unique caller key survives pre-turn retries, including
+  a delayed commit. Missing reverse links are repaired; legacy unlinked work
+  requires review. Caller-owned identities are protected from generic retention.
+- Generic startup recovery leaves caller-owned/plan turns to the poller. Report
+  mode exposes an interrupted step for explicit same-turn continuation; resume
+  mode uses the existing intent/journal protocol. Recovery and fresh execution
+  share the cycle budget; a plan cannot take two execution slots in that cycle.
+- Park is a persisted request while execution is live. Completion commits the
+  result and the waiting transition atomically, preserving the prior turn id.
+  Stale polling/condition results cannot reclassify or repark completed/released
+  work. Legacy linked waits survive approval/interruption. Corrupt conditions
+  require review. API/CLI report only actual successful releases.
+- Plans UI exposes current/last turn, repark intent and explicit continuation of
+  an interrupted turn. It never turns a failed resume response into a success.
+
+Changed files:
+
+- `kronos/plans.py`, `kronos/cron/plans.py`: claim ownership, repair, policy, cycle
+  quotas and race-safe waiting lifecycle.
+- `kronos/graph.py`, `kronos/session.py`,
+  `kronos/migrations/v005_plan_execution.py`: borrowed ownership, durable caller
+  identity, generic-recovery separation and retention guard.
+- `dashboard/api/plans.py`, `kronos/cli.py`,
+  `dashboard-ui/src/pages/PlansPage.tsx`: truthful releases and visible same-turn
+  recovery, without new dependencies or configuration changes.
+- `tests/test_plan_execution_recovery.py`, `tests/test_plan_poller.py`,
+  `tests/test_dashboard_plans.py`: lifecycle, concurrency, migration and UI/API
+  contract regressions using temporary databases and mock model/tools.
+- `tests/helpers/plan_crash.py`, `tests/test_plan_kill.py`: four real SIGKILL windows,
+  fresh-process recovery, one turn identity, repeat recovery and SQLite checks.
+- `docs/decisions/ADR-0010-plan-execution-recovery.md`, ADR index and this tracker:
+  architecture, alternatives, evidence and remaining scope.
+
+Still required for F08: live cancel/expiry fencing between model/tool boundaries,
+owner notifications, safe expiry/approval cleanup, operator effect reconciliation,
+and bounded archive/tombstone retention. A started external request cannot be
+promised undone by cancellation. F09 delivery outbox and F10 child/direct pipeline
+coverage remain open. Production has not received this code or its migrations.
+
+Verification on final code:
+
+- `KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python -m pytest -m 'not integration' -q --disable-warnings`
+  — **2212 passed, 53 deselected, 1 warning**, 28.36 s, exit 0.
+- `KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python -m pytest tests/test_plan_kill.py tests/test_durable_kill.py -q --disable-warnings`
+  — **14 passed**, 13.47 s, exit 0. The other 39 integration tests (external services)
+  were not run. No production APIs, Telegram or real model providers were invoked.
+- Ruff for Python, separate F821 and `git diff --check`: clean. TypeScript build
+  checks and PlansPage ESLint passed in a temporary copy with the existing main
+  node_modules; no install, dependency or configuration change.
+- Local Python is 3.13; production Python 3.12 has not been used for these tests.
+  Four process-loss cases and 28 unit/regression cases were added versus the
+  previous committed baseline. These do not close full end-to-end acceptance.

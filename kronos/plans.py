@@ -26,9 +26,13 @@ Two decisions worth knowing:
 import json
 import logging
 import time
+import uuid
 
+from kronos.config import settings
 from kronos.db import get_db
 from kronos.migrations.v002_plan_turns import migrate as migrate_plan_turns
+from kronos.migrations.v005_plan_execution import migrate_plans as migrate_execution
+from kronos.turn_ownership import TurnOwnership
 
 log = logging.getLogger("kronos.plans")
 
@@ -43,6 +47,7 @@ STEP_WAITING = "waiting"
 STEP_RUNNING = "running"
 STEP_APPROVAL = "awaiting_approval"
 STEP_REVIEW = "needs_review"
+STEP_INTERRUPTED = "interrupted"
 STEP_DONE = "done"
 STEP_FAILED = "failed"
 # Terminal for dependency purposes: a dependent step may proceed once every step
@@ -104,6 +109,7 @@ def _init_schema(conn) -> None:
     )
 
     migrate_plan_turns(conn)
+    migrate_execution(conn)
 
 
 def _db():
@@ -132,7 +138,7 @@ def wait_spec(step: dict) -> dict:
     try:
         spec = json.loads(raw)
     except json.JSONDecodeError:
-        log.warning("Step %s has an unreadable condition: %r", step.get("id"), raw)
+        log.warning("Step %s has an unreadable condition", step.get("id"))
         return {}
     return spec if isinstance(spec, dict) else {}
 
@@ -274,11 +280,11 @@ def open_steps(agent_name: str) -> list[dict]:
         WHERE p.agent_name = ? AND p.state = ? AND s.state IN (?, ?)
           AND NOT EXISTS (
               SELECT 1 FROM plan_steps other WHERE other.plan_id = p.id
-                AND other.state IN (?, ?, ?)
+                AND (other.state IN (?, ?, ?, ?) OR (other.state = 'waiting' AND other.turn_id != ''))
           )
         ORDER BY s.wake_at, s.seq
         """,
-        (agent_name, PLAN_ACTIVE, STEP_PENDING, STEP_WAITING, STEP_RUNNING, STEP_APPROVAL, STEP_REVIEW),
+        (agent_name, PLAN_ACTIVE, STEP_PENDING, STEP_WAITING, STEP_RUNNING, STEP_APPROVAL, STEP_REVIEW, STEP_INTERRUPTED),
     )
     return [dict(row) for row in rows]
 
@@ -307,22 +313,33 @@ def _dependencies_settled(step: dict) -> bool:
 # --- moving a step along ------------------------------------------------------
 
 
-def claim_step(step_id: int, now: float | None = None) -> bool:
+def claim_step(
+    step_id: int, now: float | None = None, *, ownership: TurnOwnership | None = None,
+) -> bool:
     """Claim a ready step once; never start another turn over a paused plan."""
     stamp = _now(now)
+    execution_key = ""
+    if ownership is not None:
+        step = get_step(step_id)
+        if not step:
+            return False
+        ownership.assert_held(settings.db_path, f"plan:{step['plan_id']}")
+        execution_key = f"plan:{step['plan_id']}:step:{step_id}:claim:{uuid.uuid4()}"
     cursor = _db().write(
         """
         UPDATE plan_steps SET state = ?, attempts = attempts + 1,
-            turn_id = '', approval_id = '', notified_approval_id = '', updated_at = ?
+            turn_id = '', approval_id = '', notified_approval_id = '',
+            execution_key = CASE WHEN execution_key = '' THEN ? ELSE execution_key END, updated_at = ?
         WHERE id = ? AND state = ? AND wake_at <= ?
           AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at > ?)
           AND NOT EXISTS (
               SELECT 1 FROM plan_steps other WHERE other.plan_id = plan_steps.plan_id
-              AND other.state IN (?, ?, ?)
+              AND (other.state IN (?, ?, ?, ?) OR (other.state = 'waiting' AND other.turn_id != ''))
           )
         """,
         (
             STEP_RUNNING,
+            execution_key,
             stamp,
             step_id,
             STEP_PENDING,
@@ -332,33 +349,34 @@ def claim_step(step_id: int, now: float | None = None) -> bool:
             STEP_RUNNING,
             STEP_APPROVAL,
             STEP_REVIEW,
+            STEP_INTERRUPTED,
         ),
     )
     return cursor.rowcount == 1
 
 
-def link_turn(step_id: int, turn_id: str) -> None:
+def link_turn(step_id: int, turn_id: str, *, execution_key: str = "") -> None:
     """Persist the correlation before model calls; fail closed if claim was lost."""
     cursor = _db().write(
         """UPDATE plan_steps SET turn_id = ?, updated_at = ?
-           WHERE id = ? AND state = ? AND turn_id = ''
+           WHERE id = ? AND state = ? AND turn_id = '' AND execution_key = ?
              AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at > ?)""",
-        (turn_id, _now(), step_id, STEP_RUNNING, PLAN_ACTIVE, _now()),
+        (turn_id, _now(), step_id, STEP_RUNNING, execution_key, PLAN_ACTIVE, _now()),
     )
     if cursor.rowcount != 1:
         raise PlanError("plan step lost its execution claim")
 
 
-def steps_with_turn(agent_name: str, *, limit: int = 20) -> list[dict]:
-    """Linked unfinished steps, oldest reconciliation first (bounded and fair)."""
+def steps_to_reconcile(agent_name: str, *, limit: int = 20) -> list[dict]:
+    """Include claim/link crash windows; oldest reconciliation first, bounded."""
     return [
         dict(row)
         for row in _db().read(
             """SELECT s.* FROM plan_steps s JOIN plans p ON p.id = s.plan_id
-           WHERE p.agent_name = ? AND p.state = ? AND s.turn_id != ''
-             AND s.state IN (?, ?, ?)
+           WHERE p.agent_name = ? AND p.state = ?
+             AND (s.state IN (?, ?, ?) OR (s.state = ? AND s.turn_id != ''))
            ORDER BY s.updated_at, s.id LIMIT ?""",
-            (agent_name, PLAN_ACTIVE, STEP_RUNNING, STEP_APPROVAL, STEP_WAITING, limit),
+            (agent_name, PLAN_ACTIVE, STEP_RUNNING, STEP_APPROVAL, STEP_INTERRUPTED, STEP_WAITING, limit),
         )
     ]
 
@@ -369,8 +387,8 @@ def plan_for_turn(turn_id: str, agent_name: str) -> dict:
         _db().read_one(
             """SELECT p.* FROM plans p JOIN plan_steps s ON p.id = s.plan_id
            WHERE s.turn_id = ? AND p.agent_name = ? AND p.state = ?
-             AND p.expires_at > ? AND s.state IN (?, ?, ?)""",
-            (turn_id, agent_name, PLAN_ACTIVE, _now(), STEP_RUNNING, STEP_APPROVAL, STEP_WAITING),
+             AND p.expires_at > ? AND s.state IN (?, ?, ?, ?)""",
+            (turn_id, agent_name, PLAN_ACTIVE, _now(), STEP_RUNNING, STEP_APPROVAL, STEP_WAITING, STEP_INTERRUPTED),
         )
     )
 
@@ -384,11 +402,12 @@ def update_linked_step(
     approval_id: str = "",
 ) -> bool:
     """Compare-and-set a linked step; cancelled plans cannot be resurrected."""
-    if state not in {STEP_RUNNING, STEP_APPROVAL, STEP_DONE, STEP_FAILED, STEP_REVIEW}:
+    if state not in {STEP_RUNNING, STEP_APPROVAL, STEP_DONE, STEP_FAILED, STEP_REVIEW, STEP_INTERRUPTED}:
         raise ValueError("invalid linked step state")
     cursor = _db().write(
-        """UPDATE plan_steps SET state = ?, result = ?, approval_id = ?, updated_at = ?
-           WHERE id = ? AND turn_id = ? AND state IN (?, ?, ?)
+        """UPDATE plan_steps SET state = ?, result = ?, approval_id = ?, updated_at = ?,
+               repark_requested = CASE WHEN state = 'waiting' AND turn_id != '' THEN 1 ELSE repark_requested END
+           WHERE id = ? AND turn_id = ? AND state IN (?, ?, ?, ?)
              AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at > ?)""",
         (
             state,
@@ -400,6 +419,7 @@ def update_linked_step(
             STEP_RUNNING,
             STEP_APPROVAL,
             STEP_WAITING,
+            STEP_INTERRUPTED,
             PLAN_ACTIVE,
             _now(),
         ),
@@ -463,50 +483,106 @@ def fail_step(step_id: int, error: str, now: float | None = None) -> bool:
 
 
 def park_step(step_id: int, wait: dict, *, wake_at: float = 0.0, now: float | None = None) -> None:
-    """Put a step back to waiting on a condition."""
+    """Keep live execution claimed until its completed outcome commits the park."""
     stamp = _now(now)
+    if not wait:
+        raise PlanError("parking requires a nonempty condition")
+    cursor = _db().write(
+        """UPDATE plan_steps
+           SET state = CASE WHEN turn_id != '' THEN state ELSE ? END,
+               repark_requested = CASE WHEN turn_id != '' THEN 1 ELSE 0 END,
+               wait_json = ?, wake_at = ?, parked_at = ?, updated_at = ?
+           WHERE id = ? AND state IN (?, ?, ?, ?)
+             AND (state IN ('pending', 'waiting') OR turn_id != '')
+             AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at > ?)""",
+        (STEP_WAITING, json.dumps(wait, ensure_ascii=False), wake_at, stamp, stamp,
+         step_id, STEP_PENDING, STEP_WAITING, STEP_RUNNING, STEP_APPROVAL, PLAN_ACTIVE, stamp),
+    )
+    if cursor.rowcount != 1:
+        raise PlanError("cannot park a stopped or unresolved step")
+
+
+def complete_step_turn(step_id: int, turn_id: str, result: str) -> bool:
+    """Commit the result and any concurrent park request in the same statement."""
+    park = "repark_requested = 1 OR state = 'waiting'"
+    cursor = _db().write(
+        f"""UPDATE plan_steps SET
+               state = CASE WHEN {park} THEN 'waiting' ELSE 'done' END,
+               result = ?, last_turn_id = CASE WHEN {park} THEN turn_id ELSE last_turn_id END,
+               turn_id = CASE WHEN {park} THEN '' ELSE turn_id END,
+               execution_key = CASE WHEN {park} THEN '' ELSE execution_key END,
+               approval_id = '', notified_approval_id = '', repark_requested = 0, updated_at = ?
+           WHERE id = ? AND turn_id = ? AND turn_id != '' AND state IN (?, ?, ?, ?)
+             AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at > ?)""",
+        (result, _now(), step_id, turn_id, STEP_RUNNING, STEP_APPROVAL,
+         STEP_WAITING, STEP_INTERRUPTED, PLAN_ACTIVE, _now()),
+    )
+    return cursor.rowcount == 1
+
+
+def retry_unstarted_step(step: dict, *, ownership: TurnOwnership) -> bool:
+    """Back off before turn creation, retaining the key against a late commit."""
+    ownership.assert_held(settings.db_path, f"plan:{step['plan_id']}")
+    if not step.get("execution_key") or step.get("turn_id"):
+        raise PlanError("unstarted retry requires a keyed, unlinked claim")
+    failed = step["attempts"] >= MAX_STEP_ATTEMPTS
+    stamp = _now()
+    cursor = _db().write(
+        """UPDATE plan_steps SET state = ?, result = ?, wake_at = ?, updated_at = ?
+           WHERE id = ? AND state = ? AND turn_id = '' AND execution_key = ?
+             AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at > ?)""",
+        (STEP_FAILED if failed else STEP_PENDING, "interrupted before turn creation",
+         stamp + 60, stamp, step["id"], STEP_RUNNING, step["execution_key"], PLAN_ACTIVE, stamp),
+    )
+    return cursor.rowcount == 1
+
+
+def note_reconciled(step: dict) -> None:
+    """Rotate busy/error candidates without changing their execution authority."""
     _db().write(
-        """
-        UPDATE plan_steps
-        SET state = ?, wait_json = ?, wake_at = ?, parked_at = ?, updated_at = ?
-        WHERE id = ?
-        """,
-        (STEP_WAITING, json.dumps(wait, ensure_ascii=False), wake_at, stamp, stamp, step_id),
+        """UPDATE plan_steps SET updated_at = ?
+           WHERE id = ? AND turn_id = ? AND execution_key = ?""",
+        (_now(), step["id"], step["turn_id"], step["execution_key"]),
+    )
+
+
+def note_turn_resuming(turn_id: str, agent_name: str) -> None:
+    """Expose a manually resumed interrupted step as running in the dashboard."""
+    _db().write(
+        """UPDATE plan_steps SET state = ?, updated_at = ? WHERE turn_id = ? AND state = ?
+           AND plan_id IN (SELECT id FROM plans WHERE agent_name = ? AND state = ? AND expires_at > ?)""",
+        (STEP_RUNNING, _now(), turn_id, STEP_INTERRUPTED, agent_name, PLAN_ACTIVE, _now()),
     )
 
 
 def note_check(step_id: int, next_check_at: float, now: float | None = None) -> bool:
-    """A condition was evaluated and had not fired. Returns whether to give up.
-
-    Counting checks bounds a condition that can never fire — a page that stopped
-    existing, a threshold nothing will reach.
-    """
+    """Record a negative observation only while this unlinked step still waits."""
     stamp = _now(now)
-    step = get_step(step_id)
-    if not step:
-        raise PlanError(f"no step #{step_id}")
-    checks = step["checks"] + 1
-    if checks >= MAX_CONDITION_CHECKS:
-        _db().write(
-            "UPDATE plan_steps SET state = ?, checks = ?, result = ?, updated_at = ? WHERE id = ?",
-            (STEP_FAILED, checks, f"condition never fired in {checks} checks", stamp, step_id),
-        )
-        _touch_plan(step["plan_id"], stamp)
-        return True
-    _db().write(
-        "UPDATE plan_steps SET checks = ?, wake_at = ?, state = ?, updated_at = ? WHERE id = ?",
-        (checks, next_check_at, STEP_WAITING, stamp, step_id),
+    cursor = _db().write(
+        """UPDATE plan_steps SET checks = checks + 1, wake_at = ?, updated_at = ?,
+               state = CASE WHEN checks + 1 >= ? THEN ? ELSE ? END,
+               result = CASE WHEN checks + 1 >= ? THEN 'condition never fired; check limit reached' ELSE result END
+           WHERE id = ? AND state = ? AND turn_id = ''
+             AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at > ?)""",
+        (next_check_at, stamp, MAX_CONDITION_CHECKS, STEP_FAILED, STEP_WAITING,
+         MAX_CONDITION_CHECKS, step_id, STEP_WAITING, PLAN_ACTIVE, stamp),
     )
+    if cursor.rowcount and get_step(step_id)["state"] == STEP_FAILED:
+        _touch_plan(get_step(step_id)["plan_id"], stamp)
+        return True
     return False
 
 
-def release_step(step_id: int, now: float | None = None) -> None:
-    """The condition fired: the step is now merely pending."""
+def release_step(step_id: int, now: float | None = None) -> bool:
+    """Release only a genuinely parked step, never a live or cancelled execution."""
     stamp = _now(now)
-    _db().write(
-        "UPDATE plan_steps SET state = ?, wait_json = '', wake_at = 0, updated_at = ? WHERE id = ? AND state = ? AND turn_id = ''",
-        (STEP_PENDING, stamp, step_id, STEP_WAITING),
+    cursor = _db().write(
+        """UPDATE plan_steps SET state = ?, wait_json = '', wake_at = 0, updated_at = ?
+           WHERE id = ? AND state = ? AND turn_id = ''
+             AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at > ?)""",
+        (STEP_PENDING, stamp, step_id, STEP_WAITING, PLAN_ACTIVE, stamp),
     )
+    return cursor.rowcount == 1
 
 
 # --- moving a plan along ------------------------------------------------------
@@ -582,7 +658,7 @@ def expire_plan(plan_id: int, now: float | None = None) -> None:
     _db().write_many(
         [
             (
-                "UPDATE plan_steps SET state = ?, result = ?, updated_at = ? WHERE plan_id = ? AND state IN (?, ?, ?, ?, ?)",
+                "UPDATE plan_steps SET state = ?, result = ?, updated_at = ? WHERE plan_id = ? AND state IN (?, ?, ?, ?, ?, ?)",
                 (
                     STEP_FAILED,
                     "plan expired; execution may need reconciliation",
@@ -593,6 +669,7 @@ def expire_plan(plan_id: int, now: float | None = None) -> None:
                     STEP_RUNNING,
                     STEP_APPROVAL,
                     STEP_REVIEW,
+                    STEP_INTERRUPTED,
                 ),
             ),
             ("UPDATE plans SET state = ?, updated_at = ? WHERE id = ?", (PLAN_FAILED, stamp, plan_id)),
