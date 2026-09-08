@@ -13,6 +13,7 @@ import os
 import signal
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -81,6 +82,47 @@ async def _finish_process_cleanup(task: asyncio.Task[None]) -> None:
         except asyncio.CancelledError:
             continue
     task.result()
+
+
+async def run_codex_command(make_args: Callable[[str], list[str]], *, timeout_seconds: float) -> str:
+    """Run a Codex command while owning its process tree and output file.
+
+    The argument builder receives a private output path. Cancellation during
+    spawn and repeated cancellation both retain ownership through cleanup.
+    Callers must keep any input files alive until this coroutine has unwound.
+    """
+    output_path = ""
+    spawn = None
+    communicate = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as output_file:
+            output_path = output_file.name
+        spawn = asyncio.create_task(
+            asyncio.create_subprocess_exec(
+                *make_args(output_path),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=os.name == "posix",
+            )
+        )
+        proc = await asyncio.shield(spawn)
+        communicate = asyncio.create_task(proc.communicate())
+        stdout, stderr = await asyncio.wait_for(asyncio.shield(communicate), timeout=timeout_seconds)
+        return _read_codex_result(
+            proc.returncode,
+            stdout.decode("utf-8", errors="replace"),
+            stderr.decode("utf-8", errors="replace"),
+            output_path,
+        )
+    except BaseException:
+        if spawn is not None:
+            cleanup = asyncio.create_task(_stop_async_process(spawn, communicate))
+            await _finish_process_cleanup(cleanup)
+        raise
+    finally:
+        if output_path and os.path.exists(output_path):
+            os.unlink(output_path)
 
 
 class ChatCodexCLI(BaseChatModel):
@@ -170,42 +212,9 @@ class ChatCodexCLI(BaseChatModel):
                 os.unlink(output_path)
 
     async def _run_async(self, prompt: str) -> str:
-        output_path = ""
-        spawn = None
-        communicate = None
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as output_file:
-                output_path = output_file.name
-            spawn = asyncio.create_task(
-                asyncio.create_subprocess_exec(
-                    *self._args(prompt, output_path),
-                    stdin=asyncio.subprocess.DEVNULL,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    start_new_session=os.name == "posix",
-                )
-            )
-            # Cancellation during launch must not lose the process handle.
-            proc = await asyncio.shield(spawn)
-            communicate = asyncio.create_task(proc.communicate())
-            stdout, stderr = await asyncio.wait_for(
-                asyncio.shield(communicate),
-                timeout=self.timeout_seconds,
-            )
-            return _read_codex_result(
-                proc.returncode,
-                stdout.decode("utf-8", errors="replace"),
-                stderr.decode("utf-8", errors="replace"),
-                output_path,
-            )
-        except BaseException:
-            if spawn is not None:
-                cleanup = asyncio.create_task(_stop_async_process(spawn, communicate))
-                await _finish_process_cleanup(cleanup)
-            raise
-        finally:
-            if output_path and os.path.exists(output_path):
-                os.unlink(output_path)
+        return await run_codex_command(
+            lambda output_path: self._args(prompt, output_path), timeout_seconds=self.timeout_seconds
+        )
 
     def _args(self, prompt: str, output_path: str) -> list[str]:
         args = [

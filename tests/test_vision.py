@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import sys
 from pathlib import Path
@@ -86,7 +87,7 @@ async def test_analyze_image_bytes_uses_codex_cli_without_api_key(monkeypatch):
     monkeypatch.setattr(settings, "kaos_vision_model", "gpt-5.5")
     monkeypatch.setattr(settings, "openai_api_key", "")
     monkeypatch.setattr(vision.shutil, "which", lambda command: f"/usr/local/bin/{command}")
-    monkeypatch.setattr(vision.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
     result = await analyze_image_bytes(b"fake-image", mime_type="image/jpeg", context="OCR")
 

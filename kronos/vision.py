@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import os
 import shutil
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from kronos.config import settings
+from kronos.llm_codex import run_codex_command
 
 SUPPORTED_IMAGE_MIME_TYPES = {
     "image/jpeg",
@@ -144,55 +143,38 @@ async def _analyze_with_codex_cli(
     }.get(mime_type, ".img")
 
     image_path = None
-    output_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as image_file:
             image_file.write(image_bytes)
             image_path = image_file.name
-        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as output_file:
-            output_path = output_file.name
 
-        args = [
-            command,
-            "exec",
-            "--ephemeral",
-            "--skip-git-repo-check",
-            "--sandbox",
-            "read-only",
-            "--output-last-message",
-            output_path,
-            "--images",
-            image_path,
-        ]
-        if settings.kaos_vision_model:
-            args.extend(["-m", settings.kaos_vision_model])
-        args.append(instruction)
+        def make_args(output_path: str) -> list[str]:
+            args = [
+                command,
+                "exec",
+                "--ephemeral",
+                "--skip-git-repo-check",
+                "--sandbox",
+                "read-only",
+                "--output-last-message",
+                output_path,
+                "--images",
+                image_path,
+            ]
+            if settings.kaos_vision_model:
+                args.extend(["-m", settings.kaos_vision_model])
+            args.append(instruction)
+            return args
 
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(),
-            timeout=settings.kaos_vision_timeout_seconds,
-        )
-        if proc.returncode != 0:
-            err = stderr.decode("utf-8", errors="replace").strip()
-            raise RuntimeError(f"Codex CLI vision failed ({proc.returncode}): {err[:500]}")
-
-        text = Path(output_path).read_text(encoding="utf-8").strip()
-        if not text:
-            text = stdout.decode("utf-8", errors="replace").strip()
+        text = await run_codex_command(make_args, timeout_seconds=settings.kaos_vision_timeout_seconds)
         return VisionResult(
             text=text,
             model=settings.kaos_vision_model or "codex-cli-default",
             mime_type=mime_type,
         )
     finally:
-        for path in (image_path, output_path):
-            if path and os.path.exists(path):
-                os.unlink(path)
+        if image_path and os.path.exists(image_path):
+            os.unlink(image_path)
 
 
 def _build_prompt(*, prompt: str, context: str) -> str:

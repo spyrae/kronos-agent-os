@@ -33,7 +33,7 @@
 | F13 | Честный scoped reset по всем слоям, включая background writers | Ожидает | Ожидает |
 | F14 | Desired/effective runtime settings совпадают или restart явно указан | Ожидает | Ожидает |
 | F15 | Model/memory I/O не блокирует event loop; responsiveness test | Ожидает | Ожидает |
-| F16 | Timeout/cancel Codex CLI завершает процесс и потомков, очищает ресурсы | Основной llm_codex исправлен локально; при инвентаризации F12 найден отдельный неисправленный Vision subprocess path | Ожидает rollout и исправления Vision |
+| F16 | Timeout/cancel Codex CLI завершает процесс и потомков, очищает ресурсы | Основной llm_codex и отдельный Vision path используют общий проверенный process cleanup | Ожидает Linux/live Codex-приёмки и rollout |
 | F17 | Необязательный Dashboard без доступного пароля не выключает bridge/cron; crash возвращает failure | Исправлено локально: explicit disabled outcome и проверенный service supervision | Ожидает rollout; текущие Dashboard работают |
 
 ## Production-аудит
@@ -810,3 +810,32 @@ crash suite — как выше. Логи: `/tmp/kaos-budget-full-final.txt`,
 `process_signals=[]`, `waited=False`. Это доказывает пропущенный cleanup path,
 не утверждает наличие конкретного живого orphan в production. Основной
 `llm_codex`-фикс не закрывает эту отдельную реализацию.
+
+### F16 — дополнение: Vision process lifecycle
+
+- Отдельный Vision subprocess path переведён на `run_codex_command` — извлечённую
+  без изменения аргументов общую async-реализацию из `llm_codex`. Helper держит
+  spawn/communication tasks, isolated process group и output file. Vision держит
+  image file до окончания cleanup, в том числе при повторной отмене и отмене
+  во время запуска. Empty response теперь не считается успешным OCR.
+- Восемь новых тестов используют настоящие локальные Python subprocesses вместо
+  Codex: timeout, уже завершившийся leader с живым child, повторная отмена,
+  отмена до получения process handle, missing executable, nonzero/empty/success
+  и удаление обоих временных файлов. Посторонний test process остаётся жив.
+- **2378 passed, 66 integration deselected, 1 warning**, 39.27 sec;
+  **27 crash tests passed**, 29.10 sec; focused Codex/Vision — **25 passed**.
+  Ruff/F821/diff-check — PASS. 39 внешних integration cases, настоящие Codex/API
+  и production не запускались. Конфигурация, зависимости и UI не менялись.
+
+Файлы: `kronos/llm_codex.py`, `kronos/vision.py`, `tests/test_vision.py`,
+`tests/test_vision_cleanup.py`, ADR-0016, индекс ADR и этот реестр.
+Проверить: `KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python
+-m pytest tests/test_vision.py tests/test_vision_cleanup.py tests/test_llm_codex.py
+tests/test_llm_codex_cleanup.py -q`; полный и crash прогоны — как выше.
+Логи: `/tmp/kaos-vision-cleanup-full.txt`, `/tmp/kaos-vision-cleanup-kill.txt`,
+`/tmp/kaos-vision-cleanup-focused.txt`.
+
+F16 закрыт **локально для этих двух реализаций**, не в production. Граница —
+owned POSIX process group, не произвольный escaped daemon/новый OS sandbox.
+Linux/live Codex приёмка остаётся обязательной. Budget admission Vision — F12,
+этот cleanup-фикс его не подменяет.
