@@ -5,7 +5,20 @@ import os
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_ENV_FILE = os.environ.get("KAOS_ENV_FILE") or os.environ.get("KRONOS_ENV_FILE") or ".env"
+
+def _select_env_file() -> str:
+    """Keep each systemd agent isolated from the base agent's dotenv file."""
+    explicit = os.environ.get("KAOS_ENV_FILE") or os.environ.get("KRONOS_ENV_FILE")
+    if explicit:
+        return explicit
+
+    agent_name = os.environ.get("AGENT_NAME", "").strip()
+    if agent_name and agent_name != "kronos":
+        return f".env.{agent_name}"
+    return ".env"
+
+
+_ENV_FILE = _select_env_file()
 load_dotenv(_ENV_FILE, override=False)
 
 
