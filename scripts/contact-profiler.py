@@ -150,30 +150,20 @@ def warn_deprecated_workspace_env() -> None:
 
 
 def ask_deepseek(prompt: str, timeout: int = DEEPSEEK_TIMEOUT) -> str:
-    """Call DeepSeek chat completions API. Stdlib only (urllib)."""
+    """Call the script model with the shared runtime budget and accounting."""
     if not DEEPSEEK_API_KEY:
         raise RuntimeError("DEEPSEEK_API_KEY is not set")
 
-    payload = json.dumps(
-        {
-            "model": DEEPSEEK_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 4000,
-        }
-    ).encode("utf-8")
+    from kronos.security.direct_model import ask_script_model
 
-    req = urllib.request.Request(
-        f"{DEEPSEEK_BASE_URL}/chat/completions",
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        },
+    return ask_script_model(
+        prompt,
+        base_url=DEEPSEEK_BASE_URL,
+        api_key=DEEPSEEK_API_KEY,
+        model=DEEPSEEK_MODEL,
+        max_tokens=4000,
+        timeout=timeout,
     )
-
-    resp = urllib.request.urlopen(req, timeout=timeout)
-    data = json.loads(resp.read())
-    return data["choices"][0]["message"]["content"]
 
 
 # --- Bridge communication ---

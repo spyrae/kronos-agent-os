@@ -25,6 +25,8 @@ import urllib.request
 from dataclasses import dataclass
 from urllib.error import HTTPError
 
+from kronos.security.direct_model import admit_fixed_model, chat_response_text, record_direct_response
+from kronos.security.model_budget import ModelBudgetError
 from kronos.seo_geo.config import BRAND_PATTERNS, COMPETITOR_PATTERNS
 
 log = logging.getLogger("kronos.seo_geo.trackers.llm")
@@ -56,6 +58,10 @@ def _litellm_chat(model: str, question: str) -> tuple[str, str | None]:
     key = os.environ.get("LITELLM_ADMIN_KEY") or ""
     if not base or not key:
         return "", "LiteLLM not configured"
+    try:
+        admit_fixed_model("GEO measurement")
+    except ModelBudgetError as error:
+        return "", str(error)
 
     body = json.dumps(
         {
@@ -89,15 +95,14 @@ def _litellm_chat(model: str, question: str) -> tuple[str, str | None]:
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             data = json.loads(resp.read())
+            text = chat_response_text(data)
+            record_direct_response(model=model, response=data, input_content=question, output_content=text)
     except HTTPError as e:
         err = e.read()[:200].decode("utf-8", errors="replace")
         return "", f"HTTP {e.code}: {err}"
     except Exception as e:
         return "", str(e)
-    try:
-        return data["choices"][0]["message"]["content"], None
-    except (KeyError, IndexError) as e:
-        return "", f"unexpected response: {e}"
+    return (text, None) if text.strip() else ("", "unexpected empty model response")
 
 
 def _detect_mentions(text: str, site_id: str) -> tuple[bool, list[str], str | None]:

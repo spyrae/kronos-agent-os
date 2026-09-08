@@ -687,7 +687,7 @@ def _has_key(provider: str) -> bool:
 
 def _create_model(config: ProviderConfig) -> BaseChatModel | None:
     try:
-        callbacks = _runtime_callbacks()
+        callbacks = _runtime_callbacks(config)
         if config.adapter in {"openai", "openai-compatible", "openai_compatible"}:
             from langchain_openai import ChatOpenAI
 
@@ -734,12 +734,13 @@ def _create_model(config: ProviderConfig) -> BaseChatModel | None:
     return None
 
 
-def _runtime_callbacks() -> list[BaseCallbackHandler]:
+def _runtime_callbacks(config: ProviderConfig) -> list[BaseCallbackHandler]:
     """Callbacks attached to every model: always-on cost tracking, then the
     optional Langfuse observability handler when its keys are configured."""
     from kronos.security.cost_tracking import get_cost_callbacks
 
-    return get_cost_callbacks() + _observability_callbacks()
+    billing = "subscription" if config.adapter in {"codex-cli", "codex_cli"} else "api"
+    return get_cost_callbacks(model=config.model, billing=billing) + _observability_callbacks()
 
 
 def _observability_callbacks() -> list[BaseCallbackHandler]:

@@ -10,10 +10,12 @@ import logging
 import os
 import tempfile
 import time
+from contextlib import contextmanager
 
 import aiohttp
 from telethon.tl.types import DocumentAttributeAudio
 
+from kronos.audit import get_tool_audit_context, reset_tool_audit_context, set_tool_audit_context
 from kronos.config import settings
 from kronos.security.sanitize import wrap_untrusted
 from kronos.vision import analyze_image_bytes, is_supported_image_mime, is_vision_configured
@@ -26,6 +28,24 @@ GROQ_WHISPER_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_WHISPER_MODEL = "whisper-large-v3-turbo"
 
 _DOC_EXTENSIONS = (".pdf", ".docx", ".txt", ".md", ".markdown")
+
+
+@contextmanager
+def media_cost_scope(*, chat_id: int, topic_id: int | None, user_id: int):
+    """Attribute pre-agent model work to the same session as the final answer."""
+    context = get_tool_audit_context()
+    context.update(
+        agent=settings.agent_name,
+        session_id=str(chat_id),
+        thread_id=str(chat_id) + (f":{topic_id}" if topic_id else ""),
+        user_id=str(user_id),
+        source_kind="user_media",
+    )
+    token = set_tool_audit_context(**context)
+    try:
+        yield
+    finally:
+        reset_tool_audit_context(token)
 
 
 def _is_voice_message(event) -> bool:

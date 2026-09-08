@@ -11,6 +11,7 @@ from typing import Any
 
 from kronos.config import settings
 from kronos.llm_codex import run_codex_command
+from kronos.security.direct_model import admit_fixed_model, record_direct_response
 
 SUPPORTED_IMAGE_MIME_TYPES = {
     "image/jpeg",
@@ -98,23 +99,33 @@ async def _analyze_with_openai_api(
         raise RuntimeError("OpenAI API vision is not configured. Set OPENAI_API_KEY and KAOS_VISION_MODEL.")
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    admit_fixed_model("Vision")
     instruction = _build_prompt(prompt=prompt, context=context)
     data_url = _to_data_url(image_bytes, mime_type)
-    response = await client.responses.create(
-        model=settings.kaos_vision_model,
-        input=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": instruction},
-                    {"type": "input_image", "image_url": data_url, "detail": detail},
-                ],
-            }
-        ],
-    )
+    async with AsyncOpenAI(api_key=settings.openai_api_key) as client:
+        response = await client.responses.create(
+            model=settings.kaos_vision_model,
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": instruction},
+                        {"type": "input_image", "image_url": data_url, "detail": detail},
+                    ],
+                }
+            ],
+        )
+        text = _extract_response_text(response)
+        record_direct_response(
+            model=settings.kaos_vision_model,
+            response=response,
+            input_content=instruction,
+            output_content=text,
+        )
+    if not text.strip():
+        raise RuntimeError("Vision model returned no text")
     return VisionResult(
-        text=_extract_response_text(response),
+        text=text,
         model=settings.kaos_vision_model,
         mime_type=mime_type,
     )
@@ -133,6 +144,7 @@ async def _analyze_with_codex_cli(
             f"Codex CLI vision is not configured. Install/login Codex CLI or set KAOS_VISION_PROVIDER=openai-api. "
             f"Command not found: {command}"
         )
+    admit_fixed_model("Codex Vision", lite_compatible=True)
 
     instruction = _build_prompt(prompt=prompt, context=context)
     suffix = {
@@ -167,6 +179,13 @@ async def _analyze_with_codex_cli(
             return args
 
         text = await run_codex_command(make_args, timeout_seconds=settings.kaos_vision_timeout_seconds)
+        record_direct_response(
+            model=settings.kaos_vision_model or "codex-cli-default",
+            response=None,
+            input_content=instruction,
+            output_content=text,
+            billing="subscription",
+        )
         return VisionResult(
             text=text,
             model=settings.kaos_vision_model or "codex-cli-default",

@@ -49,6 +49,7 @@ from kronos.bridge_media import (
     _is_image_message,
     _is_voice_message,
     _transcribe_voice,
+    media_cost_scope,
 )
 from kronos.bridge_plan_approval import deliver_plan_approval, handle_plan_approval_command
 from kronos.bridge_topics import (
@@ -71,6 +72,7 @@ from kronos.dissent import review_before_send
 from kronos.graph import KronosAgent
 from kronos.observer.capture import CaptureDecision, classify_capture, record_capture
 from kronos.security.cost_guardian import get_guardian
+from kronos.security.model_budget import ModelBudgetError
 from kronos.security.output_validator import validate_output
 from kronos.swarm_store import get_swarm
 from kronos.tts import get_voice_mode, set_voice_mode, should_synthesize, synthesize
@@ -1282,7 +1284,8 @@ async def run_bridge(agent: KronosAgent) -> None:
                 with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
                     tmp_path = tmp.name
                 await event.message.download_media(file=tmp_path)
-                clean_text = await _transcribe_voice(tmp_path)
+                with media_cost_scope(chat_id=event.chat_id, topic_id=_extract_topic_id(event), user_id=user_id):
+                    clean_text = await _transcribe_voice(tmp_path)
                 os.unlink(tmp_path)
             except Exception as e:
                 log.error("[Voice] Failed: %s", e)
@@ -1294,7 +1297,15 @@ async def run_bridge(agent: KronosAgent) -> None:
         elif image:
             clean_text = _strip_mention(text) if not is_dm else text
             try:
-                image_analysis = await _analyze_image_message(event, clean_text)
+                with media_cost_scope(chat_id=event.chat_id, topic_id=_extract_topic_id(event), user_id=user_id):
+                    image_analysis = await _analyze_image_message(event, clean_text)
+            except ModelBudgetError as error:
+                await _send_to_chat(
+                    event.chat_id,
+                    f"Обработка изображения остановлена бюджетным контролем: {error}",
+                    topic_id=_extract_topic_id(event),
+                )
+                return
             except Exception as e:
                 log.error("[Vision] Failed: %s", e)
                 reply = (

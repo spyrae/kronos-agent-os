@@ -29,7 +29,7 @@
 | F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | В работе: transactional outbox планов и восстановленных session turns проверен; обычные ответы, остальные producers и operator repair ещё нужны | Ожидает |
 | F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | В работе: intent/journal boundary проверен; полный перечень путей и reconciliation не закрыты | Ожидает |
 | F11 | Один resume на turn; live registry и atomic ownership | Исправлено и проверено локально | Нужен согласованный rollout без старых исполнителей |
-| F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | В работе: call-time admission общей factory, fallback и supervisor downgrade проверены; прямые SDK, durable session ledger и reservations ещё нужны | Ожидает |
+| F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | В работе: factory/fallback/supervisor и прямые ASO/GEO/Vision/scripts проверены; Mem0, Whisper, durable session ledger, reservations и unknown outcomes ещё нужны | Ожидает |
 | F13 | Честный scoped reset по всем слоям, включая background writers | Ожидает | Ожидает |
 | F14 | Desired/effective runtime settings совпадают или restart явно указан | Ожидает | Ожидает |
 | F15 | Model/memory I/O не блокирует event loop; responsiveness test | Ожидает | Ожидает |
@@ -839,3 +839,62 @@ F16 закрыт **локально для этих двух реализаци�
 owned POSIX process group, не произвольный escaped daemon/новый OS sandbox.
 Linux/live Codex приёмка остаётся обязательной. Budget admission Vision — F12,
 этот cleanup-фикс его не подменяет.
+
+### F12 — этап 2: прямые ASO/GEO/Vision/scripts и тип оплаты
+
+- Общая admission/accounting boundary добавлена для прямых ASO HTTP calls,
+  GEO LiteLLM measurements, OpenAI Vision, Codex Vision и DeepSeek-вызовов
+  `recall.py`/`contact-profiler.py`. Повторная явная ASO fallback-попытка снова
+  проверяет бюджет; budget refusal не запускает следующий провайдер.
+- ASO/scripts при soft downgrade используют настроенную factory lite. GEO не
+  подменяет измеряемый engine: возвращает явную ошибку. API Vision при отсутствии
+  совместимой lite-модели также отказывает. Subscription Codex Vision допускает
+  soft downgrade, но не обходит hard admission refusal.
+- Usage из dict/SDK response записывается внутри context manager до закрытия
+  клиента. При отсутствии usage используются оценки, а не бесплатный API-вызов.
+  Regression на ошибку client close подтверждает, что полученный usage сохранён.
+  Пустой OpenAI Vision output учитывается, затем отклоняется как ошибка; два
+  отрицательных теста сначала воспроизвели прежний ложный success.
+- Billing identity привязана к adapter, не имени модели. API-вызов `gpt-5.5`
+  больше не получает нулевую цену только из-за совпадения имени с Codex. Factory
+  callbacks сохраняют известную модель как fallback при отсутствии metadata;
+  настоящая reported model имеет приоритет. Price overrides не менялись.
+- Media audit scope связывает pre-agent Vision с тем же chat/session budget,
+  который проверяет последующий agent turn, и восстанавливает прежний context.
+  В bridge budget refusal для изображения больше не маскируется под ошибку
+  конфигурации. Такой же scope вокруг voice подготовлен, но **сам Whisper пока
+  не проверяет бюджет и не пишет стоимость**.
+- **2409 passed, 66 integration deselected, 1 warning**, 43.54 sec;
+  **27 crash tests passed**, 31.84 sec; focused suite — **102 passed**.
+  31 новый direct-model test case относительно предыдущего baseline, включая
+  пять client-close failures. Ruff/F821/diff-check — PASS. 39 внешних integration
+  cases, реальные модели/Codex, production и UI не запускались/не менялись.
+
+Файлы: `kronos/security/direct_model.py`, `cost_tracking.py`, `kronos/llm.py`,
+`aso/llm.py`, `kronos/seo_geo/trackers/llm.py`, `kronos/vision.py`, `bridge.py`,
+`bridge_media.py`, два script-файла выше, `tests/test_direct_model_budget.py`,
+`tests/test_cost_tracking.py`, `tests/test_vision.py`, ADR-0017, индекс ADR и
+этот реестр. Конфигурация, зависимости и DB schema не менялись. Незакоммиченные
+пользовательские изменения в main f31f283 не затронуты.
+
+Проверить: `KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python
+-m pytest tests/test_direct_model_budget.py tests/test_model_budget.py
+tests/test_cost_tracking.py tests/test_vision.py tests/test_llm_providers.py
+tests/test_observer_capture.py -q`; полный набор `-m 'not integration'` и crash
+suite из четырёх `test_*_kill.py` — как выше. Логи:
+`/tmp/kaos-direct-budget-focused-final.txt`, `/tmp/kaos-direct-budget-full-final.txt`,
+`/tmp/kaos-direct-budget-kill-final.txt`; red probe — `/tmp/kaos-direct-budget-red.txt`.
+
+**F12 остаётся открытым.** Таблица этапа 1 фиксирует историческое состояние;
+актуальный остаток после этапа 2:
+
+| Поверхность / требование | Остаток и граница доказательства |
+|---|---|
+| Mem0 | Собственный LLM из `Memory.from_config` вне runtime factory; mem0 локально не установлен, совместимый adapter и реальная интеграционная приёмка ещё нужны |
+| Whisper voice | Прямой Groq HTTP в `bridge_media._transcribe_voice` остаётся без admission/accounting; voice audit scope не закрывает этот обход. Нужен учёт длительности, а не выдуманные text tokens |
+| Durable session scope | Tally пока in-memory; original-turn scope для resume/approval и межпроцессные durable totals ещё не реализованы |
+| Жёсткий денежный лимит | Нет атомарных reservations для конкурентных in-flight calls, полного учёта retries и crash/timeout/unknown outcomes с reconciliation |
+| Полнота и точность учёта | Recorder остаётся best-effort. Отсутствующий usage — оценка длины текста; image tokens достоверно так не вычисляются. Provider-specific prices/defaults не являются invoice или upper bound |
+| Приёмка и rollout | Новые пути проверены с fake transports и настоящим изолированным ledger; live E2E, Linux/Codex и controlled rollout ещё нужны. Main isolation/cron-rotation changes надо согласованно совместить с веткой перед rollout |
+
+Нельзя объявлять закрытым F12 или весь аудит по этим локальным тестам.

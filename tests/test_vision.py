@@ -31,6 +31,12 @@ async def test_analyze_image_bytes_sends_responses_image_input(monkeypatch):
             self.api_key = api_key
             self.responses = FakeResponses()
 
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
     monkeypatch.setattr(settings, "kaos_vision_provider", "openai-api")
     monkeypatch.setattr(settings, "kaos_vision_model", "gpt-5.5")
     monkeypatch.setattr(settings, "openai_api_key", "sk-test")
