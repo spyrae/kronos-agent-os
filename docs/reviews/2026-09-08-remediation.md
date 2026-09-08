@@ -34,7 +34,7 @@
 | F14 | Desired/effective runtime settings совпадают или restart явно указан | Ожидает | Ожидает |
 | F15 | Model/memory I/O не блокирует event loop; responsiveness test | Ожидает | Ожидает |
 | F16 | Timeout/cancel Codex CLI завершает процесс и потомков, очищает ресурсы | Исправлено и проверено локально | Ожидает rollout |
-| F17 | Необязательный Dashboard без доступного пароля не выключает bridge/cron; crash возвращает failure | Новый дефект подтверждён изолированным startup probe | В коде production; текущие Dashboard работают |
+| F17 | Необязательный Dashboard без доступного пароля не выключает bridge/cron; crash возвращает failure | Исправлено локально: explicit disabled outcome и проверенный service supervision | Ожидает rollout; текущие Dashboard работают |
 
 ## Production-аудит
 
@@ -720,3 +720,36 @@ retention и scoped reset очереди. Requested turns временно не 
 это сохранение доказательств, а не завершённая политика хранения. Sync SafeDB I/O
 остаётся в F15. F17 optional-dashboard startup — отдельный следующий фикс.
 Ни production-конфигурация, ни main с незакоммиченными изменениями не тронуты.
+
+### F17 — optional Dashboard не останавливает агента
+
+- Причина: no-password ветка `run_dashboard` возвращала управление, а
+  `FIRST_COMPLETED` считал это окончанием всей службы и выключал bridge/cron.
+  Без исключения `main` возвращал успех. Безопасный отказ открыть HTTP тем самым
+  превращался в незаметное завершение полезных сервисов.
+- `run_dashboard` теперь явно возвращает False только для disabled startup.
+  Application wrapper удерживает такую необязательную службу до отмены; он не
+  превращает произвольный возврат или ошибку активного Dashboard в disabled.
+  HTTP без пароля по-прежнему не открывается. Standalone CLI получает exit 1,
+  а не ложный успех или бесконечное ожидание без сервера.
+- Любая неожиданно завершившаяся/самоотменённая служба теперь даёт failure после
+  отмены и join остальных служб. Настоящее исключение сохраняется. Штатный сигнал
+  и чистое завершение одновременно остаются success; MCP context и signal
+  handlers освобождаются.
+- **2334 passed, 66 integration deselected, 1 warning**, 36.22 sec; **27 crash
+  tests passed**, 29.02 sec. Добавлены 20 unit cases: реальные main/run_dashboard
+  с fake transports/MCP, disabled startup, signal/caller cancel, return/error/
+  self-cancel каждой службы, standalone CLI и enabled server contract.
+  Ruff/F821 и diff-check — PASS. Внешние 39 integration cases и production не
+  запускались; в этом шаге UI не менялся, проверки предыдущего этапа применимы.
+
+Файлы: `dashboard/server.py`, `kronos/app.py`, `kronos/cli.py`,
+`tests/test_app_supervision.py`, ADR-0014, индекс ADR и этот реестр.
+Проверить: `KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python
+-m pytest tests/test_app_supervision.py tests/test_recovery_startup.py -q`, затем
+полная regression/crash suite выше. Логи: `/tmp/kaos-supervision-full.txt`,
+`/tmp/kaos-supervision-kill.txt`.
+
+**F17 закрыт только локально.** Автоматический restart ранее включённого Dashboard,
+degraded readiness и оповещение об отключённом интерфейсе — не часть этого фикса;
+PROD-08 остаётся открытым. Конфигурация, зависимости и systemd не менялись.

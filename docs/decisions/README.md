@@ -18,3 +18,4 @@ gets a new record and marks the previous one superseded.
 | 0011 | [Cooperative plan stop](ADR-0011-cooperative-plan-stop.md) | accepted | 2026-09-08 |
 | 0012 | [Transactional plan delivery](ADR-0012-transactional-plan-delivery.md) | accepted | 2026-09-08 |
 | 0013 | [Transactional recovery delivery](ADR-0013-transactional-recovery-delivery.md) | accepted | 2026-09-08 |
+| 0014 | [Optional dashboard lifecycle](ADR-0014-optional-dashboard-lifecycle.md) | accepted | 2026-09-08 |

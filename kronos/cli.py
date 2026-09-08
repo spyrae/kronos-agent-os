@@ -1206,7 +1206,9 @@ def run_dashboard_command() -> int:
     print(f"Starting KAOS dashboard on http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
     print("Press Ctrl+C to stop.")
     try:
-        asyncio.run(run_dashboard())
+        if asyncio.run(run_dashboard()) is False:
+            print("Dashboard did not start: no authentication password is available.")
+            return 1
     except KeyboardInterrupt:
         print("\nDashboard stopped.")
     return 0

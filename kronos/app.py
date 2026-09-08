@@ -105,6 +105,15 @@ async def _run_startup_recovery(agent: KronosAgent, max_attempts: int) -> None:
     await asyncio.Event().wait()
 
 
+async def _run_dashboard_service(scheduler: Scheduler, agent: KronosAgent) -> None:
+    """Keep an explicitly disabled accessory from stopping the whole agent."""
+    from dashboard.server import run_dashboard
+
+    started = await run_dashboard(scheduler=scheduler, agent=agent)
+    if started is False:
+        await asyncio.Event().wait()
+
+
 def _activate_policy_or_exit() -> None:
     """Load policy.yaml before any capability gate is read.
 
@@ -173,8 +182,6 @@ async def main():
         scheduler = Scheduler()
         setup_cron_jobs(scheduler)
 
-        # Start dashboard
-        from dashboard.server import run_dashboard
         from kronos.bridge import run_bridge
         from kronos.cron.delivery import run_delivery_worker
         from kronos.discord_bridge import run_discord
@@ -195,7 +202,7 @@ async def main():
             asyncio.create_task(run_bridge(agent), name="bridge"),
             asyncio.create_task(run_discord(agent), name="discord"),
             asyncio.create_task(scheduler.run(), name="scheduler"),
-            asyncio.create_task(run_dashboard(scheduler=scheduler, agent=agent), name="dashboard"),
+            asyncio.create_task(_run_dashboard_service(scheduler, agent), name="dashboard"),
             asyncio.create_task(run_delivery_worker(session_store), name="delivery"),
         ]
         if durable.resume_mode == "resume":
@@ -225,3 +232,8 @@ async def main():
                 exc = task.exception()
                 if exc is not None:
                     raise exc
+        if not stop_event.is_set():
+            for task in services:
+                if task in done:
+                    state = "cancelled" if task.cancelled() else "stopped"
+                    raise RuntimeError(f"Service {task.get_name()} {state} unexpectedly")
