@@ -29,11 +29,11 @@
 | F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | В работе: transactional outbox планов и восстановленных session turns проверен; обычные ответы, остальные producers и operator repair ещё нужны | Ожидает |
 | F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | В работе: intent/journal boundary проверен; полный перечень путей и reconciliation не закрыты | Ожидает |
 | F11 | Один resume на turn; live registry и atomic ownership | Исправлено и проверено локально | Нужен согласованный rollout без старых исполнителей |
-| F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | Ожидает | Ожидает |
+| F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | В работе: call-time admission общей factory, fallback и supervisor downgrade проверены; прямые SDK, durable session ledger и reservations ещё нужны | Ожидает |
 | F13 | Честный scoped reset по всем слоям, включая background writers | Ожидает | Ожидает |
 | F14 | Desired/effective runtime settings совпадают или restart явно указан | Ожидает | Ожидает |
 | F15 | Model/memory I/O не блокирует event loop; responsiveness test | Ожидает | Ожидает |
-| F16 | Timeout/cancel Codex CLI завершает процесс и потомков, очищает ресурсы | Исправлено и проверено локально | Ожидает rollout |
+| F16 | Timeout/cancel Codex CLI завершает процесс и потомков, очищает ресурсы | Основной llm_codex исправлен локально; при инвентаризации F12 найден отдельный неисправленный Vision subprocess path | Ожидает rollout и исправления Vision |
 | F17 | Необязательный Dashboard без доступного пароля не выключает bridge/cron; crash возвращает failure | Исправлено локально: explicit disabled outcome и проверенный service supervision | Ожидает rollout; текущие Dashboard работают |
 
 ## Production-аудит
@@ -753,3 +753,60 @@ retention и scoped reset очереди. Requested turns временно не 
 **F17 закрыт только локально.** Автоматический restart ранее включённого Dashboard,
 degraded readiness и оповещение об отключённом интерфейсе — не часть этого фикса;
 PROD-08 остаётся открытым. Конфигурация, зависимости и systemd не менялись.
+
+### F12 — этап 1: admission перед каждым factory-backed model call
+
+- Устранён Telegram-only guard: `get_model`, `get_orchestrator_model` и
+  `get_fallback_model` возвращают wrapper, проверяющий текущий расход перед
+  invoke/ainvoke. Кэшированный supervisor/specialist больше не обходит проверку.
+  Каждая явная fallback-попытка проверяется отдельно; budget refusal не считается
+  отказом провайдера и не запускает более дорогой fallback.
+- Lite выбирается во время вызова, а не только построения агента. ContextVar
+  переносит force_tier через supervisor/delegation, изолирует параллельные задачи
+  и не позволяет вложенному standard отменить внешний lite. Tool bindings и
+  options сохраняются. Строка `get_model("lite")` нормализуется в ModelTier.
+- Ошибка/повреждённое значение daily ledger не трактуется как нулевой расход.
+  NaN/Inf/отрицательные значения стоимости не принимаются callback recorder.
+  Writer и обе daily-read функции используют UTC, как обещано пользователю.
+  При отсутствии session_id и recorder, и admission используют thread_id.
+- Engine возвращает явный `budget_blocked`, не completed и не совет «попробуй
+  ещё раз» из generic model_error. Существующая execution cancellation boundary
+  сохраняется и для моделей, созданных до начала execution scope.
+- **2370 passed, 66 integration deselected, 1 warning**, 32.75 sec; **27 crash
+  tests passed**, 29.32 sec. 36 новых unit cases; focused suite — 78 passed.
+  Ruff/F821/diff-check — PASS. Внешние 39 integration cases не запускались.
+  UI не менялся; production, реальные API, зависимости и конфигурация не тронуты.
+
+Файлы: `kronos/security/model_budget.py`, `cost_guardian.py`, `cost_tracking.py`,
+`kronos/llm.py`, `graph.py`, `engine.py`, `swarm_store.py`,
+`tests/test_model_budget.py`, `tests/test_llm_providers.py`, ADR-0015, индекс ADR
+и этот реестр. Старые factory tests теперь проверяют adapter внутри budget proxy,
+а не требуют необёрнутый SDK instance. Защитные проверки не отключались.
+
+Проверить: `KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python
+-m pytest tests/test_model_budget.py tests/test_cost_tracking.py tests/test_cost_stats.py
+tests/test_llm_providers.py tests/test_cassettes_llm.py -q`; полная regression и
+crash suite — как выше. Логи: `/tmp/kaos-budget-full-final.txt`,
+`/tmp/kaos-budget-kill-final.txt`, `/tmp/kaos-budget-focused-final.txt`.
+
+**F12 не закрыт. Обязательное продолжение, выявленное по текущему коду:**
+
+| Поверхность / требование | Текущее доказательство и следующий шаг |
+|---|---|
+| Factory-backed graph/supervisor/specialists, cron, analytics, compaction, group routing | Все проходят общую factory; normal invoke/resume/ReAct/fallback и cached model проверены с fake providers. Live E2E всех callers ещё нет |
+| Vision | `kronos/vision.py`: прямой OpenAI Responses SDK и отдельный Codex subprocess; нет общего budget admission/accounting. Нельзя подменять vision произвольной текстовой lite-моделью |
+| Mem0 | `kronos/memory/store.py`: Memory.from_config создаёт собственный LLM вне factory. В локальном тестовом окружении mem0 не установлен; настоящая adapter-приёмка не выполнена |
+| ASO | `aso/llm.py`: собственная HTTP completion/fallback цепочка; требует общей admission/accounting boundary |
+| GEO measurement | `kronos/seo_geo/trackers/llm.py`: прямой LiteLLM HTTP. При downgrade нельзя незаметно заменить измеряемую модель и записать результат под прежним engine |
+| Отдельные scripts | `scripts/contact-profiler.py`, `scripts/recall.py`: прямые DeepSeek HTTP calls, не покрытые runtime factory |
+| Session budget | Текущий tally остаётся in-memory. Требуются durable totals и неизменяемая связь scope с исходным turn для resume/approval; fallback на thread_id не решает это полностью |
+| Жёсткий денежный лимит | Нужна атомарная межпроцессная reservation до dispatch, стоимость всех retries, unknown outcomes/crash и reconciliation. Preflight против уже записанного spend не ограничивает совокупность параллельных in-flight запросов |
+| Полнота учёта | Callback writes всё ещё best-effort; SDK-internal retries/неизвестный usage и актуальные provider-specific цены не приняты. Модельное имя само по себе не доказывает нулевую цену API |
+| История/производительность | Старые local-day buckets не переписывались. Нужны историческая сверка для non-UTC hosts и F15 для sync accounting reads |
+
+При этой инвентаризации дополнен **F16**: `_analyze_with_codex_cli` в Vision
+при timeout не создаёт owned process group и не вызывает terminate/kill/wait.
+Изолированный fake-process probe дал `new_session=False`, `timeout_raised=True`,
+`process_signals=[]`, `waited=False`. Это доказывает пропущенный cleanup path,
+не утверждает наличие конкретного живого orphan в production. Основной
+`llm_codex`-фикс не закрывает эту отдельную реализацию.

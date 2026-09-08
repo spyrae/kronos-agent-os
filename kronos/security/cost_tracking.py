@@ -160,9 +160,11 @@ def record_llm_cost(
     (falls back to ``settings.agent_name``), the session tally only fires when
     a ``session_id`` is present. Both writes are best-effort.
     """
+    if isinstance(cost_usd, bool) or not math.isfinite(cost_usd) or cost_usd < 0:
+        raise ValueError("cost must be finite and non-negative")
     context = get_tool_audit_context()
     agent = context.get("agent") or settings.agent_name
-    session_id = context.get("session_id", "")
+    session_id = context.get("session_id") or context.get("thread_id", "")
 
     try:
         from kronos.swarm_store import get_swarm

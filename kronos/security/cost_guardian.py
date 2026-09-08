@@ -14,6 +14,7 @@ allowance on unprompted opinions, which is the wrong thing to protect.
 """
 
 import logging
+import math
 from dataclasses import dataclass, field
 
 log = logging.getLogger("kronos.security.cost_guardian")
@@ -24,16 +25,18 @@ def _swarm_daily_cost() -> dict:
 
     The daily budget is a property of the whole swarm, not of one process, so
     it reads the shared ``swarm_costs`` ledger rather than a per-agent file.
-    Fails open (zeros) on any read error — a metrics glitch must not wedge an
-    agent by pretending the budget is blown.
+    Unknown accounting is not zero spend: callers must refuse new model work.
     """
     try:
         from kronos.swarm_store import get_swarm
 
-        return get_swarm().daily_cost()
+        daily = get_swarm().daily_cost()
+        value = daily["cost_usd"]
+        if isinstance(value, bool) or not math.isfinite(float(value)) or float(value) < 0:
+            raise ValueError("invalid daily cost")
+        return {**daily, "cost_usd": float(value)}
     except Exception as e:  # pragma: no cover - defensive
-        log.debug("Swarm daily-cost read failed, treating as $0: %s", e)
-        return {"cost_usd": 0, "requests": 0, "input_tokens": 0, "output_tokens": 0}
+        raise RuntimeError("Cost accounting unavailable; model request blocked") from e
 
 
 # Default limits (can be overridden via config)
@@ -79,9 +82,14 @@ class CostGuardian:
 
         Returns (allowed, reason).
         """
-        # Daily limit check
-        daily = _swarm_daily_cost()
-        daily_cost = daily.get("cost_usd", 0)
+        for limit in (self.daily_limit, self.session_limit):
+            if isinstance(limit, bool) or not math.isfinite(limit) or limit < 0:
+                return False, "Invalid cost limit; model request blocked"
+        try:
+            daily = _swarm_daily_cost()
+        except Exception:
+            return False, "Cost accounting unavailable; model request blocked"
+        daily_cost = float(daily["cost_usd"])
 
         if daily_cost >= self.daily_limit:
             msg = (
@@ -116,6 +124,8 @@ class CostGuardian:
 
     def record_cost(self, session_id: str, cost_usd: float) -> None:
         """Record a cost for a session."""
+        if isinstance(cost_usd, bool) or not math.isfinite(cost_usd) or cost_usd < 0:
+            raise ValueError("cost must be finite and non-negative")
         if session_id:
             self._session_costs[session_id] = self._session_costs.get(session_id, 0) + cost_usd
 

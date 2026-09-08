@@ -29,6 +29,7 @@ from kronos.config import settings
 from kronos.effect_state import DurableStateError, EffectClaim, EffectUncertainError
 from kronos.execution_control import check_execution
 from kronos.security.loop_detector import LoopDetector, LoopLevel, get_nudge_message
+from kronos.security.model_budget import ModelBudgetError
 from kronos.security.sanitize import wrap_untrusted
 from kronos.security.untrusted import (
     handle_injection,
@@ -907,6 +908,16 @@ async def react_loop(
                 response: AIMessage = await bound_model.ainvoke(call_messages)
             except DurableStateError:
                 raise
+            except ModelBudgetError as error:
+                error_msg = AIMessage(content=f"Вызов модели остановлен бюджетным контролем: {error}")
+                messages.append(error_msg)
+                await emit_message_delta([error_msg])
+                return AgentResult(
+                    messages=messages,
+                    content=error_msg.content,
+                    tool_calls_count=total_tool_calls,
+                    failure_reason="budget_blocked",
+                )
             except Exception as e:
                 log.error("LLM call failed (turn %d): %s", turn, e)
                 error_msg = AIMessage(content="Произошла ошибка при обработке. Попробуй ещё раз.")

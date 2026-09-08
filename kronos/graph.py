@@ -46,6 +46,7 @@ from kronos.memory.nodes import retrieve_memories, store_memories_background
 from kronos.outcomes import InvocationOutcome
 from kronos.persona import build_system_prompt
 from kronos.router import classify_tier
+from kronos.security.model_budget import model_budget_scope
 from kronos.security.shield import validate_input
 from kronos.session import SessionStore
 from kronos.skills.store import SkillStore
@@ -390,7 +391,7 @@ class KronosAgent:
     async def _run_guarded_model_loop(self, *, thread_id: str, turn_id: str | None, **kwargs) -> AgentResult:
         """Keep nested provider/tool calls inside the caller's revocable scope."""
         guard = self._execution_guard(thread_id, turn_id) if turn_id else None
-        with execution_scope(guard):
+        with execution_scope(guard), model_budget_scope(kwargs.get("force_tier")):
             check_execution()
             result = await self._run_model_loop(**kwargs)
             check_execution()

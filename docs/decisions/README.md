@@ -19,3 +19,4 @@ gets a new record and marks the previous one superseded.
 | 0012 | [Transactional plan delivery](ADR-0012-transactional-plan-delivery.md) | accepted | 2026-09-08 |
 | 0013 | [Transactional recovery delivery](ADR-0013-transactional-recovery-delivery.md) | accepted | 2026-09-08 |
 | 0014 | [Optional dashboard lifecycle](ADR-0014-optional-dashboard-lifecycle.md) | accepted | 2026-09-08 |
+| 0015 | [Model budget admission](ADR-0015-model-budget-admission.md) | accepted | 2026-09-08 |
