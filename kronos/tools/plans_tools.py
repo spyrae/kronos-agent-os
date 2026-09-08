@@ -72,6 +72,12 @@ def _parse_after(raw: str) -> tuple[list[int], str]:
 
 def _render_plan(plan: dict, *, with_steps: bool = True) -> str:
     lines = [f"План #{plan['id']} ({plan['state']}): {plan['goal']}"]
+    if plans.stop_reason(plan):
+        steps = plans.steps_of(plan["id"])
+        pending = sum(not step["stop_reconciled"] for step in steps)
+        review = sum(step["state"] == plans.STEP_REVIEW for step in steps)
+        lines.append(f"Остановка: сверка ещё не завершена у {pending} шагов; требуют проверки: {review}.")
+        lines.append("Уже выполненные операции не отменяются.")
     if plan.get("summary"):
         lines.append(f"Итог: {plan['summary']}")
     if not with_steps:
@@ -201,7 +207,9 @@ def plan_status(plan_id: int = 0) -> str:
 
 @tool
 def plan_cancel(plan_id: int, reason: str = "") -> str:
-    """Stop a plan. Its waiting steps are dropped and nothing else runs.
+    """Request a plan stop. New calls stop at execution boundaries.
+
+    Already dispatched work may finish; external operations are not rolled back.
 
     Args:
         plan_id: which plan.
@@ -209,8 +217,12 @@ def plan_cancel(plan_id: int, reason: str = "") -> str:
     """
     if not plans.cancel_plan(plan_id, settings.agent_name):
         return f"[ERROR] План #{plan_id} не найден или уже закрыт."
-    log.info("Plan #%s cancelled: %s", plan_id, reason or "no reason given")
-    return f"План #{plan_id} остановлен."
+    log.info("Plan #%s stop requested", plan_id)
+    return (
+        f"Запрошена остановка плана #{plan_id}. Новые действия прекращаются на границах вызовов; "
+        "уже начатые могут завершиться. Выполненные операции не отменяются. "
+        "Итог остановки и требующие сверки действия доступны в статусе плана."
+    )
 
 
 # Declaring a plan schedules future model calls and future page fetches, which is

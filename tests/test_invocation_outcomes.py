@@ -89,7 +89,7 @@ async def test_turn_link_is_persisted_before_model_and_failure_prevents_effects(
         return AgentResult(messages=[], content="done")
 
     agent._run_model_loop = AsyncMock(side_effect=run)
-    result = await agent.ainvoke_outcome("hello", "plan:1", on_turn_started=links.append)
+    result = await agent.ainvoke_outcome("hello", "thread:1", on_turn_started=links.append)
     assert links == [result.turn_id]
 
     def broken_link(turn_id):
@@ -97,7 +97,7 @@ async def test_turn_link_is_persisted_before_model_and_failure_prevents_effects(
         raise RuntimeError("storage unavailable")
 
     with pytest.raises(RuntimeError, match="storage unavailable"):
-        await agent.ainvoke_outcome("next", "plan:2", on_turn_started=broken_link)
+        await agent.ainvoke_outcome("next", "thread:2", on_turn_started=broken_link)
     assert agent._run_model_loop.await_count == 1
     assert (await agent.get_turn_outcome(links[1])).status == "failed"
 
@@ -160,8 +160,8 @@ async def test_concurrent_calls_return_their_own_approval_not_mutable_last_id(ag
 
     agent._run_model_loop = pause
     one, two = await asyncio.gather(
-        agent.ainvoke_outcome("first", "plan:1"),
-        agent.ainvoke_outcome("second", "plan:2"),
+        agent.ainvoke_outcome("first", "thread:1"),
+        agent.ainvoke_outcome("second", "thread:2"),
     )
     assert one.approval_id != two.approval_id
     assert one.turn_id != two.turn_id
@@ -174,7 +174,7 @@ async def test_concurrent_calls_return_their_own_approval_not_mutable_last_id(ag
 async def test_claimed_decision_is_not_terminal_while_continuation_runs(agent, monkeypatch):
     _tool(agent)
     _model(monkeypatch, [_request()])
-    paused = await agent.ainvoke_outcome("do it", "plan:1")
+    paused = await agent.ainvoke_outcome("do it", "thread:1")
     await agent._session_store.claim_pending_approval(approval_id=paused.approval_id, decision="rejected")
     assert (await agent.get_turn_outcome(paused.turn_id)).status == "running"
 
@@ -182,7 +182,7 @@ async def test_claimed_decision_is_not_terminal_while_continuation_runs(agent, m
 async def test_expired_approval_never_resumes_and_is_not_pruned(agent, monkeypatch):
     effects = _tool(agent)
     _model(monkeypatch, [_request()])
-    paused = await agent.ainvoke_outcome("do it", "plan:1")
+    paused = await agent.ainvoke_outcome("do it", "thread:1")
     with sqlite3.connect(agent._session_store.db_path) as db:
         db.execute("UPDATE pending_approvals SET requested_at = datetime('now', '-40 days')")
         db.execute("UPDATE active_turns SET started_at = datetime('now', '-40 days')")
@@ -195,7 +195,7 @@ async def test_expired_approval_never_resumes_and_is_not_pruned(agent, monkeypat
 
 async def test_model_error_is_failed_even_with_nonempty_response(agent, monkeypatch):
     _model(monkeypatch, [RuntimeError("provider offline")])
-    result = await agent.ainvoke_outcome("hello", "plan:1")
+    result = await agent.ainvoke_outcome("hello", "thread:1")
     assert result.content
     assert result.status == "failed"
     assert result.reason == "model_error"

@@ -39,6 +39,7 @@ from kronos.engine import (
     react_loop,
     tool_requires_approval,
 )
+from kronos.execution_control import ExecutionStoppedError, check_execution, execution_scope, run_sync_owned
 from kronos.llm import get_model
 from kronos.memory.context_engine import get_context_engine
 from kronos.memory.nodes import retrieve_memories, store_memories_background
@@ -376,6 +377,24 @@ class KronosAgent:
 
         return approval_scope
 
+    def _execution_guard(self, thread_id: str, turn_id: str) -> Callable[[], None] | None:
+        """Bind plan authority to its durable turn, not a mutable agent field."""
+        if not thread_id.startswith("plan:"):
+            return None
+        from kronos import plans
+
+        agent_name = settings.agent_name
+        return lambda: plans.assert_turn_active(thread_id, turn_id, agent_name)
+
+    async def _run_guarded_model_loop(self, *, thread_id: str, turn_id: str | None, **kwargs) -> AgentResult:
+        """Keep nested provider/tool calls inside the caller's revocable scope."""
+        guard = self._execution_guard(thread_id, turn_id) if turn_id else None
+        with execution_scope(guard):
+            check_execution()
+            result = await self._run_model_loop(**kwargs)
+            check_execution()
+            return result
+
     async def _run_model_loop(
         self,
         *,
@@ -501,13 +520,14 @@ class KronosAgent:
                         tool_call_id=tool_call_id,
                     )
                 else:
-                    tool_message = await execute_tool(
-                        tool,
-                        {"name": tool_name, "id": tool_call_id, "args": args},
-                        begin_external_effect=react_loop_kwargs["begin_external_effect"],
-                        finish_external_effect=react_loop_kwargs["finish_external_effect"],
-                        turn_id=turn_id,
-                    )
+                    with execution_scope(self._execution_guard(thread_id, turn_id)):
+                        tool_message = await execute_tool(
+                            tool,
+                            {"name": tool_name, "id": tool_call_id, "args": args},
+                            begin_external_effect=react_loop_kwargs["begin_external_effect"],
+                            finish_external_effect=react_loop_kwargs["finish_external_effect"],
+                            turn_id=turn_id,
+                        )
                     await self._session_store.save_tool_result(
                         turn_id=turn_id,
                         tool_call_id=tool_call_id,
@@ -525,6 +545,9 @@ class KronosAgent:
                 messages=[tool_message],
             )
             messages.append(tool_message)
+        except ExecutionStoppedError as error:
+            await self._session_store.fail_turn(turn_id, str(error))
+            raise
         except DurableStateError:
             await self._session_store.fail_turn(turn_id, "durable effect or journal failure; review required")
             raise
@@ -538,7 +561,9 @@ class KronosAgent:
         )
         try:
             try:
-                result = await self._run_model_loop(
+                result = await self._run_guarded_model_loop(
+                    thread_id=thread_id,
+                    turn_id=turn_id,
                     messages=messages,
                     source_message=str(pending.get("input_message", "")),
                     react_loop_kwargs=react_loop_kwargs,
@@ -564,7 +589,10 @@ class KronosAgent:
         return result.content
 
     async def resume_interrupted_turn(
-        self, turn: dict | str, *, max_attempts: int | None = None,
+        self,
+        turn: dict | str,
+        *,
+        max_attempts: int | None = None,
         execution_ownership: TurnOwnership | None = None,
     ) -> str | None:
         """Exclusively resume an abandoned turn using its durable identity.
@@ -588,6 +616,7 @@ class KronosAgent:
             from kronos.policy import get_policy
 
             max_attempts = get_policy().durable.max_resume_attempts
+
         async def resume_owned(ownership: TurnOwnership) -> str | None:
             ownership.assert_held(self._session_store.db_path, detail["thread_id"])
             claimed = await self._session_store.claim_turn_for_resume(
@@ -654,11 +683,16 @@ class KronosAgent:
             source_kind="durable_resume",
         )
         try:
-            result = await self._run_model_loop(
+            result = await self._run_guarded_model_loop(
+                thread_id=thread_id,
+                turn_id=turn_id,
                 messages=messages,
                 source_message=str(turn.get("input_message") or ""),
                 react_loop_kwargs=react_loop_kwargs,
             )
+        except ExecutionStoppedError as error:
+            await self._session_store.fail_turn(turn_id, str(error))
+            return None
         except Exception as e:
             log.error("Resume failed for turn %s: %s", turn_id, e)
             await self._session_store.fail_turn(turn_id, f"resume failed: {e}")
@@ -753,7 +787,10 @@ class KronosAgent:
 
         # Publish the exemption + approval channel so the re-run sub-agent
         # executes the approved call (and can pause anew for a different one).
-        durable = self._build_durable_react_loop_kwargs(turn_id=turn_id, thread_id=turn_id)
+        turn_detail = await self._session_store.get_turn_outcome(turn_id)
+        if not turn_detail.thread_id:
+            raise DurableStateError("approval turn identity missing")
+        durable = self._build_durable_react_loop_kwargs(turn_id=turn_id, thread_id=turn_detail.thread_id)
         ctx_token = publish_delegation_ctx(
             {
                 "begin_external_effect": durable["begin_external_effect"],
@@ -767,10 +804,11 @@ class KronosAgent:
             }
         )
         try:
-            tool_message = await execute_tool(
-                deleg_tool,
-                {"name": deleg_name, "id": call_id, "args": {"request": request}},
-            )
+            with execution_scope(self._execution_guard(turn_detail.thread_id, turn_id)):
+                tool_message = await execute_tool(
+                    deleg_tool,
+                    {"name": deleg_name, "id": call_id, "args": {"request": request}},
+                )
         except SubAgentApprovalPause as pause:
             return {
                 "waiting_approval": True,
@@ -850,10 +888,17 @@ class KronosAgent:
         aborts execution. Durable calls serialize across processes per thread.
         """
         kwargs = dict(
-            message=message, thread_id=thread_id, user_id=user_id, session_id=session_id,
-            source_kind=source_kind, persist_user_turn=persist_user_turn,
-            extra_system_context=extra_system_context, on_tool_event=on_tool_event,
-            force_tier=force_tier, on_turn_started=on_turn_started, caller_key=caller_key,
+            message=message,
+            thread_id=thread_id,
+            user_id=user_id,
+            session_id=session_id,
+            source_kind=source_kind,
+            persist_user_turn=persist_user_turn,
+            extra_system_context=extra_system_context,
+            on_tool_event=on_tool_event,
+            force_tier=force_tier,
+            on_turn_started=on_turn_started,
+            caller_key=caller_key,
         )
         if execution_ownership is not None:
             if not self._session_store or not persist_user_turn:
@@ -868,7 +913,41 @@ class KronosAgent:
                 return await self._invoke_owned(**kwargs)
         return await self._invoke_owned(**kwargs)
 
-    async def _invoke_owned(
+    async def _invoke_owned(self, **kwargs) -> InvocationOutcome:
+        """Keep the whole plan invocation, including memory, in its stop scope."""
+        thread_id = kwargs["thread_id"]
+        if not thread_id.startswith("plan:"):
+            return await self._invoke_scoped(**kwargs)
+        if not kwargs.get("persist_user_turn", True) or self._session_store is None:
+            raise DurableStateError("plan execution requires a durable turn")
+        from kronos import plans
+
+        turn_id = None
+        callback = kwargs.get("on_turn_started")
+        agent_name = settings.agent_name
+
+        def guard() -> None:
+            plans.assert_plan_active(thread_id, agent_name)
+            if turn_id:
+                plans.assert_turn_active(thread_id, turn_id, agent_name)
+
+        def linked(value: str) -> None:
+            nonlocal turn_id
+            turn_id = value
+            if callback is not None:
+                callback(value)
+            guard()
+
+        with execution_scope(guard):
+            check_execution()
+            try:
+                return await self._invoke_scoped(**{**kwargs, "on_turn_started": linked})
+            except Exception as error:
+                if turn_id:
+                    await self._session_store.fail_turn(turn_id, str(error))
+                raise
+
+    async def _invoke_scoped(
         self,
         message: str,
         thread_id: str,
@@ -953,21 +1032,7 @@ class KronosAgent:
                     await self._session_store.save(thread_id, persisted_history)
             return InvocationOutcome("blocked", response_text, thread_id, reason="input_rejected")
 
-        # Step 2: Retrieve memories (non-fatal — DB issues must not crash pipeline)
-        if self._memory_enabled:
-            try:
-                mem_update = retrieve_memories(state)
-                if mem_update.get("messages"):
-                    # Insert memory context before the last user message in
-                    # working history only — never into persisted_history.
-                    insert_at = len(working_history) - 1
-                    for mem_msg in mem_update["messages"]:
-                        working_history.insert(insert_at, mem_msg)
-                        insert_at += 1
-            except Exception as e:
-                log.warning("Memory retrieval failed (non-fatal): %s", e)
-
-        # Step 3: Route — supervisor or direct LLM
+        # Link durable callers before retrieval can invoke an embedding provider.
         turn_id: str | None = None
         react_loop_kwargs: dict[str, Any] = {}
         if self._session_store and not is_ephemeral:
@@ -983,6 +1048,27 @@ class KronosAgent:
                 thread_id=thread_id,
             )
 
+        # Step 2: Retrieve memories (non-fatal — DB issues must not crash pipeline)
+        if self._memory_enabled:
+            try:
+                mem_update = (
+                    await run_sync_owned(retrieve_memories, state)
+                    if thread_id.startswith("plan:")
+                    else retrieve_memories(state)
+                )
+                if mem_update.get("messages"):
+                    # Insert memory context before the last user message in
+                    # working history only — never into persisted_history.
+                    insert_at = len(working_history) - 1
+                    for mem_msg in mem_update["messages"]:
+                        working_history.insert(insert_at, mem_msg)
+                        insert_at += 1
+            except DurableStateError:
+                raise
+            except Exception as e:
+                log.warning("Memory retrieval failed (non-fatal): %s", e)
+
+        # Step 3: Route — supervisor or direct LLM
         audit_token = set_tool_audit_context(
             agent=settings.agent_name,
             thread_id=thread_id,
@@ -992,7 +1078,9 @@ class KronosAgent:
         )
         try:
             try:
-                result = await self._run_model_loop(
+                result = await self._run_guarded_model_loop(
+                    thread_id=thread_id,
+                    turn_id=turn_id,
                     messages=working_history,
                     source_message=message,
                     react_loop_kwargs=react_loop_kwargs,
@@ -1023,11 +1111,10 @@ class KronosAgent:
         # Step 4: Store memories — skip entirely for ephemeral peer reactions.
         if self._memory_enabled and not is_ephemeral:
             mem_state = {**state, "messages": list(persisted_history)}
-            asyncio.get_event_loop().run_in_executor(
-                None,
-                store_memories_background,
-                mem_state,
-            )
+            if thread_id.startswith("plan:"):
+                await run_sync_owned(store_memories_background, mem_state)
+            else:
+                asyncio.get_event_loop().run_in_executor(None, store_memories_background, mem_state)
 
         # Step 5: Compact if needed (only for real user turns).
         #
@@ -1040,9 +1127,15 @@ class KronosAgent:
             engine = get_context_engine()
             compact_state = {**state, "messages": list(persisted_history)}
             if engine.should_compact(compact_state):
-                compact_result = engine.compact(compact_state)
+                compact_result = (
+                    await run_sync_owned(engine.compact, compact_state)
+                    if thread_id.startswith("plan:")
+                    else engine.compact(compact_state)
+                )
                 if compact_result.get("messages"):
                     persisted_history = compact_result["messages"]
+
+        check_execution()
 
         # Step 6: Save conversation history.
         if self._session_store and not is_ephemeral:

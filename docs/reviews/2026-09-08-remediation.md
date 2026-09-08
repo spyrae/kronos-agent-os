@@ -25,7 +25,7 @@
 | F05 | Per-item ledger; partial/unknown outcomes не теряются и не дублируются | Перенесён, regression пройден | Код присутствует; таблицы email_expense_items в 10:44 ещё нет; нужны инициализация и сверка |
 | F06 | Межпроцессная сериализация всех budget writers | Перенесён, regression пройден | Код присутствует; live приёмка не выполнена |
 | F07 | Approval wait не завершает шаг; approve/reject/restart согласованы | Исправлено и проверено локально | Нужны миграции, rollout и Telegram smoke |
-| F08 | Отмена/падение шага восстанавливаются без слепого повтора эффектов | В работе: claim/link recovery, policy-aware resume и park/release реализованы; live cancel/TTL и operator reconciliation ещё нужны | Ожидает |
+| F08 | Отмена/падение шага восстанавливаются без слепого повтора эффектов | В работе: claim/link recovery, live cancel/TTL и fenced cleanup проверены; operator reconciliation и гарантированное stop-уведомление ещё нужны | Ожидает |
 | F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | Ожидает | Ожидает |
 | F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | В работе: intent/journal boundary проверен; полный перечень путей и reconciliation не закрыты | Ожидает |
 | F11 | Один resume на turn; live registry и atomic ownership | Исправлено и проверено локально | Нужен согласованный rollout без старых исполнителей |
@@ -478,3 +478,82 @@ Verification on final code:
   требует ранее запрошенного отдельного разрешения. Экспорт не обходился.
 - Приватный отчёт задачи: `PRODUCTION-AUDIT-2026-09-08-1044.md`, evidence JSONL,
   source provenance и логи тестов. Этот проход не менял production/main/remediation.
+
+### F08 — live cancel/TTL и безопасное завершение остановки
+
+- `stop_reason` и `stop_reconciled` добавлены миграцией v006: запрос остановки
+  отделён от освобождения живого исполнителя и сверки его результата. Поздний TTL
+  обычного failed-плана не превращает его в новую операцию остановки.
+- Fresh invocation, resume и прямой/delegated approval получают revocable scope.
+  Он наследуется вложенными ReAct calls, provider fallback и custom pipelines;
+  проверки выполняются перед model/tool вызовом и внутри отложенного tool task.
+  `plan:` без durable linkage больше не запускает даже memory/embedding retrieval.
+- Подтверждённый результат уже начатого эффекта коммитится независимо от stop;
+  следующая операция не начинается после обнаружения отзыва. Неопределённый
+  эффект/legacy execution/неизвестный статус остаются needs_review без replay.
+  Pending intent до dispatch — консервативная неопределённость, не доказательство
+  фактически совершённой внешней операции.
+- Stop cleanup получает ту же conversation ownership. Не переписывает live step,
+  не закрывает его approval, не считает worker остановленным по CancelledError.
+  Plan memory retrieval/persistence/compaction выполняются в worker с копией
+  scope; awaiter держит ownership до его выхода, включая повторную отмену.
+- Cleanup восстанавливает claim/link crash window по исходному caller key,
+  закрывает старые approvals, сохраняет journals/cache/effects. Completed result
+  сохраняется только при доказанном завершении без refusal/inconsistent approval.
+  Existing needs_review не затирается. Uncertainty записана также в turn DB:
+  падение до plan acknowledgement не теряет основание для ручной сверки.
+- API/Plans UI/CLI/tool различают «запрошена остановка», незавершённую cleanup и
+  review. Stop не обещает rollback. UI оставляет отменённый план видимым и даёт
+  обновить статус. Summary истёкшего плана ждёт cleanup и не вызывает модель;
+  обычная summary использует отдельный ephemeral `plan-summary:` thread.
+- 31 новый unit case и 3 SIGKILL case: cancel/TTL во время model/effect,
+  approval claim race, pending intent до dispatch, worker cancellation,
+  claim/link gaps, unknown/legacy/refusal/finished states, потеря plan commit,
+  вложенные scopes, fallback, custom tools, миграция и UI/CLI contract.
+- **2243 passed, 56 integration deselected, 1 warning** — полный локальный набор.
+  Отдельно **17 SIGKILL/restart integration passed**. Остальные 39 integration
+  cases с внешними сервисами не запускались; реальные API/MCP/production не вызваны.
+  Ruff, отдельный F821, TypeScript `tsc -b`, PlansPage ESLint и diff-check чистые.
+  UI проверен во временной копии с существующими node_modules, без установки deps.
+- Проверенная Python среда локально — 3.13; production Python 3.12 и полный
+  браузерный/Telegram E2E этого изменения пока не проверены.
+
+Файлы этапа:
+
+- `kronos/execution_control.py`, `kronos/engine.py`, `kronos/llm.py`,
+  `kronos/graph.py`: scope, boundaries, provider/nested propagation, worker ownership.
+- `kronos/plans.py`, `kronos/session.py`, `kronos/migrations/v006_plan_stop.py`,
+  `kronos/cron/plans.py`: stop identity, migration, approval/effect reconciliation.
+- `kronos/memory/nodes.py`, `kronos/agents/deep_research/graph.py`,
+  `kronos/agents/topic_research/graph.py`,
+  `kronos/agents/topic_research/nodes/discover.py`,
+  `kronos/agents/knowledge_pipeline/nodes.py`,
+  `kronos/agents/knowledge_pipeline/queue.py`: checks перед следующими действиями.
+- `dashboard/api/plans.py`, `dashboard-ui/src/pages/PlansPage.tsx`,
+  `kronos/cli.py`, `kronos/tools/plans_tools.py`: честные статусы остановки.
+- `tests/test_plan_stop.py`, `tests/test_execution_control.py`,
+  `tests/test_invocation_outcomes.py`, `tests/test_plans_cli.py`,
+  `tests/test_plans_tools.py`, `tests/test_plan_kill.py`,
+  `tests/helpers/plan_crash.py`: regression/fault tests и generic thread fixtures.
+- ADR-0011, индекс ADR и этот реестр: решение, ограничения, evidence.
+
+Проверка: `KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python -m pytest
+-m 'not integration' -q`; отдельно `tests/test_plan_kill.py tests/test_durable_kill.py`.
+Логи проверок задачи: `/tmp/kaos-plan-stop-full-final.txt`,
+`/tmp/kaos-plan-stop-kill-final.txt`; UI scratch — `/tmp/kaos-stop-ui-path.txt`.
+
+**F08/F09/F10 и общая цель ещё не закрыты:**
+
+1. Гарантированное уведомление об окончании остановки/доставке — следующий F09
+   durable outbox; отменённые планы пока не имеют надёжной final stop-нотификации.
+2. Operator workflow для needs_review, upstream idempotency, distinct logical
+   operations, bounded retention/tombstones и полный перечень non-engine writers.
+3. Scope — кооперативная граница, не sandbox/компенсация. Уже dispatch-нутый SDK
+   может закончиться позднее; намеренно отделившийся plugin не контролируется.
+   Stuck sync SDK удерживает ownership до своего timeout/выхода процесса;
+   общий F15 async/ responsiveness не закрыт.
+4. Перед release обязательно согласовать новые изменения main (`da351a3`,
+   `f31f283` и незавершённые правки) с этой веткой, чтобы не откатить уже исправленную
+   production-изоляцию. Ветка не объявлена готовым deploy candidate.
+5. Production approvals/config/rights/backup, миграции на копии, rollout и E2E
+   остаются обязательными. Этот этап ничего не разворачивает на сервере.

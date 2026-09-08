@@ -20,6 +20,7 @@ from kronos.agents.topic_research.nodes.score import evaluate_quality, score_top
 from kronos.agents.topic_research.nodes.validate import validate_topics
 from kronos.agents.topic_research.state import TopicResearchState
 from kronos.engine import AgentResult
+from kronos.execution_control import check_execution
 
 log = logging.getLogger("kronos.agents.topic_research")
 
@@ -53,18 +54,22 @@ def create_topic_research_agent(tools: list[BaseTool], on_tool_event=None):
             state["iteration"] = iteration
 
             # Step 1: discover topics
+            check_execution()
             update = await discover_topics(state, tools, on_tool_event=on_tool_event)
             state.update(update)
 
             # Step 2: expand topics
+            check_execution()
             update = await expand_topics(state, tools, on_tool_event=on_tool_event)
             state.update(update)
 
             # Step 3: validate topics
+            check_execution()
             update = await validate_topics(state, tools, on_tool_event=on_tool_event)
             state.update(update)
 
             # Step 4: score topics
+            check_execution()
             update = await score_topics(state)
             state.update(update)
 
@@ -75,6 +80,7 @@ def create_topic_research_agent(tools: list[BaseTool], on_tool_event=None):
             # else: "discover" — loop back
 
         # Step 6: format output
+        check_execution()
         update = await format_output(state)
         state.update(update)
 

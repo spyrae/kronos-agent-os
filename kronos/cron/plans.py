@@ -2,8 +2,8 @@
 
 Once a minute: retire plans that ran out of time, ask each parked step's
 condition whether it is time, and run the steps that are ready. A step runs as
-an ordinary agent turn, so durable turns, the effects ledger, approvals and the
-cost guardian all apply without knowing plans exist.
+a durable agent turn with effects and approval evidence. Budget enforcement
+across all callers is a separate contract; a per-cycle cap is not a cost limit.
 
 Three things keep the loop honest:
 
@@ -102,7 +102,9 @@ async def _recover_unlinked(step: dict, store: SessionStore, ownership: TurnOwne
     key = step.get("execution_key", "")
     if not key:
         plans.update_linked_step(
-            step["id"], "", state=plans.STEP_REVIEW,
+            step["id"],
+            "",
+            state=plans.STEP_REVIEW,
             result="Legacy unlinked execution; review effects before retrying.",
         )
         return None
@@ -139,12 +141,17 @@ async def _run_step(plan: dict, step: dict, observation: str) -> None:
                     return
                 result = await agent.ainvoke_outcome(
                     message=step_prompt(plan, current, observation),
-                    thread_id=plan_thread_id(plan["id"]), user_id="plan",
+                    thread_id=plan_thread_id(plan["id"]),
+                    user_id="plan",
                     session_id=str(plan["chat_id"] or plan["id"]),
-                    source_kind="user", persist_user_turn=True,
-                    caller_key=current["execution_key"], execution_ownership=ownership,
+                    source_kind="user",
+                    persist_user_turn=True,
+                    caller_key=current["execution_key"],
+                    execution_ownership=ownership,
                     on_turn_started=lambda turn_id: plans.link_turn(
-                        step["id"], turn_id, execution_key=current["execution_key"],
+                        step["id"],
+                        turn_id,
+                        execution_key=current["execution_key"],
                     ),
                 )
             except Exception:
@@ -154,7 +161,9 @@ async def _run_step(plan: dict, step: dict, observation: str) -> None:
                 current = await _recover_unlinked(plans.get_step(step["id"]), store, ownership)
                 if current:
                     plans.update_linked_step(
-                        step["id"], current["turn_id"], state=plans.STEP_INTERRUPTED,
+                        step["id"],
+                        current["turn_id"],
+                        state=plans.STEP_INTERRUPTED,
                         result="Execution interrupted; continuation must use the same turn.",
                     )
                 return
@@ -244,7 +253,9 @@ async def _reconcile_turns() -> set[int]:
                 if outcome.status == "running":
                     if policy.resume_mode != "resume":
                         plans.update_linked_step(
-                            step["id"], step["turn_id"], state=plans.STEP_INTERRUPTED,
+                            step["id"],
+                            step["turn_id"],
+                            state=plans.STEP_INTERRUPTED,
                             result="Execution stopped; report policy requires explicit turn resume.",
                         )
                         continue
@@ -252,7 +263,8 @@ async def _reconcile_turns() -> set[int]:
                         continue
                     attempted.add(plan_id)
                     await agent.resume_interrupted_turn(
-                        step["turn_id"], max_attempts=policy.max_resume_attempts,
+                        step["turn_id"],
+                        max_attempts=policy.max_resume_attempts,
                         execution_ownership=ownership,
                     )
                     outcome = await agent.get_turn_outcome(step["turn_id"])
@@ -265,6 +277,73 @@ async def _reconcile_turns() -> set[int]:
         finally:
             plans.note_reconciled(candidate)
     return attempted
+
+
+async def _reconcile_stops() -> None:
+    """Finish stop cleanup without racing a live task, approval or process."""
+    from kronos.bridge import get_agent
+
+    agent = get_agent()
+    store = (
+        agent.session_store if agent is not None and agent.session_store is not None else SessionStore(settings.db_path)
+    )
+    for candidate in plans.stopped_steps(settings.agent_name):
+        try:
+            thread_id = plan_thread_id(candidate["plan_id"])
+            async with own_conversation(store.db_path, thread_id, wait=False) as ownership:
+                step = plans.get_step(candidate["id"])
+                if not step:
+                    continue
+                plan = plans.get_plan(step["plan_id"])
+                if (
+                    not plan
+                    or step["stop_reconciled"]
+                    or plan["state"] not in {plans.PLAN_CANCELLED, plans.PLAN_FAILED}
+                ):
+                    continue
+                reason = plans.stop_reason(plan)
+                if not reason:
+                    continue
+                turn_id = step["turn_id"]
+                if not turn_id and step["execution_key"]:
+                    turn = await store.get_turn_for_caller(step["execution_key"])
+                    if turn:
+                        if turn["thread_id"] != thread_id:
+                            plans.reconcile_stopped_step(
+                                step,
+                                turn_id="",
+                                state=plans.STEP_REVIEW,
+                                result="Stop correlation mismatch.",
+                                ownership=ownership,
+                            )
+                            continue
+                        turn_id = turn["turn_id"]
+                state = plans.STEP_FAILED
+                result = f"{reason}; execution stopped. Previously dispatched operations are not undone."
+                if turn_id:
+                    evidence = await store.stop_plan_turn(
+                        turn_id, thread_id=thread_id, reason=reason, ownership=ownership
+                    )
+                    if evidence["review"]:
+                        state = plans.STEP_REVIEW
+                        result = f"{reason}; effects require review. {evidence.get('pending_effects', 0)} unresolved intent(s)."
+                    elif evidence.get("completed"):
+                        state, result = plans.STEP_DONE, evidence["content"]
+                elif step["state"] in {plans.STEP_DONE, plans.STEP_FAILED}:
+                    state, result = step["state"], step["result"]
+                elif step["state"] == plans.STEP_REVIEW or (
+                    step["state"] not in {plans.STEP_PENDING, plans.STEP_WAITING} and not step["execution_key"]
+                ):
+                    state, result = plans.STEP_REVIEW, f"{reason}; legacy execution identity missing; review effects."
+                if step["state"] == plans.STEP_REVIEW:
+                    state, result = plans.STEP_REVIEW, step["result"]
+                plans.reconcile_stopped_step(step, turn_id=turn_id, state=state, result=result, ownership=ownership)
+        except TurnBusyError:
+            pass
+        except Exception:
+            log.exception("Stopped plan step #%s reconciliation failed", candidate["id"])
+        finally:
+            plans.note_reconciled(candidate)
 
 
 async def _deliver(plan: dict, text: str) -> None:
@@ -283,14 +362,14 @@ async def _summarize(plan: dict, state: str) -> None:
     rendered = []
     for step in steps:
         label = step["title"] or f"шаг {step['seq']}"
-        mark = "не удалось" if step["state"] == plans.STEP_FAILED else "готово"
+        mark = "готово" if step["state"] == plans.STEP_DONE else "не завершено / нужна проверка"
         rendered.append(f"- {label} ({mark}): {_short(step['result'], 600)}")
 
     from kronos.bridge import get_agent
 
     agent = get_agent()
     fallback = f"План «{plan['goal']}» — {state}.\n\n" + "\n".join(rendered)
-    if agent is None:
+    if agent is None or plans.stop_reason(plan):
         plans.set_summary(plan["id"], fallback)
         await _deliver(plan, fallback)
         return
@@ -305,7 +384,7 @@ async def _summarize(plan: dict, state: str) -> None:
     try:
         summary = await agent.ainvoke(
             message=prompt,
-            thread_id=plan_thread_id(plan["id"]),
+            thread_id=f"plan-summary:{plan['id']}",
             user_id="plan",
             session_id=str(plan["chat_id"] or plan["id"]),
             source_kind="user",
@@ -361,7 +440,10 @@ async def _deliver_pending_summaries(limit: int) -> int:
 async def run_due_plan_steps() -> None:
     """One cycle: retire what timed out, report what closed, run what is ready."""
     await _retire_expired()
+    await _reconcile_stops()
     resumed = await _reconcile_turns()
+    await _retire_expired()
+    await _reconcile_stops()
     # Last cycle's leftovers first: a finished plan is what the owner is waiting
     # for, and it should not queue behind other plans' steps.
     summaries = MAX_SUMMARIES_PER_CYCLE - await _deliver_pending_summaries(MAX_SUMMARIES_PER_CYCLE)
@@ -389,7 +471,10 @@ async def run_due_plan_steps() -> None:
         spec = plans.wait_spec(step)
         if step.get("wait_json") and not spec:
             plans.update_linked_step(
-                step["id"], "", state=plans.STEP_REVIEW, result="Unreadable condition; review required.",
+                step["id"],
+                "",
+                state=plans.STEP_REVIEW,
+                result="Unreadable condition; review required.",
             )
             continue
         if spec:
@@ -409,6 +494,8 @@ async def run_due_plan_steps() -> None:
 
     for plan_id in touched_plans:
         plans.settle_plan(plan_id)
+    await _retire_expired()
+    await _reconcile_stops()
     # Anything that just closed gets its summary now rather than a minute later;
     # what does not fit in the cycle's budget is still owed one.
     await _deliver_pending_summaries(summaries)

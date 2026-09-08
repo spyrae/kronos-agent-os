@@ -26,6 +26,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 
 from kronos.config import settings
+from kronos.execution_control import check_execution, guard_model
 from kronos.security.pii import mask_pii, mask_pii_object
 
 log = logging.getLogger("kronos.llm")
@@ -200,6 +201,7 @@ class FallbackChatModel:
 
         last_error: Exception | None = None
         for index, provider in enumerate(providers):
+            check_execution()
             model = self._prepare_model(provider)
             if not model:
                 continue
@@ -243,6 +245,7 @@ class FallbackChatModel:
 
         last_error: Exception | None = None
         for index, provider in enumerate(providers):
+            check_execution()
             model = self._prepare_model(provider)
             if not model:
                 continue
@@ -422,7 +425,7 @@ def _get_model_from_chain(chain: list[str], label: str) -> BaseChatModel:
     if cassettes.replaying():
         # Replay needs neither keys nor providers: that is what makes eval runs
         # work in CI with no secrets configured.
-        return cassettes.replay_model(label=label)  # type: ignore[return-value]
+        return guard_model(cassettes.replay_model(label=label))  # type: ignore[return-value]
 
     configured = [provider for provider in chain if _has_key(provider)]
     if not configured:
@@ -431,8 +434,8 @@ def _get_model_from_chain(chain: list[str], label: str) -> BaseChatModel:
     if len(configured) == 1:
         model = _state.get_or_create(configured[0])
         if model:
-            return cassettes.wrap_model(model, label=label)
-    return cassettes.wrap_model(FallbackChatModel(configured, label), label=label)  # type: ignore[return-value]
+            return guard_model(cassettes.wrap_model(model, label=label))
+    return guard_model(cassettes.wrap_model(FallbackChatModel(configured, label), label=label))  # type: ignore[return-value]
 
 
 def get_fallback_model() -> BaseChatModel:
@@ -440,7 +443,7 @@ def get_fallback_model() -> BaseChatModel:
     from kronos import cassettes
 
     if cassettes.replaying():
-        return cassettes.replay_model(label="fallback")  # type: ignore[return-value]
+        return guard_model(cassettes.replay_model(label="fallback"))  # type: ignore[return-value]
 
     seen: set[str] = set()
     for tier in (ModelTier.LITE, ModelTier.STANDARD):
@@ -454,7 +457,7 @@ def get_fallback_model() -> BaseChatModel:
                 continue
             model = _state.get_or_create(provider)
             if model:
-                return cassettes.wrap_model(model, label="fallback")
+                return guard_model(cassettes.wrap_model(model, label="fallback"))
 
     raise RuntimeError("No fallback LLM providers configured")
 

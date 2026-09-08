@@ -20,6 +20,7 @@ import logging
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from kronos.config import settings
+from kronos.execution_control import ExecutionStoppedError, check_execution
 from kronos.memory import fts
 from kronos.memory import knowledge_graph as kg
 from kronos.memory.store import add_memories, search_memories
@@ -62,6 +63,7 @@ def retrieve_memories(state: AgentState) -> AgentState:
     if not last_user_msg:
         return {}
 
+    check_execution()
     memories = search_memories(last_user_msg, user_id=user_id, limit=5)
 
     # L3: Knowledge Graph context
@@ -146,6 +148,7 @@ def store_memories_background(state: AgentState) -> AgentState:
     log.info("Storing memories for user %s: %s", user_id, last_user[:60])
 
     # 1. Mem0 fact extraction + FTS5 indexing of extracted facts (per-agent)
+    check_execution()
     extracted_facts = add_memories(messages, user_id, session_id)
 
     # 2. Shared user facts: mirror user-sourced extractions into the
@@ -161,6 +164,7 @@ def store_memories_background(state: AgentState) -> AgentState:
             swarm = get_swarm()
             added = 0
             for fact in extracted_facts:
+                check_execution()
                 if swarm.add_shared_fact(
                     user_id=user_id,
                     fact=fact,
@@ -169,8 +173,12 @@ def store_memories_background(state: AgentState) -> AgentState:
                     added += 1
             if added:
                 log.info("Mirrored %d facts to shared_user_facts", added)
+        except ExecutionStoppedError:
+            raise
         except Exception as e:
             log.debug("Shared facts mirror failed: %s", e)
+
+    check_execution()
 
     # 3. Index raw conversation turn in FTS5 (catches exact phrases,
     #    names, URLs that Mem0 fact extraction might miss). Per-agent.

@@ -27,6 +27,7 @@ from kronos.agents.deep_research.nodes import (
 )
 from kronos.agents.deep_research.state import DeepResearchState
 from kronos.engine import AgentResult
+from kronos.execution_control import check_execution
 
 log = logging.getLogger("kronos.agents.deep_research")
 
@@ -55,20 +56,24 @@ def create_deep_research_agent(tools: list[BaseTool], on_tool_event=None):
         }
 
         # Step 1: classify mode
+        check_execution()
         update = classify_mode(state)
         state.update(update)
 
         # Step 2: iterative search loop
         while True:
             # Plan queries
+            check_execution()
             update = plan_queries(state) if state["iteration"] == 0 else plan_more_queries(state)
             state.update(update)
 
             # Execute searches
+            check_execution()
             update = await execute_searches(state)
             state.update(update)
 
             # Evaluate quality
+            check_execution()
             update = evaluate_quality(state)
             state.update(update)
 
@@ -79,10 +84,12 @@ def create_deep_research_agent(tools: list[BaseTool], on_tool_event=None):
             # else: loop back to plan_more_queries
 
         # Step 3: synthesize report
+        check_execution()
         update = synthesize_report(state)
         state.update(update)
 
         if should_self_correct(state):
+            check_execution()
             update = self_correct_report(state)
             state.update(update)
 

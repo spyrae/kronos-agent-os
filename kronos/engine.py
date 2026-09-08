@@ -27,6 +27,7 @@ from kronos import cassettes
 from kronos.cassettes import CassetteMissError
 from kronos.config import settings
 from kronos.effect_state import DurableStateError, EffectClaim, EffectUncertainError
+from kronos.execution_control import check_execution
 from kronos.security.loop_detector import LoopDetector, LoopLevel, get_nudge_message
 from kronos.security.sanitize import wrap_untrusted
 from kronos.security.untrusted import (
@@ -398,6 +399,7 @@ async def execute_tool(
     Handles both sync and async tools. On error, calls error_handler
     to produce an actionable message for the LLM.
     """
+    check_execution()
     tool_call_id = tool_call.get("id", "")
     args = tool_call.get("args", {})
     untrusted = tool_output_is_untrusted(tool)
@@ -460,13 +462,19 @@ async def execute_tool(
         if not effect_claim.token:
             raise DurableStateError("effect reservation has no owner token")
 
+    async def dispatch() -> Any:
+        # This runs inside wait_for's task, not before that task is scheduled.
+        check_execution()
+        return await tool.ainvoke(args)
+
     try:
         if hasattr(tool, "ainvoke"):
             result = await asyncio.wait_for(
-                tool.ainvoke(args),
+                dispatch(),
                 timeout=TOOL_TIMEOUT_SECONDS,
             )
         else:
+            check_execution()
             result = tool.invoke(args)
 
         content, raw_content = await _tool_model_output(tool, result)
@@ -889,6 +897,7 @@ async def react_loop(
     # Restoring a journalled batch is not another model call. It must not
     # consume the only model turn available to summarize the recovered result.
     for turn in range(max_turns + int(bool(pending_response) and max_turns > 0)):
+        check_execution()
         replaying_batch = pending_response is not None
         if pending_response is not None:
             response = pending_response
@@ -896,6 +905,8 @@ async def react_loop(
         else:
             try:
                 response: AIMessage = await bound_model.ainvoke(call_messages)
+            except DurableStateError:
+                raise
             except Exception as e:
                 log.error("LLM call failed (turn %d): %s", turn, e)
                 error_msg = AIMessage(content="Произошла ошибка при обработке. Попробуй ещё раз.")
@@ -914,6 +925,7 @@ async def react_loop(
             await emit_message_delta([response])
 
         # No tool calls → done
+        check_execution()
         if not getattr(response, "tool_calls", None):
             content = response.content if isinstance(response.content, str) else str(response.content)
             return AgentResult(
@@ -925,20 +937,25 @@ async def react_loop(
         # Run the independent calls of this message together, then walk the
         # calls in order as before. The sequential pass below is unchanged; it
         # just finds some results already computed.
-        precomputed = {} if replaying_batch else await _run_parallel_calls(
-            response.tool_calls,
-            tool_map=tool_map,
-            error_handler=error_handler,
-            requires_approval=requires_approval,
-            read_cached_tool_result=read_cached_tool_result,
-            get_external_effect=get_external_effect,
-            record_external_effect=record_external_effect,
-            turn_id=turn_id,
+        precomputed = (
+            {}
+            if replaying_batch
+            else await _run_parallel_calls(
+                response.tool_calls,
+                tool_map=tool_map,
+                error_handler=error_handler,
+                requires_approval=requires_approval,
+                read_cached_tool_result=read_cached_tool_result,
+                get_external_effect=get_external_effect,
+                record_external_effect=record_external_effect,
+                turn_id=turn_id,
+            )
         )
 
         # Execute tool calls
         tool_messages = []
         for tc in response.tool_calls:
+            check_execution()
             total_tool_calls += 1
             tool_name = tc.get("name", "")
             tool_call_id = tc.get("id", "")
@@ -1149,6 +1166,7 @@ async def react_loop(
         call_messages.extend(tool_messages)
         await emit_message_delta(tool_messages)
 
+        check_execution()
         # Loop backstop: nudge on WARNING/CRITICAL (once per escalation) so the
         # next turn changes course; abort on CIRCUIT_BREAKER with a partial
         # result instead of burning turns/budget on a stuck loop.

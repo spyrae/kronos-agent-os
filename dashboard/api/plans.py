@@ -29,6 +29,7 @@ def _step_view(step: dict) -> dict:
         "turn_id": step["turn_id"],
         "last_turn_id": step["last_turn_id"],
         "repark_requested": bool(step["repark_requested"]),
+        "stop_reconciled": bool(step["stop_reconciled"]),
         "depends_on": plans.dependency_ids(step),
         "waiting_for": plan_conditions.describe(spec) if spec else "",
         "wake_at": step["wake_at"],
@@ -47,12 +48,15 @@ def _plan_view(plan: dict, *, with_steps: bool = True) -> dict:
         "goal": plan["goal"],
         "state": plan["state"],
         "summary": plan["summary"],
+        "stop_reason": plans.stop_reason(plan),
         "created_at": plan["created_at"],
         "updated_at": plan["updated_at"],
         "expires_at": plan["expires_at"],
         "step_count": len(steps),
         "done_count": sum(1 for step in steps if step["state"] == plans.STEP_DONE),
         "failed_count": sum(1 for step in steps if step["state"] == plans.STEP_FAILED),
+        "stop_pending_count": sum(not s["stop_reconciled"] for s in steps) if plans.stop_reason(plan) else 0,
+        "review_count": sum(s["state"] == plans.STEP_REVIEW for s in steps),
         "waiting_count": sum(1 for step in steps if step["state"] == plans.STEP_WAITING),
     }
     if with_steps:

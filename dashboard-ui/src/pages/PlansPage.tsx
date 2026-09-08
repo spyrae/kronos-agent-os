@@ -19,6 +19,7 @@ interface Step {
   turn_id: string;
   last_turn_id: string;
   repark_requested: boolean;
+  stop_reconciled: boolean;
   depends_on: number[];
   waiting_for: string;
   wake_at: number;
@@ -41,6 +42,9 @@ interface Plan {
   done_count: number;
   failed_count: number;
   waiting_count: number;
+  stop_reason: string;
+  stop_pending_count: number;
+  review_count: number;
   steps?: Step[];
 }
 
@@ -89,12 +93,13 @@ export default function PlansPage() {
 
   useEffect(() => { load(); }, [showAll]);
 
-  const act = async (fn: () => Promise<unknown>) => {
+  const act = async (fn: () => Promise<unknown>, all = showAll) => {
     setBusy(true);
     setError('');
     try {
       await fn();
-      await load();
+      if (all) setShowAll(true);
+      await load(all);
     } catch (e) {
       setError(e instanceof Error ? e.message.replace(/^\d+:\s*/, '') : String(e));
     } finally {
@@ -145,6 +150,18 @@ export default function PlansPage() {
                   {' · touched '}{when(plan.updated_at)}
                   {plan.state === 'active' && plan.expires_at ? ` · expires ${when(plan.expires_at)}` : ''}
                 </div>
+                {plan.stop_reason && (
+                  <div style={{ marginTop: '0.5rem', color: '#f59e0b', fontSize: '0.78rem' }}>
+                    {plan.stop_pending_count > 0
+                      ? `Stop requested · ${plan.stop_pending_count} step(s) awaiting safe cleanup.`
+                      : 'Execution stopped.'}
+                    {' Already dispatched operations are not rolled back.'}
+                    {plan.review_count > 0 && ` ${plan.review_count} step(s) require review.`}
+                    <button style={{ ...ghost, marginLeft: '0.5rem' }} onClick={() => load()}>
+                      Refresh status
+                    </button>
+                  </div>
+                )}
                 {plan.summary && (
                   <div style={{ marginTop: '0.6rem', fontSize: '0.82rem', color: '#bbb', whiteSpace: 'pre-wrap' }}>
                     {plan.summary}
@@ -155,7 +172,7 @@ export default function PlansPage() {
                 <button style={ghost} onClick={() => setOpen(open === plan.id ? null : plan.id)}>
                   {open === plan.id ? 'Hide steps' : 'Steps'}
                 </button>
-                {plan.waiting_count > 0 && (
+                {plan.state === 'active' && plan.waiting_count > 0 && (
                   <button
                     style={{ ...ghost, color: '#f59e0b' }}
                     disabled={busy}
@@ -166,7 +183,7 @@ export default function PlansPage() {
                   <button
                     style={{ ...ghost, color: '#ef4444' }}
                     disabled={busy}
-                    onClick={() => { if (confirm(`Stop plan #${plan.id}?`)) act(() => api(`/api/plans/${plan.id}`, { method: 'DELETE' })); }}
+                    onClick={() => { if (confirm(`Stop plan #${plan.id}? In-flight operations may finish and are not rolled back.`)) act(() => api(`/api/plans/${plan.id}`, { method: 'DELETE' }), true); }}
                   >Stop</button>
                 )}
               </div>

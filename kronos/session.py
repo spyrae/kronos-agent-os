@@ -124,16 +124,17 @@ def _deserialize_journal_message(raw: str) -> BaseMessage:
     try:
         data = json.loads(raw)
         if not isinstance(data, dict) or data.get("type") not in {
-            "AIMessage", "HumanMessage", "SystemMessage", "ToolMessage"
+            "AIMessage",
+            "HumanMessage",
+            "SystemMessage",
+            "ToolMessage",
         }:
             raise ValueError("invalid journal message type")
         if not isinstance(data.get("content"), (str, list)):
             raise ValueError("invalid journal content")
         if data["type"] == "AIMessage" and not isinstance(data.get("tool_calls", []), list):
             raise ValueError("invalid journal tool calls")
-        if data["type"] == "ToolMessage" and not (
-            isinstance(data.get("tool_call_id"), str) and data["tool_call_id"]
-        ):
+        if data["type"] == "ToolMessage" and not (isinstance(data.get("tool_call_id"), str) and data["tool_call_id"]):
             raise ValueError("invalid journal tool result id")
         return _deserialize_message(data)
     except (ValueError, KeyError, TypeError) as error:
@@ -705,7 +706,9 @@ class SessionStore:
                         raise EffectUncertainError("identical operation under a new call id; intent review required")
                     await db.commit()
                     return EffectClaim(result=str(recorded[0]))
-                cursor = await db.execute("SELECT status, effect_protocol FROM active_turns WHERE turn_id = ?", (turn_id,))
+                cursor = await db.execute(
+                    "SELECT status, effect_protocol FROM active_turns WHERE turn_id = ?", (turn_id,)
+                )
                 turn = await cursor.fetchone()
                 if not turn or turn[0] not in {"running", "resuming"}:
                     raise DurableStateError("external effect requires an active durable turn")
@@ -1199,6 +1202,79 @@ class SessionStore:
             reason,
         )
 
+    async def stop_plan_turn(self, turn_id: str, *, thread_id: str, reason: str, ownership: TurnOwnership) -> dict:
+        """Close stop-related approvals only after the executor has released ownership.
+
+        Journals, caches and effects are retained. Already completed work keeps
+        its outcome; a stop is not a rollback of an external request.
+        """
+        if reason not in {"plan_cancelled", "plan_expired"}:
+            raise ValueError("invalid plan stop reason")
+        ownership.assert_held(self.db_path, thread_id)
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    "SELECT status, error, final_content, effect_protocol FROM active_turns WHERE turn_id = ? AND thread_id = ?",
+                    (turn_id, thread_id),
+                )
+                row = await cursor.fetchone()
+                if row is None:
+                    await db.rollback()
+                    return {"review": True, "content": "Turn identity missing; review required."}
+                previous, error, content, protocol = row
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM effect_intents WHERE turn_id = ? AND status = 'pending'", (turn_id,)
+                )
+                unresolved = (await cursor.fetchone())[0]
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM pending_approvals WHERE turn_id = ? AND status = 'pending'",
+                    (turn_id,),
+                )
+                pending_approvals = (await cursor.fetchone())[0]
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM pending_approvals WHERE turn_id = ? AND status IN ('rejected', 'expired')",
+                    (turn_id,),
+                )
+                refusals = (await cursor.fetchone())[0]
+                expected_stop = error in {"plan_cancelled", "plan_expired"}
+                review = bool(
+                    unresolved
+                    or protocol != 1
+                    or previous not in {"running", "resuming", "waiting_approval", "done", "failed"}
+                    or (previous == "failed" and not expected_stop)
+                    or (previous == "done" and (not content or pending_approvals))
+                )
+                decision = "expired" if reason == "plan_expired" else "rejected"
+                await db.execute(
+                    """UPDATE pending_approvals SET status = ?, decision = ?, decided_by = 'plan_lifecycle',
+                           decided_at = CURRENT_TIMESTAMP WHERE turn_id = ? AND status = 'pending'""",
+                    (decision, decision, turn_id),
+                )
+                await db.execute(
+                    """UPDATE active_turns SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP
+                       WHERE turn_id = ? AND status IN ('running', 'resuming', 'waiting_approval')""",
+                    (reason, turn_id),
+                )
+                if review:
+                    # Preserve uncertainty across a crash before the plan DB
+                    # acknowledges cleanup, even after pending approvals close.
+                    await db.execute(
+                        "UPDATE active_turns SET status = 'failed', error = ? WHERE turn_id = ? AND thread_id = ?",
+                        (error if error and not expected_stop else "plan_stop_requires_review", turn_id, thread_id),
+                    )
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
+        return {
+            "review": review,
+            "completed": previous == "done" and not review and not refusals,
+            "content": content or "",
+            "pending_effects": int(unresolved),
+        }
+
     async def fail_turn(self, turn_id: str, error: str) -> None:
         """Mark a turn failed after a handled exception."""
         async with self._open_db() as db:
@@ -1288,10 +1364,14 @@ class SessionStore:
                     cached = await cursor.fetchone()
                     # Close the provider protocol, not the business operation.
                     # Keep the original journal/cache untouched for reconciliation.
-                    content = str(cached[0]) if cached else (
-                        "[INTERRUPTED: NO VERIFIED RESULT] The prior execution stopped. "
-                        "This is not evidence that the action succeeded or failed. "
-                        "Do not repeat the action without reconciling its actual outcome."
+                    content = (
+                        str(cached[0])
+                        if cached
+                        else (
+                            "[INTERRUPTED: NO VERIFIED RESULT] The prior execution stopped. "
+                            "This is not evidence that the action succeeded or failed. "
+                            "Do not repeat the action without reconciling its actual outcome."
+                        )
                     )
                     messages.append(ToolMessage(content=content, tool_call_id=call["id"]))
 

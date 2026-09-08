@@ -51,6 +51,19 @@ async def model(**kwargs):
         stream.write("model\n")
     if mode == "crash-model":
         kill()
+    if mode == "crash-stop-intent":
+        turn = plans.get_step(1)["turn_id"]
+        await agent.session_store.begin_external_effect(
+            key="stop-effect",
+            turn_id=turn,
+            tool="write_fake",
+            args={},
+            tool_call_id="stop-call",
+        )
+        with (root / "effects.log").open("a") as stream:
+            stream.write("effect\n")
+        plans.cancel_plan(1, "kronos")
+        kill()
     return AgentResult([*kwargs["messages"], AIMessage(content="verified result")], "verified result")
 
 
@@ -67,19 +80,22 @@ async def main():
     if mode.startswith("crash-"):
         p = plans.create_plan(agent_name="kronos", goal="crash test")
         s = plans.add_step(p, "work")
-        if mode in {"crash-claim", "crash-link"}:
+        if mode in {"crash-claim", "crash-link", "crash-stop-claim", "crash-stop-link"}:
             async with own_conversation(str(root / "session.db"), f"plan:{p}") as owner:
                 assert plans.claim_step(s, ownership=owner)
-                if mode == "crash-link":
+                if mode in {"crash-link", "crash-stop-link"}:
                     await agent.session_store.begin_turn(
                         f"plan:{p}", "work", caller_key=plans.get_step(s)["execution_key"]
                     )
+                if mode.startswith("crash-stop-"):
+                    plans.cancel_plan(p, "kronos")
                 kill()
         if mode == "crash-finish":
             poller._apply_outcome = crash_before_step_commit
         await poller._run_step(plans.get_plan(p), plans.get_step(s), "")
         raise AssertionError("crash point was not reached")
     await agent.session_store.recover_abandoned_turns()
+    await poller._reconcile_stops()
     await poller._reconcile_turns()
     step = plans.get_step(1)
     if step["state"] == plans.STEP_PENDING:

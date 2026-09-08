@@ -1591,6 +1591,10 @@ def run_plans_show(plan_id: int, as_json: bool) -> int:
         return 0
 
     print(f"#{plan['id']} [{plan['state']}] {plan['goal']}")
+    if plans.stop_reason(plan):
+        pending = sum(not step["stop_reconciled"] for step in steps)
+        review = sum(step["state"] == plans.STEP_REVIEW for step in steps)
+        print(f"Stop requested: {pending} step(s) awaiting cleanup, {review} requiring review. No rollback.")
     if plan["summary"]:
         print(f"\n{plan['summary']}\n")
     for step in steps:
@@ -1654,7 +1658,7 @@ def run_plans_cancel(plan_id: int) -> int:
     if not plans.cancel_plan(plan_id, settings.agent_name):
         print(f"No active plan #{plan_id} for {settings.agent_name}")
         return 1
-    print(f"Plan #{plan_id} cancelled.")
+    print(f"Plan #{plan_id}: cancellation requested. In-flight work may finish; effects are not rolled back.")
     return 0
 
 

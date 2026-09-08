@@ -30,8 +30,10 @@ import uuid
 
 from kronos.config import settings
 from kronos.db import get_db
+from kronos.execution_control import ExecutionStoppedError
 from kronos.migrations.v002_plan_turns import migrate as migrate_plan_turns
 from kronos.migrations.v005_plan_execution import migrate_plans as migrate_execution
+from kronos.migrations.v006_plan_stop import migrate as migrate_stop
 from kronos.turn_ownership import TurnOwnership
 
 log = logging.getLogger("kronos.plans")
@@ -110,6 +112,7 @@ def _init_schema(conn) -> None:
 
     migrate_plan_turns(conn)
     migrate_execution(conn)
+    migrate_stop(conn)
 
 
 def _db():
@@ -284,7 +287,16 @@ def open_steps(agent_name: str) -> list[dict]:
           )
         ORDER BY s.wake_at, s.seq
         """,
-        (agent_name, PLAN_ACTIVE, STEP_PENDING, STEP_WAITING, STEP_RUNNING, STEP_APPROVAL, STEP_REVIEW, STEP_INTERRUPTED),
+        (
+            agent_name,
+            PLAN_ACTIVE,
+            STEP_PENDING,
+            STEP_WAITING,
+            STEP_RUNNING,
+            STEP_APPROVAL,
+            STEP_REVIEW,
+            STEP_INTERRUPTED,
+        ),
     )
     return [dict(row) for row in rows]
 
@@ -314,7 +326,10 @@ def _dependencies_settled(step: dict) -> bool:
 
 
 def claim_step(
-    step_id: int, now: float | None = None, *, ownership: TurnOwnership | None = None,
+    step_id: int,
+    now: float | None = None,
+    *,
+    ownership: TurnOwnership | None = None,
 ) -> bool:
     """Claim a ready step once; never start another turn over a paused plan."""
     stamp = _now(now)
@@ -495,8 +510,20 @@ def park_step(step_id: int, wait: dict, *, wake_at: float = 0.0, now: float | No
            WHERE id = ? AND state IN (?, ?, ?, ?)
              AND (state IN ('pending', 'waiting') OR turn_id != '')
              AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at > ?)""",
-        (STEP_WAITING, json.dumps(wait, ensure_ascii=False), wake_at, stamp, stamp,
-         step_id, STEP_PENDING, STEP_WAITING, STEP_RUNNING, STEP_APPROVAL, PLAN_ACTIVE, stamp),
+        (
+            STEP_WAITING,
+            json.dumps(wait, ensure_ascii=False),
+            wake_at,
+            stamp,
+            stamp,
+            step_id,
+            STEP_PENDING,
+            STEP_WAITING,
+            STEP_RUNNING,
+            STEP_APPROVAL,
+            PLAN_ACTIVE,
+            stamp,
+        ),
     )
     if cursor.rowcount != 1:
         raise PlanError("cannot park a stopped or unresolved step")
@@ -514,8 +541,18 @@ def complete_step_turn(step_id: int, turn_id: str, result: str) -> bool:
                approval_id = '', notified_approval_id = '', repark_requested = 0, updated_at = ?
            WHERE id = ? AND turn_id = ? AND turn_id != '' AND state IN (?, ?, ?, ?)
              AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at > ?)""",
-        (result, _now(), step_id, turn_id, STEP_RUNNING, STEP_APPROVAL,
-         STEP_WAITING, STEP_INTERRUPTED, PLAN_ACTIVE, _now()),
+        (
+            result,
+            _now(),
+            step_id,
+            turn_id,
+            STEP_RUNNING,
+            STEP_APPROVAL,
+            STEP_WAITING,
+            STEP_INTERRUPTED,
+            PLAN_ACTIVE,
+            _now(),
+        ),
     )
     return cursor.rowcount == 1
 
@@ -531,8 +568,17 @@ def retry_unstarted_step(step: dict, *, ownership: TurnOwnership) -> bool:
         """UPDATE plan_steps SET state = ?, result = ?, wake_at = ?, updated_at = ?
            WHERE id = ? AND state = ? AND turn_id = '' AND execution_key = ?
              AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at > ?)""",
-        (STEP_FAILED if failed else STEP_PENDING, "interrupted before turn creation",
-         stamp + 60, stamp, step["id"], STEP_RUNNING, step["execution_key"], PLAN_ACTIVE, stamp),
+        (
+            STEP_FAILED if failed else STEP_PENDING,
+            "interrupted before turn creation",
+            stamp + 60,
+            stamp,
+            step["id"],
+            STEP_RUNNING,
+            step["execution_key"],
+            PLAN_ACTIVE,
+            stamp,
+        ),
     )
     return cursor.rowcount == 1
 
@@ -564,8 +610,18 @@ def note_check(step_id: int, next_check_at: float, now: float | None = None) -> 
                result = CASE WHEN checks + 1 >= ? THEN 'condition never fired; check limit reached' ELSE result END
            WHERE id = ? AND state = ? AND turn_id = ''
              AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at > ?)""",
-        (next_check_at, stamp, MAX_CONDITION_CHECKS, STEP_FAILED, STEP_WAITING,
-         MAX_CONDITION_CHECKS, step_id, STEP_WAITING, PLAN_ACTIVE, stamp),
+        (
+            next_check_at,
+            stamp,
+            MAX_CONDITION_CHECKS,
+            STEP_FAILED,
+            STEP_WAITING,
+            MAX_CONDITION_CHECKS,
+            step_id,
+            STEP_WAITING,
+            PLAN_ACTIVE,
+            stamp,
+        ),
     )
     if cursor.rowcount and get_step(step_id)["state"] == STEP_FAILED:
         _touch_plan(get_step(step_id)["plan_id"], stamp)
@@ -619,7 +675,7 @@ def settle_plan(plan_id: int, now: float | None = None) -> str:
 
 def cancel_plan(plan_id: int, agent_name: str, now: float | None = None) -> bool:
     cursor = _db().write(
-        "UPDATE plans SET state = ?, updated_at = ? WHERE id = ? AND agent_name = ? AND state = ?",
+        "UPDATE plans SET state = ?, stop_reason = 'plan_cancelled', updated_at = ? WHERE id = ? AND agent_name = ? AND state = ?",
         (PLAN_CANCELLED, _now(now), plan_id, agent_name, PLAN_ACTIVE),
     )
     return cursor.rowcount > 0
@@ -637,6 +693,10 @@ def plans_awaiting_summary(agent_name: str, *, limit: int = 5) -> list[dict]:
         """
         SELECT * FROM plans
         WHERE agent_name = ? AND state IN (?, ?) AND summary = ''
+          AND NOT EXISTS (SELECT 1 FROM plan_steps s WHERE s.plan_id = plans.id
+              AND s.state IN ('running', 'awaiting_approval', 'interrupted'))
+          AND NOT EXISTS (SELECT 1 FROM plan_steps s WHERE s.plan_id = plans.id AND s.stop_reconciled = 0
+              AND plans.stop_reason != '')
         ORDER BY updated_at LIMIT ?
         """,
         (agent_name, PLAN_DONE, PLAN_FAILED, limit),
@@ -653,26 +713,105 @@ def expired_plans(agent_name: str, now: float | None = None) -> list[dict]:
 
 
 def expire_plan(plan_id: int, now: float | None = None) -> None:
-    """Give up on a plan that ran out of time, saying so rather than vanishing."""
+    """Revoke future work now; a live step is not yet stopped or safe to erase."""
     stamp = _now(now)
     _db().write_many(
         [
             (
-                "UPDATE plan_steps SET state = ?, result = ?, updated_at = ? WHERE plan_id = ? AND state IN (?, ?, ?, ?, ?, ?)",
-                (
-                    STEP_FAILED,
-                    "plan expired; execution may need reconciliation",
-                    stamp,
-                    plan_id,
-                    STEP_PENDING,
-                    STEP_WAITING,
-                    STEP_RUNNING,
-                    STEP_APPROVAL,
-                    STEP_REVIEW,
-                    STEP_INTERRUPTED,
-                ),
+                "UPDATE plans SET state = ?, stop_reason = 'plan_expired', updated_at = ? WHERE id = ? AND state = ? AND expires_at <= ?",
+                (PLAN_FAILED, stamp, plan_id, PLAN_ACTIVE, stamp),
             ),
-            ("UPDATE plans SET state = ?, updated_at = ? WHERE id = ?", (PLAN_FAILED, stamp, plan_id)),
+            (
+                """UPDATE plan_steps SET state = ?, result = 'plan expired before execution',
+                 stop_reconciled = 1, updated_at = ?
+            WHERE plan_id = ? AND state IN (?, ?) AND turn_id = '' AND execution_key = ''
+              AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at <= ?)""",
+                (STEP_FAILED, stamp, plan_id, STEP_PENDING, STEP_WAITING, PLAN_FAILED, stamp),
+            ),
         ]
     )
-    log.info("Plan #%s expired", plan_id)
+
+
+def assert_plan_active(thread_id: str, agent_name: str) -> None:
+    """Check plan authority before retrieval or durable turn creation."""
+    try:
+        plan_id = int(thread_id.removeprefix("plan:"))
+    except ValueError:
+        raise ExecutionStoppedError("plan_execution_unlinked") from None
+    plan = get_plan(plan_id)
+    if not plan or plan["agent_name"] != agent_name:
+        raise ExecutionStoppedError("plan_execution_unlinked")
+    reason = stop_reason(plan)
+    if reason:
+        raise ExecutionStoppedError(reason)
+    if plan["state"] != PLAN_ACTIVE:
+        raise ExecutionStoppedError("plan_execution_closed")
+
+
+def stop_reason(plan: dict) -> str:
+    """A stop request is distinct from an ordinary failed/completed plan."""
+    if plan["state"] == PLAN_CANCELLED:
+        return "plan_cancelled"
+    if plan.get("stop_reason"):
+        return plan["stop_reason"]
+    if plan["state"] == PLAN_ACTIVE and plan["expires_at"] <= _now():
+        return "plan_expired"
+    return ""
+
+
+def assert_turn_active(thread_id: str, turn_id: str, agent_name: str) -> None:
+    """Check revocable authority at an execution boundary, never cached."""
+    plan = _row(
+        _db().read_one(
+            """SELECT p.* FROM plans p JOIN plan_steps s ON s.plan_id = p.id
+           WHERE s.turn_id = ? AND p.agent_name = ?""",
+            (turn_id, agent_name),
+        )
+    )
+    if not plan or thread_id != f"plan:{plan['id']}":
+        raise ExecutionStoppedError("plan_execution_unlinked")
+    if plan["state"] == PLAN_CANCELLED:
+        raise ExecutionStoppedError("plan_cancelled")
+    if plan["expires_at"] <= _now():
+        raise ExecutionStoppedError("plan_expired")
+    if not plan_for_turn(turn_id, agent_name):
+        raise ExecutionStoppedError("plan_execution_closed")
+
+
+def stopped_steps(agent_name: str, *, limit: int = 20) -> list[dict]:
+    """Closed plans whose execution/approval cleanup has not been acknowledged."""
+    return [
+        dict(row)
+        for row in _db().read(
+            """SELECT s.* FROM plan_steps s JOIN plans p ON p.id = s.plan_id
+           WHERE p.agent_name = ? AND s.stop_reconciled = 0
+             AND p.stop_reason != ''
+           ORDER BY s.updated_at, s.id LIMIT ?""",
+            (agent_name, limit),
+        )
+    ]
+
+
+def reconcile_stopped_step(
+    step: dict,
+    *,
+    turn_id: str,
+    state: str,
+    result: str,
+    ownership: TurnOwnership,
+) -> bool:
+    """Acknowledge a stopped step only after its conversation owner is gone."""
+    ownership.assert_held(settings.db_path, f"plan:{step['plan_id']}")
+    if state not in {STEP_DONE, STEP_FAILED, STEP_REVIEW}:
+        raise ValueError("invalid stopped step state")
+    return (
+        _db()
+        .write(
+            """UPDATE plan_steps SET state = ?, result = ?, turn_id = ?, stop_reconciled = 1, updated_at = ?
+           WHERE id = ? AND turn_id = ? AND execution_key = ? AND stop_reconciled = 0
+             AND plan_id IN (SELECT id FROM plans WHERE stop_reason != '')""",
+            (state, result, turn_id, _now(), step["id"], step["turn_id"], step["execution_key"]),
+        )
+        .rowcount
+        == 1
+    )
