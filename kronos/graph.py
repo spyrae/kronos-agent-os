@@ -56,6 +56,7 @@ from kronos.skills.tools import (
     load_skill_reference,
 )
 from kronos.state import AgentState
+from kronos.turn_ownership import TurnBusyError, own_conversation
 
 log = logging.getLogger("kronos.graph")
 
@@ -408,6 +409,21 @@ class KronosAgent:
         approved: bool,
         decided_by: str = "",
     ) -> str:
+        """Resolve approval under the same ownership as normal invocation."""
+        if not self._session_store:
+            return "Approval state недоступен: session store не настроен."
+        pending = await self._session_store.get_pending_approval(approval_id)
+        if not pending:
+            return "Этот approval уже обработан или не найден."
+        async with own_conversation(self._session_store.db_path, str(pending["thread_id"])):
+            return await self._resolve_owned_approval(approval_id, approved, decided_by)
+
+    async def _resolve_owned_approval(
+        self,
+        approval_id: str,
+        approved: bool,
+        decided_by: str = "",
+    ) -> str:
         """Resolve a pending tool approval and resume the durable turn."""
         self._last_pending_approval_id = None
         if not self._session_store:
@@ -534,12 +550,37 @@ class KronosAgent:
         )
         return result.content
 
-    async def resume_interrupted_turn(self, turn: dict) -> str | None:
+    async def resume_interrupted_turn(self, turn: dict | str, *, max_attempts: int | None = None) -> str | None:
+        """Exclusively resume an abandoned turn using its durable identity.
+
+        A caller-supplied snapshot is never execution authority. Status and
+        attempts are checked again after acquiring the conversation lock.
+        Raises TurnBusyError rather than stealing a live executor's work.
+        """
+        if not self._session_store:
+            return None
+        turn_id = str(turn.get("turn_id") or "") if isinstance(turn, dict) else turn
+        detail = await self._session_store.get_turn_detail(turn_id)
+        if not detail:
+            return None
+        if max_attempts is None:
+            from kronos.policy import get_policy
+
+            max_attempts = get_policy().durable.max_resume_attempts
+        async with own_conversation(self._session_store.db_path, detail["thread_id"], wait=False) as ownership:
+            claimed = await self._session_store.claim_turn_for_resume(
+                turn_id, ownership=ownership, max_attempts=max_attempts
+            )
+            if not claimed:
+                return None
+            return await self._resume_claimed_turn(claimed)
+
+    async def _resume_claimed_turn(self, turn: dict) -> str | None:
         """Finish a turn whose process died mid-flight.
 
         An unresolved effect intent blocks automatic continuation before any
         model call. Recorded effects can be reused by engine-managed tools.
-        This does not replace exclusive turn ownership or upstream idempotency.
+        Caller holds exclusive conversation ownership through finalization.
         """
         if not self._session_store:
             return None
@@ -617,13 +658,18 @@ class KronosAgent:
         if not self._session_store:
             return 0
 
-        claimed = await self._session_store.claim_turns_for_resume(max_attempts=max_attempts)
+        candidates = await self._session_store.resumable_turns()
         finished = 0
-        for turn in claimed:
-            answer = await self.resume_interrupted_turn(turn)
+        for turn in candidates:
+            try:
+                answer = await self.resume_interrupted_turn(turn, max_attempts=max_attempts)
+            except TurnBusyError:
+                continue
             if not answer:
                 continue
-            finished += 1
+            outcome = await self.get_turn_outcome(turn["turn_id"])
+            if outcome.status == "completed":
+                finished += 1
             if deliver:
                 try:
                     await deliver(turn["thread_id"], answer)
@@ -760,6 +806,40 @@ class KronosAgent:
         force_tier: str | None = None,
         on_turn_started: Callable[[str], None] | None = None,
     ) -> InvocationOutcome:
+        """Process raw input with call-local outcome and exclusive history writes.
+
+        Peer reactions with persist_user_turn=False stay ephemeral. Transient
+        transport framing belongs in extra_system_context, not in message.
+        on_turn_started links durable work before model/tools; a failed link
+        aborts execution. Durable calls serialize across processes per thread.
+        """
+        kwargs = dict(
+            message=message, thread_id=thread_id, user_id=user_id, session_id=session_id,
+            source_kind=source_kind, persist_user_turn=persist_user_turn,
+            extra_system_context=extra_system_context, on_tool_event=on_tool_event,
+            force_tier=force_tier, on_turn_started=on_turn_started,
+        )
+        if self._session_store and persist_user_turn:
+            if not getattr(self, "_durable_recovery_checked", False):
+                await self._session_store.recover_abandoned_turns()
+                self._durable_recovery_checked = True
+            async with own_conversation(self._session_store.db_path, thread_id):
+                return await self._invoke_owned(**kwargs)
+        return await self._invoke_owned(**kwargs)
+
+    async def _invoke_owned(
+        self,
+        message: str,
+        thread_id: str,
+        user_id: str = "",
+        session_id: str = "",
+        source_kind: str = "user",
+        persist_user_turn: bool = True,
+        extra_system_context: str = "",
+        on_tool_event: ToolEventCallback | None = None,
+        force_tier: str | None = None,
+        on_turn_started: Callable[[str], None] | None = None,
+    ) -> InvocationOutcome:
         """Process a message and return its explicit execution outcome.
 
         Args:
@@ -794,10 +874,6 @@ class KronosAgent:
         if on_turn_started and (is_ephemeral or self._session_store is None):
             raise ValueError("on_turn_started requires a durable session store")
         self._last_pending_approval_id = None
-
-        if self._session_store and not is_ephemeral and not getattr(self, "_durable_recovery_checked", False):
-            await self._session_store.recover_abandoned_turns()
-            self._durable_recovery_checked = True
 
         # Load conversation history
         history: list[BaseMessage] = []

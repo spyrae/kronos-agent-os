@@ -18,6 +18,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -114,6 +115,47 @@ def test_a_second_resume_finds_nothing_to_do(workdir):
     assert "finished=1" in first.stdout
     assert "finished=0" in second.stdout
     assert len((workdir / "sent.log").read_text(encoding="utf-8").splitlines()) == 1
+
+
+@pytest.mark.parametrize("mode,expected_attempts", [("hold-live", 1), ("hold-resume", 2)])
+def test_live_executor_blocks_other_processes_until_sigkill(workdir, mode, expected_attempts):
+    """A stalled event loop is not abandonment; SIGKILL really releases ownership."""
+    import sqlite3
+
+    env = {**os.environ, "PYTHONPATH": str(REPO_ROOT), "KAOS_ENV_FILE": "/dev/null"}
+    process = subprocess.Popen(
+        [sys.executable, "-m", HELPER, mode, str(workdir)],
+        cwd=REPO_ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        ready = workdir / "holding.txt"
+        deadline = time.monotonic() + 15
+        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert ready.exists(), "executor never reached its live turn"
+        turn_id = ready.read_text()
+        resume = _run("resume", workdir)
+        assert "finished=0" in resume.stdout, resume.stderr[-2000:]
+        report = _run("report", workdir)
+        assert "recovered=0" in report.stdout, report.stderr[-2000:]
+        assert process.poll() is None, "recovery must not kill the live executor"
+        with sqlite3.connect(workdir / "session.db") as db:
+            state, attempts = db.execute(
+                "SELECT status, attempts FROM active_turns WHERE turn_id = ?", (turn_id,)
+            ).fetchone()
+        assert state == ("running" if mode == "hold-live" else "resuming")
+        assert attempts == expected_attempts - 1
+    finally:
+        if process.poll() is None:
+            process.kill()
+        _, stderr = process.communicate(timeout=15)
+    assert process.returncode == -signal.SIGKILL, stderr[-2000:]
+    resumed = _run("resume", workdir)
+    assert "finished=1" in resumed.stdout, resumed.stderr[-2000:]
+    with sqlite3.connect(workdir / "session.db") as db:
+        assert db.execute(
+            "SELECT status, attempts FROM active_turns WHERE turn_id = ?", (turn_id,)
+        ).fetchone() == ("done", expected_attempts)
 
 
 def test_kill_after_dispatch_before_result_commit_refuses_blind_resume(workdir):

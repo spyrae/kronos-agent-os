@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
 
 from kronos.config import settings
+from kronos.outcomes import InvocationOutcome
 from kronos.session import SessionStore
 
 
@@ -137,10 +138,13 @@ def test_resume_finishes_an_in_flight_turn(client, monkeypatch):
             pass
 
         async def resume_interrupted_turn(self, turn):
-            assert turn["turn_id"] == turn_id
+            assert turn == turn_id
             return "Отчёт собран."
 
-    monkeypatch.setattr("kronos.graph.KronosAgent", FakeAgent)
+        async def get_turn_outcome(self, turn):
+            return InvocationOutcome("completed", turn_id=turn)
+
+    client.app.state.agent = FakeAgent()
 
     response = client.post(f"/api/turns/{turn_id}/resume")
 
@@ -160,9 +164,52 @@ def test_resume_failure_is_reported(client, monkeypatch):
         async def resume_interrupted_turn(self, turn):
             return None
 
-    monkeypatch.setattr("kronos.graph.KronosAgent", FailingAgent)
+        async def get_turn_outcome(self, turn):
+            return InvocationOutcome("failed", turn_id=turn)
+
+    client.app.state.agent = FailingAgent()
 
     response = client.post(f"/api/turns/{turn_id}/resume")
 
     assert response.status_code == 500
-    assert "marked failed" in response.json()["detail"]
+    assert "outcome=failed" in response.json()["detail"]
+
+
+def test_resume_without_live_agent_never_constructs_fallback(client, monkeypatch):
+    import asyncio
+
+    turn_id = asyncio.run(_turn(_store()))
+
+    def no_fallback(*args, **kwargs):
+        pytest.fail("missing live agent must not construct a fallback")
+
+    monkeypatch.setattr("kronos.graph.KronosAgent", no_fallback)
+    response = client.post(f"/api/turns/{turn_id}/resume")
+    assert response.status_code == 503
+    assert "not started" in response.json()["detail"]
+    assert asyncio.run(_store().get_turn_detail(turn_id))["attempts"] == 0
+
+
+def test_resume_reports_waiting_approval_without_claiming_completion(client):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    turn_id = asyncio.run(_turn(_store()))
+    agent = AsyncMock()
+    agent.resume_interrupted_turn.return_value = "Approval required"
+    agent.get_turn_outcome.return_value = InvocationOutcome("waiting_approval", turn_id=turn_id)
+    client.app.state.agent = agent
+    response = client.post(f"/api/turns/{turn_id}/resume")
+    assert response.status_code == 200
+    assert response.json()["status"] == "waiting_approval"
+
+
+def test_app_without_agent_does_not_reuse_another_apps_registry(client):
+    from unittest.mock import AsyncMock
+
+    from dashboard.server import create_app
+
+    first = create_app(agent=AsyncMock())
+    second = create_app()
+    assert first.state.agent is not None
+    assert second.state.agent is None

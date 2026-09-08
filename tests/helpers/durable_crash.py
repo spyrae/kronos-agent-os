@@ -150,15 +150,63 @@ async def _resume(workdir: Path) -> int:
     return finished
 
 
+async def _hold(workdir: Path, *, resume: bool) -> None:
+    """Keep a real executor alive with its event loop intentionally blocked."""
+    import time
+
+    from kronos.engine import AgentResult
+    from kronos.graph import KronosAgent
+    from kronos.session import SessionStore
+
+    store = SessionStore(str(workdir / "session.db"), agent_name="killtest")
+    agent = object.__new__(KronosAgent)
+    agent._session_store = store
+    agent._memory_enabled = False
+    agent._durable_recovery_checked = True
+
+    async def blocked_loop(**kwargs):
+        turn = (await store.resumable_turns())[0]
+        (workdir / "holding.txt").write_text(turn["turn_id"], encoding="utf-8")
+        time.sleep(120)
+        return AgentResult(content="unreachable", messages=[])
+
+    agent._run_model_loop = blocked_loop
+    if resume:
+        turn_id = await store.begin_turn(THREAD_ID, QUESTION)
+        await agent.resume_interrupted_turn(turn_id)
+    else:
+        await agent.ainvoke_outcome(QUESTION, THREAD_ID)
+
+
+async def _report(workdir: Path) -> int:
+    from kronos.session import SessionStore
+
+    count = await SessionStore(str(workdir / "session.db")).recover_abandoned_turns()
+    print(f"recovered={count}")
+    return 0
+
+
+async def _owned_crash(workdir: Path, *, before_result: bool) -> None:
+    from kronos.turn_ownership import own_conversation
+
+    async with own_conversation(str(workdir / "session.db"), THREAD_ID):
+        await _crash(workdir, before_result=before_result)
+
+
 def main() -> int:
     mode, workdir = sys.argv[1], Path(sys.argv[2])
     _configure(workdir)
 
     if mode in {"crash", "crash-before-result"}:
-        asyncio.run(_crash(workdir, before_result=mode == "crash-before-result"))
+        asyncio.run(_owned_crash(workdir, before_result=mode == "crash-before-result"))
         return 0  # unreachable: the process is killed above
     if mode == "resume":
         return 0 if asyncio.run(_resume(workdir)) else 1
+    if mode in {"hold-live", "hold-resume"}:
+        asyncio.run(_hold(workdir, resume=mode == "hold-resume"))
+        return 0
+    if mode == "report":
+        return asyncio.run(_report(workdir))
     print(f"unknown mode: {mode}", file=sys.stderr)
     return 2
 

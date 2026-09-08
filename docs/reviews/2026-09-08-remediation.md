@@ -25,10 +25,10 @@
 | F05 | Per-item ledger; partial/unknown outcomes не теряются и не дублируются | Перенесён, regression пройден | Нужна миграция и сверка |
 | F06 | Межпроцессная сериализация всех budget writers | Перенесён, regression пройден | Не развёрнуто |
 | F07 | Approval wait не завершает шаг; approve/reject/restart согласованы | Исправлено и проверено локально | Нужны миграции, rollout и Telegram smoke |
-| F08 | Отмена/падение шага восстанавливаются без слепого повтора эффектов | В работе: подготовлена часть защиты F10; lease/recovery ещё нужны | Ожидает |
+| F08 | Отмена/падение шага восстанавливаются без слепого повтора эффектов | В работе: есть F10 intents и F11 ownership; lifecycle/recovery шагов ещё нужны | Ожидает |
 | F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | Ожидает | Ожидает |
 | F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | В работе: intent/journal boundary проверен; полный перечень путей и reconciliation не закрыты | Ожидает |
-| F11 | Один resume на turn; live registry и atomic ownership | Ожидает | Ожидает |
+| F11 | Один resume на turn; live registry и atomic ownership | Исправлено и проверено локально | Нужен согласованный rollout без старых исполнителей |
 | F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | Ожидает | Ожидает |
 | F13 | Честный scoped reset по всем слоям, включая background writers | Ожидает | Ожидает |
 | F14 | Desired/effective runtime settings совпадают или restart явно указан | Ожидает | Ожидает |
@@ -235,3 +235,78 @@
    удаляет recorded effects; нельзя обещать бессрочную дедупликацию такого ключа.
 5. F09 delivery/outbox, production-права/backup/migrations и live verification.
    Этот этап не разрешает деплой и не доказывает exactly-once у внешнего провайдера.
+
+### F11 — единственный исполнитель беседы и live resume
+
+- Общая POSIX-блокировка удерживается от загрузки истории до окончания durable
+  invocation, approval continuation или resume. Область — canonical SQLite path
+  + conversation id: это защищает также новый вопрос от перезаписи истории старого.
+  Блокировка не истекает по таймеру и не зависит от heartbeat/event loop.
+- Новый `claim_turn_for_resume` работает для `running` и `resuming` под ownership
+  и SQL-транзакцией. Проверяет актуальные thread/input, pending approval, newer turn
+  и attempts cap. Снимок, присланный caller, больше не даёт права исполнения.
+  Старый batch claim без живого владельца удалён, все callers переведены.
+- Startup report и first-invocation recovery не трогают занятые беседы. Повторный
+  report не дублирует историю; падение во время resume не оставляет навечно занятый
+  `resuming`. Ожидающий approval не обходится даже при ошибочном running-флаге.
+- Dashboard использует agent конкретного приложения с его живыми tools/MCP;
+  отдельный fallback agent больше не создаётся. Без runtime — 503, при занятом
+  исполнителе — 409. API/UI различают completed, waiting_approval и другие outcomes.
+  CLI открывает/закрывает managed MCP registry и корректно сообщает отказ busy.
+- Отмена освобождает execution ownership, но **не** снимает F10 pending intent.
+  Неизвестный исход операции по-прежнему блокирует resume до model/tool calls.
+  `resume_abandoned_turns` больше не считает непустой текст ошибки успехом.
+- Sidecar-файлы имеют хешированные имена без текста беседы, создаются с 0600
+  в директории 0700 и не удаляются после unlock. Нельзя удалять/пересоздавать
+  эту директорию при живых исполнителях; это заменило бы inode блокировки.
+- Решение и альтернативы описаны в ADR-0008. TTL lease отвергнут: его истечение
+  не доказывает остановку внешнего запроса старого исполнителя. Схема БД,
+  зависимости и эксплуатационная конфигурация этим этапом не менялись.
+
+Проверка на финальном коде:
+
+- **2149 passed, 47 integration deselected, 1 warning; 32.78 sec**, exit 0.
+- Отдельно **8 integration SIGKILL/restart passed; 7.78 sec**, exit 0. Два новых
+  сценария держат реальный процесс с намеренно заблокированным event loop в
+  `running` и `resuming`: другие процессы не присваивают и не переписывают ход.
+  После SIGKILL тот же ход завершается с правильным attempts count.
+- 18 новых unit/ASGI/CLI cases: две независимые SessionStore, гонка resume с
+  live invocation/approval/новым вопросом, отмена owner/waiter, неподходящий и
+  освобождённый ownership, path alias, lock I/O failure, stale caller snapshot,
+  dashboard с реальным mock tool registry, отсутствие fallback, MCP cleanup.
+- Ruff, отдельный F821, `git diff --check` — чистые. TypeScript `--noEmit` пройден
+  для app и Vite configs на временной копии UI с уже установленными зависимостями
+  из основного checkout, без установки пакетов и изменения исходного checkout.
+- Первый запуск общего набора в sandbox: 15 отказов на ограничения локальных
+  socket/process операций, 2116 passed. Приведённый выше итог — повторный полный
+  запуск с разрешением этих локальных тестов, не игнорирование проваленных cases.
+- Оставшиеся **39 integration cases не запускались**; настоящие API, Telegram,
+  MCP-серверы и production не вызывались. Production не менялся.
+
+Изменённые файлы F11:
+
+- `kronos/turn_ownership.py`, `kronos/session.py`, `kronos/graph.py`: ownership,
+  единый guarded execution API, atomic single-turn claim и безопасный report.
+- `dashboard/server.py`, `dashboard/api/turns.py`,
+  `dashboard-ui/src/pages/TurnsPage.tsx`, `kronos/cli.py`: live registry и outcomes.
+- `tests/test_turn_ownership.py`, `tests/test_durable_resume.py`,
+  `tests/test_dashboard_turns.py`, `tests/test_turns_cli.py`,
+  `tests/test_durable_kill.py`, `tests/helpers/durable_crash.py`: regression gates.
+- `docs/decisions/ADR-0008-conversation-execution-ownership.md`, индекс и реестр.
+
+Проверить локально: команды полного pytest/Ruff выше; отдельно
+`KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python -m pytest tests/test_turn_ownership.py tests/test_durable_kill.py -q`.
+
+Границы не исключаются из цели:
+
+- F11 локально закрывает кооперативное однохостовое владение через agent API, не
+  multi-host/NFS/Windows или произвольный код с прямым доступом к SQLite. Rollout
+  требует остановить старые исполнители, которые ещё не используют этот протокол.
+- F08 всё ещё требует lifecycle/recovery плановых шагов, legacy orphan handling,
+  park/release, cancel/expiry notifications и operator workflow. При восстановлении
+  также нужно проверить валидность journal→model сообщений с tool-call без ответа:
+  scripted model в regression не доказывает принятие такой истории провайдером.
+- F10: distinct logical operation ids, reconciliation неизвестных эффектов,
+  provider idempotency, прямые custom/cron writers, retention business keys остаются.
+- F09: transport readiness и durable outbox; F13: scope reset/background writers.
+  Сериализация выполнения не доказывает exactly-once внешней операции или доставки.

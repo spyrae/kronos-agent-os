@@ -1420,6 +1420,8 @@ def run_turns_resume(turn_id: str) -> int:
 
     async def _resume() -> int:
         from kronos.graph import KronosAgent
+        from kronos.tools.manager import managed_mcp_tools
+        from kronos.turn_ownership import TurnBusyError
 
         store = _session_store()
         detail = await store.get_turn_detail(turn_id)
@@ -1430,17 +1432,16 @@ def run_turns_resume(turn_id: str) -> int:
             print(f"Turn {turn_id} is '{detail['status']}' — only in-flight turns can be resumed.")
             return 1
 
-        agent = KronosAgent(session_store=store)
-        answer = await agent.resume_interrupted_turn(
-            {
-                "turn_id": turn_id,
-                "thread_id": detail["thread_id"],
-                "input_message": detail.get("input_message", ""),
-                "attempts": detail.get("attempts", 0),
-            }
-        )
+        async with managed_mcp_tools() as tools:
+            agent = KronosAgent(tools=tools or None, session_store=store)
+            try:
+                answer = await agent.resume_interrupted_turn(turn_id)
+            except TurnBusyError:
+                print("Conversation has a live executor — resume was not started.")
+                return 1
         if not answer:
-            print("Resume produced no answer — see the log; the turn was marked failed.")
+            outcome = await agent.get_turn_outcome(turn_id)
+            print(f"Resume did not complete — outcome={outcome.status}; inspect the turn before retrying.")
             return 1
         print(answer)
         return 0

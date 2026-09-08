@@ -13,6 +13,7 @@ from langchain_core.tools import BaseTool
 from kronos.config import settings
 from kronos.security.effects import mark_side_effect
 from kronos.session import SessionStore
+from kronos.turn_ownership import TurnBusyError, own_conversation
 
 
 class Sender(BaseTool):
@@ -101,12 +102,13 @@ async def _interrupted_turn(store, *, thread_id="chat-1", text="отправь �
 async def test_claim_flips_status_and_counts_attempts(store):
     turn_id = await _interrupted_turn(store)
 
-    claimed = await store.claim_turns_for_resume()
-
-    assert [row["turn_id"] for row in claimed] == [turn_id]
-    assert claimed[0]["attempts"] == 1
-    # A second claim finds nothing: the turn is no longer 'running'.
-    assert await store.claim_turns_for_resume() == []
+    async with own_conversation(store.db_path, "chat-1") as ownership:
+        claimed = await store.claim_turn_for_resume(turn_id, ownership=ownership)
+        assert claimed["turn_id"] == turn_id
+        assert claimed["attempts"] == 1
+        with pytest.raises(TurnBusyError):
+            async with own_conversation(store.db_path, "chat-1", wait=False):
+                pytest.fail("a second executor must not acquire a live conversation")
 
 
 @pytest.mark.asyncio
@@ -115,13 +117,12 @@ async def test_attempts_are_capped(store):
     turn_id = await _interrupted_turn(store)
 
     for _ in range(2):
-        await store.claim_turns_for_resume(max_attempts=2)
-        # Simulate another crash: back to running with the attempt recorded.
-        async with store._open_db() as db:
-            await db.execute("UPDATE active_turns SET status = 'running' WHERE turn_id = ?", (turn_id,))
-            await db.commit()
+        async with own_conversation(store.db_path, "chat-1") as ownership:
+            assert await store.claim_turn_for_resume(turn_id, ownership=ownership, max_attempts=2)
+        # A crash releases the lock but leaves status=resuming, not running.
 
-    assert await store.claim_turns_for_resume(max_attempts=2) == []
+    async with own_conversation(store.db_path, "chat-1") as ownership:
+        assert await store.claim_turn_for_resume(turn_id, ownership=ownership, max_attempts=2) is None
 
     async with store._open_db() as db:
         cursor = await db.execute("SELECT status, error FROM active_turns WHERE turn_id = ?", (turn_id,))
@@ -136,9 +137,10 @@ async def test_superseded_turn_is_not_resumed(store):
     stale = await _interrupted_turn(store, text="первый вопрос")
     fresh = await store.begin_turn("chat-1", "второй вопрос")
 
-    claimed = await store.claim_turns_for_resume()
-
-    assert [row["turn_id"] for row in claimed] == [fresh]
+    async with own_conversation(store.db_path, "chat-1") as ownership:
+        assert await store.claim_turn_for_resume(stale, ownership=ownership) is None
+        claimed = await store.claim_turn_for_resume(fresh, ownership=ownership)
+    assert claimed["turn_id"] == fresh
     async with store._open_db() as db:
         cursor = await db.execute("SELECT status FROM active_turns WHERE turn_id = ?", (stale,))
         (status,) = await cursor.fetchone()

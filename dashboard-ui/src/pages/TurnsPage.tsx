@@ -13,6 +13,13 @@ interface Turn {
   error: string | null;
 }
 
+interface TurnActionResult {
+  ok: boolean;
+  answer?: string;
+  thread_id?: string;
+  status?: string;
+}
+
 interface JournalEntry {
   seq: number;
   status: string;
@@ -100,19 +107,26 @@ export default function TurnsPage() {
     setBusy(turnId);
     setNotice('');
     try {
-      const result = await api<{ ok: boolean; answer?: string; thread_id?: string }>(
+      const result = await api<TurnActionResult>(
         `/api/turns/${turnId}/${action}`,
         { method: 'POST', body: JSON.stringify({}) }
       );
       setNotice(
         action === 'resume'
-          ? `Turn finished: ${(result.answer ?? '').slice(0, 140)}`
+          ? `Turn ${result.status ?? 'updated'}: ${(result.answer ?? '').slice(0, 140)}`
           : `Forked into thread ${result.thread_id}`
       );
       load();
       if (selected?.turn_id === turnId) open(turnId);
-    } catch {
-      setNotice(`${action} failed — see the agent log`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : '';
+      if (action === 'resume' && message.startsWith('409:')) {
+        setNotice('Resume refused: conversation is busy or the turn is no longer resumable.');
+      } else if (action === 'resume' && message.startsWith('503:')) {
+        setNotice('Live agent unavailable. Resume was not started.');
+      } else {
+        setNotice(`${action} failed — inspect the turn before retrying`);
+      }
     } finally {
       setBusy('');
     }

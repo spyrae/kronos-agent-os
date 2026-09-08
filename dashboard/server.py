@@ -67,6 +67,7 @@ def create_app(scheduler=None, agent=None) -> FastAPI:
         docs_url="/api/docs",
         redoc_url=None,
     )
+    app.state.agent = agent
 
     # CORS: the UI is served same-origin by this app; cross-origin is only
     # needed for local dev (vite on another localhost port). Never wildcard —

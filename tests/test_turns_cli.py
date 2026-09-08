@@ -218,3 +218,40 @@ def test_cli_resume_refuses_a_finished_turn(store, capsys, monkeypatch):
 def test_cli_list_on_empty_store(store, capsys):
     assert main(["turns", "list"]) == 0
     assert "No durable turns recorded" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("busy", [False, True])
+def test_cli_resume_loads_mcp_registry_and_cleans_it_up(store, capsys, monkeypatch, busy):
+    import asyncio
+    from contextlib import asynccontextmanager
+
+    from kronos.turn_ownership import TurnBusyError
+
+    monkeypatch.setattr("kronos.cli._runtime_llm_configured", lambda: True)
+    turn_id = asyncio.run(_turn_with_journal(store))
+    tools = [object()]
+    closed = []
+
+    @asynccontextmanager
+    async def managed():
+        try:
+            yield tools
+        finally:
+            closed.append(True)
+
+    class Agent:
+        def __init__(self, **kwargs):
+            assert kwargs["tools"] is tools
+            assert kwargs["session_store"].db_path == store.db_path
+
+        async def resume_interrupted_turn(self, turn):
+            assert turn == turn_id
+            if busy:
+                raise TurnBusyError("busy")
+            return "resumed"
+
+    monkeypatch.setattr("kronos.tools.manager.managed_mcp_tools", managed)
+    monkeypatch.setattr("kronos.graph.KronosAgent", Agent)
+    assert main(["turns", "resume", turn_id]) == (1 if busy else 0)
+    assert ("not started" if busy else "resumed") in capsys.readouterr().out
+    assert closed == [True]

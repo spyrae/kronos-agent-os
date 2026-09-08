@@ -26,6 +26,7 @@ from kronos.effect_state import DurableStateError, EffectClaim, EffectUncertainE
 from kronos.migrations.v001_turn_outcome import migrate as migrate_turn_outcome
 from kronos.migrations.v003_effect_intents import migrate as migrate_effect_intents
 from kronos.outcomes import InvocationOutcome, InvocationStatus
+from kronos.turn_ownership import TurnBusyError, TurnOwnership, own_conversation
 
 log = logging.getLogger("kronos.session")
 
@@ -525,89 +526,83 @@ class SessionStore:
         log.info("Turn retention: pruned %s", pruned)
         return pruned
 
-    async def claim_turns_for_resume(self, *, max_attempts: int = 2) -> list[dict]:
-        """Claim interrupted turns for re-execution, newest-first per thread.
+    async def resumable_turns(self) -> list[dict]:
+        """List candidates only; a running status is not proof of abandonment."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                """SELECT turn_id, thread_id FROM active_turns
+                   WHERE status IN ('running', 'resuming') ORDER BY rowid ASC"""
+            )
+            return [{"turn_id": row[0], "thread_id": row[1]} for row in await cursor.fetchall()]
 
-        Returns rows the caller should finish. Three outcomes are decided here,
-        under one transaction, so two processes cannot both claim a turn:
+    async def claim_turn_for_resume(
+        self, turn_id: str, *, ownership: TurnOwnership, max_attempts: int = 2
+    ) -> dict | None:
+        """Claim one abandoned turn while its conversation stays exclusively held.
 
-        * a turn whose thread already saw a newer turn is marked ``superseded`` —
-          the user asked again, and answering the stale question would be noise;
-        * a turn that has already burned its attempts is failed, so a crash loop
-          cannot resurrect itself forever;
-        * anything else flips to ``resuming`` and is handed back.
+        Both running and resuming rows can be left by a crash. The kernel lock,
+        not a timestamp or status flag, proves no cooperating executor is live.
+        Caller must keep ownership through the entire continuation.
         """
-        claimed: list[dict] = []
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be positive")
+        claimed = None
         async with self._open_db() as db:
             await self._ensure_table(db)
             await db.execute("BEGIN IMMEDIATE")
             try:
                 cursor = await db.execute(
-                    """
-                    SELECT turn_id, thread_id, input_message, attempts, rowid
-                    FROM active_turns
-                    WHERE status = 'running'
-                    ORDER BY rowid ASC
-                    """
+                    """SELECT thread_id, input_message, attempts, rowid
+                       FROM active_turns WHERE turn_id = ? AND status IN ('running', 'resuming')""",
+                    (turn_id,),
                 )
-                rows = await cursor.fetchall()
-
-                for turn_id, thread_id, input_message, attempts, row_id in rows:
-                    # Ordering by rowid, not started_at: CURRENT_TIMESTAMP has
-                    # second resolution, so two turns in the same second would
-                    # both look "not newer" and a stale one would be resumed.
-                    newer = await db.execute(
-                        """
-                        SELECT 1 FROM active_turns
-                        WHERE thread_id = ? AND rowid > ?
-                        LIMIT 1
-                        """,
-                        (thread_id, row_id),
+                row = await cursor.fetchone()
+                if not row:
+                    await db.rollback()
+                    return None
+                thread_id, input_message, attempts, row_id = row
+                ownership.assert_held(self.db_path, thread_id)
+                cursor = await db.execute(
+                    "SELECT 1 FROM pending_approvals WHERE turn_id = ? AND status = 'pending' LIMIT 1",
+                    (turn_id,),
+                )
+                if await cursor.fetchone():
+                    await db.rollback()
+                    return None
+                newer = await db.execute(
+                    "SELECT 1 FROM active_turns WHERE thread_id = ? AND rowid > ? LIMIT 1",
+                    (thread_id, row_id),
+                )
+                if await newer.fetchone():
+                    await db.execute(
+                        """UPDATE active_turns SET status = 'superseded', completed_at = CURRENT_TIMESTAMP,
+                               error = 'superseded by a newer turn in this thread' WHERE turn_id = ?""",
+                        (turn_id,),
                     )
-                    if await newer.fetchone():
-                        await db.execute(
-                            """
-                            UPDATE active_turns
-                            SET status = 'superseded', completed_at = CURRENT_TIMESTAMP,
-                                error = 'superseded by a newer turn in this thread'
-                            WHERE turn_id = ?
-                            """,
-                            (turn_id,),
-                        )
-                        continue
-
-                    if int(attempts or 0) >= max_attempts:
-                        await db.execute(
-                            """
-                            UPDATE active_turns
-                            SET status = 'failed', completed_at = CURRENT_TIMESTAMP,
-                                error = 'gave up after ' || ? || ' resume attempt(s)'
-                            WHERE turn_id = ?
-                            """,
-                            (int(attempts or 0), turn_id),
-                        )
-                        continue
-
+                elif int(attempts or 0) >= max_attempts:
+                    await db.execute(
+                        """UPDATE active_turns SET status = 'failed', completed_at = CURRENT_TIMESTAMP,
+                               error = 'gave up after ' || ? || ' resume attempt(s)' WHERE turn_id = ?""",
+                        (int(attempts or 0), turn_id),
+                    )
+                else:
                     await db.execute(
                         "UPDATE active_turns SET status = 'resuming', attempts = attempts + 1 WHERE turn_id = ?",
                         (turn_id,),
                     )
-                    claimed.append(
-                        {
-                            "turn_id": str(turn_id),
-                            "thread_id": str(thread_id),
-                            "input_message": str(input_message or ""),
-                            "attempts": int(attempts or 0) + 1,
-                        }
-                    )
+                    claimed = {
+                        "turn_id": turn_id,
+                        "thread_id": thread_id,
+                        "input_message": str(input_message or ""),
+                        "attempts": int(attempts or 0) + 1,
+                    }
                 await db.commit()
-            except Exception:
+            except BaseException:
                 await db.rollback()
                 raise
-
         if claimed:
-            log.warning("Claimed %d interrupted turn(s) for resume", len(claimed))
-            self._record_durable_metric("durable_turns_resumed", len(claimed))
+            self._record_durable_metric("durable_turns_resumed", 1)
         return claimed
 
     async def begin_external_effect(
@@ -1159,26 +1154,37 @@ class SessionStore:
             await db.commit()
 
     async def recover_abandoned_turns(self) -> int:
-        """Recover running turns left behind by a crashed/restarted process.
+        """Report interrupted turns without touching any live conversation."""
+        recovered = 0
+        for turn in await self.resumable_turns():
+            try:
+                async with own_conversation(self.db_path, turn["thread_id"], wait=False) as ownership:
+                    recovered += await self._report_abandoned_turn(turn["turn_id"], ownership)
+            except TurnBusyError:
+                continue
+        if recovered:
+            log.warning("Recovered %d abandoned durable turn(s)", recovered)
+            self._record_durable_metric("durable_turns_recovered", recovered)
+        return recovered
 
-        MVP behavior is recover-and-report: append the input, journaled
-        assistant/tool deltas, and an interruption notice to the persisted
-        session. It does not resume tool execution.
-        """
-        recovered_sessions: list[tuple[str, list[BaseMessage]]] = []
+    async def _report_abandoned_turn(self, turn_id: str, ownership: TurnOwnership) -> int:
         async with self._open_db() as db:
             await self._ensure_table(db)
-            cursor = await db.execute(
-                """
-                SELECT turn_id, thread_id, input_message
-                FROM active_turns
-                WHERE status = 'running'
-                ORDER BY started_at ASC
-                """
-            )
-            active_rows = await cursor.fetchall()
-
-            for turn_id, thread_id, input_message in active_rows:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    """SELECT thread_id, input_message FROM active_turns t
+                       WHERE turn_id = ? AND status IN ('running', 'resuming')
+                         AND NOT EXISTS (SELECT 1 FROM pending_approvals p
+                             WHERE p.turn_id = t.turn_id AND p.status = 'pending')""",
+                    (turn_id,),
+                )
+                row = await cursor.fetchone()
+                if not row:
+                    await db.rollback()
+                    return 0
+                thread_id, input_message = row
+                ownership.assert_held(self.db_path, thread_id)
                 session_cursor = await db.execute(
                     "SELECT messages FROM sessions WHERE thread_id = ?",
                     (thread_id,),
@@ -1239,18 +1245,12 @@ class SessionStore:
                     """,
                     (turn_id,),
                 )
-                recovered_sessions.append((thread_id, trimmed))
-
-            await db.commit()
-
-        for thread_id, messages in recovered_sessions:
-            self._index_to_swarm_fts(thread_id, messages)
-
-        recovered = len(recovered_sessions)
-        if recovered:
-            log.warning("Recovered %d abandoned durable turn(s)", recovered)
-            self._record_durable_metric("durable_turns_recovered", recovered)
-        return recovered
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
+        self._index_to_swarm_fts(thread_id, trimmed)
+        return 1
 
     def _record_durable_metric(self, metric: str, delta: int) -> None:
         """Record durable-turn metrics in swarm_metrics when available."""
