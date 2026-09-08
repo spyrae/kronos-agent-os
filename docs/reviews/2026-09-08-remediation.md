@@ -29,7 +29,7 @@
 | F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | В работе: transactional outbox планов и восстановленных session turns проверен; обычные ответы, остальные producers и operator repair ещё нужны | Ожидает |
 | F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | В работе: intent/journal boundary проверен; полный перечень путей и reconciliation не закрыты | Ожидает |
 | F11 | Один resume на turn; live registry и atomic ownership | Исправлено и проверено локально | Нужен согласованный rollout без старых исполнителей |
-| F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | В работе: factory/fallback/supervisor и прямые ASO/GEO/Vision/scripts/Whisper проверены локально; Mem0, durable session ledger, reservations и unknown outcomes ещё нужны | Ожидает |
+| F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | В работе: factory, прямые ASO/GEO/Vision/scripts/Whisper и Mem0 boundary проверены с fake transports; реальный Mem0 1.0.7, durable session ledger, reservations и unknown outcomes ещё нужны | Ожидает |
 | F13 | Честный scoped reset по всем слоям, включая background writers | Ожидает | Ожидает |
 | F14 | Desired/effective runtime settings совпадают или restart явно указан | Ожидает | Ожидает |
 | F15 | Model/memory I/O не блокирует event loop; responsiveness test | Ожидает | Ожидает |
@@ -948,3 +948,55 @@ session scope, межпроцессные reservations, retries/reconciliation �
 Конфигурация, зависимости, DB schema и UI не менялись; 12 dirty main-файлов
 не затронуты. До rollout по-прежнему нужно согласованно объединить ветку с
 main isolation/cron-rotation изменениями, не потеряв пользовательские правки.
+
+### F12 — этап 4: Mem0 completion boundary и полный invocation context
+
+- Новый `BudgetedMemory` оборачивает используемые add/search/get_all. Для каждой
+  операции создаётся shallow copy адаптера с отдельным model wrapper; storage
+  resources остаются прежними. Общий singleton не получает изменяемый контекст
+  чужого чата. Неизвестные методы, graph/reranker и неподдержанный SDK shape
+  отклоняются, а не проксируются без проверки.
+- Проверка стоит непосредственно перед `chat.completions.create`, включая каждый
+  новый extraction/update pass. Исходный SDK response учитывается до того, как
+  parser Mem0 отбросит usage или упадёт. При downgrade используются factory lite,
+  исходные messages/JSON options/tools; результат адаптирован к parser contract,
+  повторная запись стоимости поверх factory callback не добавляется.
+- Каждый внутренний generate call входит в собственную копию Context, поэтому
+  raw ThreadPoolExecutor Mem0 не теряет audit/session/force-lite/execution scope.
+  Проверены одновременно два caller scope и несколько workers одной операции.
+- Контекст охватывает весь invocation: retrieval, основную модель, background
+  storage и compaction. Внешний executor получает `copy_context().run`. Ранее
+  retrieval/compaction были снаружи audit scope, а background не переносил его.
+- Без DeepSeek key Mem0 не создаёт неявный default API provider. A05 этим **не
+  закрыт**: graph-level memory gate ещё требует исправления. FTS fallback внутри
+  search_memories сохраняется.
+- **2459 passed, 66 integration deselected, 1 warning**, 36.39 sec;
+  **27 crash tests passed**, 22.61 sec; focused локальный набор — **87 passed**.
+  19 новых test cases. Ruff/F821/compileall/diff-check — PASS. Один тест использует
+  настоящий BaseChatModel с callback, остальные transports — fake, ledger реальный
+  изолированный SQLite. Production, зависимости и конфигурация не менялись.
+
+Файлы: `kronos/memory/model_boundary.py`, `kronos/memory/store.py`,
+`kronos/graph.py`, `tests/test_mem0_budget.py`, ADR-0019, индекс ADR и этот реестр.
+Проверить: `KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python
+-m pytest tests/test_mem0_budget.py tests/test_model_budget.py tests/test_memory.py
+tests/test_plan_stop.py -q`; full `-m 'not integration'` и crash suite — как выше.
+Логи: `/tmp/kaos-mem0-budget-red.txt`, `/tmp/kaos-mem0-budget-focused-local.txt`,
+`/tmp/kaos-mem0-budget-full.txt`, `/tmp/kaos-mem0-budget-kill.txt`.
+
+**Отдельный verification gap:** диагностический запуск прежнего
+`tests/test_graph_contract.py` дал 6 failed / 2 passed из-за отсутствия provider
+configuration при построении модели перед замоканным react_loop. Такой же результат
+подтверждён с `kronos/graph.py` из HEAD 530717b до этих правок, без реальных моделей.
+Логи: `/tmp/kaos-mem0-budget-focused.txt`, `/tmp/kaos-graph-contract-baseline.txt`.
+Это не зелёная интеграционная приёмка. Нужен самостоятельный фикс test fixture,
+чтобы эти восемь локальных контрактов не исключались из обычного regression.
+
+**Обязательный остаток:** Mem0 локально отсутствует; в приватном inventory
+production указан **mem0ai 1.0.7**. Запрошено разрешение установить только эту уже
+объявленную optional-зависимость во временное окружение для реальной package-level
+проверки с fake network. Разрешение/установка/проверка пока не выполнены. Чтение
+upstream source и fake Mem0 tests этого не заменяют. Также остаются durable session
+ledger, reservation, unknown outcomes/SDK retries и reconciliation; F12 не закрыт.
+F13 background writer/reset ownership, F15 event-loop responsiveness, A02 scoping,
+A05 keyless memory и остальные F/A/PROD/V пункты не исключены из цели.

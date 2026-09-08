@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
+from contextvars import copy_context
 from typing import Any
 
 from langchain_core.messages import (
@@ -915,6 +916,21 @@ class KronosAgent:
         return await self._invoke_owned(**kwargs)
 
     async def _invoke_owned(self, **kwargs) -> InvocationOutcome:
+        """Attribute retrieval, model, background memory and compaction together."""
+        audit_token = set_tool_audit_context(
+            agent=settings.agent_name,
+            thread_id=kwargs["thread_id"],
+            user_id=kwargs.get("user_id", ""),
+            session_id=kwargs.get("session_id", ""),
+            source_kind=kwargs.get("source_kind", "user"),
+        )
+        try:
+            with model_budget_scope(kwargs.get("force_tier")):
+                return await self._invoke_execution_scoped(**kwargs)
+        finally:
+            reset_tool_audit_context(audit_token)
+
+    async def _invoke_execution_scoped(self, **kwargs) -> InvocationOutcome:
         """Keep the whole plan invocation, including memory, in its stop scope."""
         thread_id = kwargs["thread_id"]
         if not thread_id.startswith("plan:"):
@@ -1120,7 +1136,7 @@ class KronosAgent:
             if thread_id.startswith("plan:"):
                 await run_sync_owned(store_memories_background, mem_state)
             else:
-                asyncio.get_event_loop().run_in_executor(None, store_memories_background, mem_state)
+                asyncio.get_running_loop().run_in_executor(None, copy_context().run, store_memories_background, mem_state)
 
         # Step 5: Compact if needed (only for real user turns).
         #

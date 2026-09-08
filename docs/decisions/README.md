@@ -23,3 +23,4 @@ gets a new record and marks the previous one superseded.
 | 0016 | [Shared Codex process ownership](ADR-0016-shared-codex-process-ownership.md) | accepted | 2026-09-08 |
 | 0017 | [Direct model budget boundary](ADR-0017-direct-model-budget-boundary.md) | accepted | 2026-09-08 |
 | 0018 | [Voice admission and duration accounting](ADR-0018-voice-budget-and-duration-accounting.md) | accepted | 2026-09-08 |
+| 0019 | [Mem0 operation model scope](ADR-0019-mem0-operation-model-scope.md) | accepted | 2026-09-08 |

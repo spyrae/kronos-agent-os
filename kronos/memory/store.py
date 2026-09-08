@@ -11,6 +11,7 @@ from functools import lru_cache
 from kronos.config import settings
 from kronos.memory import fts
 from kronos.memory.hybrid import merge_hybrid_results
+from kronos.memory.model_boundary import BudgetedMemory
 from kronos.security.pii import mask_pii
 
 log = logging.getLogger("kronos.memory")
@@ -19,6 +20,8 @@ log = logging.getLogger("kronos.memory")
 @lru_cache(maxsize=1)
 def get_memory():
     """Get or create Mem0 Memory instance (singleton)."""
+    if not settings.deepseek_api_key:
+        raise RuntimeError("DeepSeek memory extraction is not configured")
     from mem0 import Memory
 
     config = {
@@ -65,7 +68,7 @@ def get_memory():
         collection_name,
     )
 
-    return Memory.from_config(config)
+    return BudgetedMemory(Memory.from_config(config))
 
 
 def search_memories(query: str, user_id: str, limit: int = 5) -> list[str]:
