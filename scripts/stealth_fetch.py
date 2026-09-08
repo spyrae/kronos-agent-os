@@ -40,6 +40,7 @@ EXIT_FETCH_FAILED = 4
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("url", help="the page to fetch")
+    parser.add_argument("--proxy", required=True, help="the caller's public-web guard proxy")
     parser.add_argument(
         "--settle",
         type=int,
@@ -66,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_BACKEND_MISSING
 
     try:
-        html = _fetch(launch, args.url, timeout_ms=args.timeout, settle_ms=args.settle)
+        html = _fetch(launch, args.url, proxy=args.proxy, timeout_ms=args.timeout, settle_ms=args.settle)
     except Exception as e:
         print(f"stealth fetch failed: {type(e).__name__}: {e}", file=sys.stderr)
         return EXIT_FETCH_FAILED
@@ -79,9 +80,17 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _fetch(launch, url: str, *, timeout_ms: int, settle_ms: int) -> str:
+def _fetch(launch, url: str, *, proxy: str, timeout_ms: int, settle_ms: int) -> str:
     """Drive the browser and hand back the document it ended up with."""
-    browser = launch(headless=True)
+    browser = launch(
+        headless=True,
+        proxy={"server": proxy, "bypass": "<-loopback>"},
+        args=[
+            "--proxy-bypass-list=<-loopback>",
+            "--disable-quic",
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+        ],
+    )
     try:
         page = browser.new_page()
         page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")

@@ -156,3 +156,41 @@ def test_meta_watermark(ledger):
     assert ledger.get_meta("last_processed_email_ts") == "2026-07-05T12:00:00"
     ledger.set_meta("last_processed_email_ts", "2026-07-05T13:00:00")
     assert ledger.get_meta("last_processed_email_ts") == "2026-07-05T13:00:00"
+
+
+def test_item_snapshot_and_claim_survive_restart(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from kronos.cron.expenses.extract import ExtractedExpense
+
+    path = tmp_path / "ledger.db"
+    one = ExpenseLedger(SafeDB(path))
+    two = ExpenseLedger(SafeDB(path))
+    exp = ExtractedExpense("A", 100, "IDR", "Food", 0.9, "2026-07-05")
+    one.prepare_items("m", "grab", [exp])
+    two.prepare_items("m", "grab", [ExtractedExpense("changed", 999, "USD", "Food", 0.9)])
+    with ThreadPoolExecutor(2) as pool:
+        claims = list(pool.map(lambda ledger: ledger.claim_item("m", 0), [one, two]))
+    assert sorted(claims) == [False, True]
+    assert '"description": "A"' in two.list_items("m")[0]["expense_json"]
+    reopened = ExpenseLedger(SafeDB(path))
+    assert not reopened.needs_processing("m")
+    assert len(reopened.uncertain_items()) == 1
+    assert reopened.finalize_message("m", "grab") == "error"
+
+
+def test_migration_preserves_legacy_data_and_is_idempotent(tmp_path):
+    from kronos.cron.expenses.ledger import _SCHEMA
+
+    db = SafeDB(tmp_path / "legacy.db")
+    db.init_schema(lambda conn: conn.executescript(_SCHEMA))
+    db.write(
+        "INSERT INTO processed_emails(message_id, source, status, processed_at, updated_at) "
+        "VALUES ('legacy', 'grab', 'recorded', 'before', 'before')"
+    )
+    ExpenseLedger(db)
+    again = ExpenseLedger(db)
+    assert again.is_processed("legacy")
+    assert again.get("legacy")["updated_at"] == "before"
+    assert again.list_items("legacy") == []
+    assert again.get_meta("schema_expense_items") == "1"

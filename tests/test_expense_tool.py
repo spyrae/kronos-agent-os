@@ -123,14 +123,15 @@ def test_add_expense_idr_legacy_tranche_yields_no_usd(monkeypatch, tmp_path):
     assert "| 1 | 01.06.2026 | 1,000 | 800 |" in budget_file.read_text()
 
 
-def test_add_expense_rub_writes_amount_rub_without_fifo(monkeypatch):
+def test_add_expense_rub_derives_usd_from_cross_rate_without_fifo(monkeypatch, tmp_path):
+    """A RUB charge borrows the tranche rates for USD but never spends the IDR budget."""
+    budget_file = tmp_path / "BUDGET.md"
+    original_budget = _budget_text()
+    budget_file.write_text(original_budget)
+
     captured_properties = {}
 
-    monkeypatch.setattr(
-        expense,
-        "_budget_path",
-        lambda: (_ for _ in ()).throw(AssertionError("RUB must not read budget")),
-    )
+    monkeypatch.setattr(expense, "_budget_path", lambda: str(budget_file))
     monkeypatch.setattr(
         expense,
         "_schedule_duplicate_cleanup",
@@ -155,20 +156,51 @@ def test_add_expense_rub_writes_amount_rub_without_fifo(monkeypatch):
     assert "✅ 'JourneyBay (хостинг)' — 496 ₽" in result
     assert "Остаток" not in result
     assert captured_properties["Amount_RUB"] == {"number": 496}
+    # cross rate = 16300 / 233.5 = 69.807 RUB per USD
+    assert captured_properties["Amount_USD"] == {"number": round(496 * 233.5 / 16300, 2)}
+    assert captured_properties["Rate"] == {"number": 233.5}
+    assert captured_properties["Rate_USD"] == {"number": 16300.0}
     assert "Amount_IDR" not in captured_properties
-    assert "Amount_USD" not in captured_properties
-    assert "Rate" not in captured_properties
-    assert "Rate_USD" not in captured_properties
+    # The IDR budget is untouched — a RUB charge only reads the rates.
+    assert budget_file.read_text() == original_budget
 
 
-def test_add_expense_usd_writes_amount_usd_without_fifo(monkeypatch):
+def test_add_expense_rub_without_budget_writes_rub_only(monkeypatch, tmp_path):
+    """No BUDGET.md means no cross rate — the charge still lands, USD stays empty."""
     captured_properties = {}
 
-    monkeypatch.setattr(
-        expense,
-        "_budget_path",
-        lambda: (_ for _ in ()).throw(AssertionError("USD must not read budget")),
+    monkeypatch.setattr(expense, "_budget_path", lambda: str(tmp_path / "missing.md"))
+
+    def fake_notion_create_page(properties):
+        captured_properties.update(properties)
+        return {"id": "page-id"}
+
+    monkeypatch.setattr(expense, "_notion_create_page", fake_notion_create_page)
+
+    result = expense.add_expense.invoke(
+        {
+            "description": "Склад в Москве",
+            "amount": 1455,
+            "currency": "RUB",
+            "category": "Other",
+        }
     )
+
+    assert "✅ 'Склад в Москве' — 1,455 ₽" in result
+    assert captured_properties["Amount_RUB"] == {"number": 1455}
+    assert "Amount_USD" not in captured_properties
+    assert "Rate" not in captured_properties
+
+
+def test_add_expense_usd_derives_rub_from_cross_rate_without_fifo(monkeypatch, tmp_path):
+    """A USD charge is the mirror image: RUB is derived, the IDR budget is untouched."""
+    budget_file = tmp_path / "BUDGET.md"
+    original_budget = _budget_text()
+    budget_file.write_text(original_budget)
+
+    captured_properties = {}
+
+    monkeypatch.setattr(expense, "_budget_path", lambda: str(budget_file))
     monkeypatch.setattr(
         expense,
         "_schedule_duplicate_cleanup",
@@ -193,10 +225,11 @@ def test_add_expense_usd_writes_amount_usd_without_fifo(monkeypatch):
     assert "✅ 'ChatGPT' — 12.50 $" in result
     assert "Остаток" not in result
     assert captured_properties["Amount_USD"] == {"number": 12.5}
+    assert captured_properties["Amount_RUB"] == {"number": round(12.5 * 16300 / 233.5)}
+    assert captured_properties["Rate"] == {"number": 233.5}
+    assert captured_properties["Rate_USD"] == {"number": 16300.0}
     assert "Amount_IDR" not in captured_properties
-    assert "Amount_RUB" not in captured_properties
-    assert "Rate" not in captured_properties
-    assert "Rate_USD" not in captured_properties
+    assert budget_file.read_text() == original_budget
 
 
 def test_add_expense_split_full_halves_everything_for_idr(monkeypatch, tmp_path):
@@ -416,3 +449,136 @@ def test_notion_create_page_requires_expenses_database_id(monkeypatch):
 
     with pytest.raises(RuntimeError, match="NOTION_EXPENSES_DB_ID not configured"):
         expense._notion_create_page({})
+
+
+def test_fifo_prices_the_deficit_at_the_newest_tranche():
+    """Budget runs dry mid-charge: the shortfall is priced at the newest tranche's rates."""
+    tranches = [
+        {
+            "num": 1,
+            "date": "01.06.2026",
+            "total": 1_000,
+            "remaining": 1_000,
+            "rate": 200,
+            "rate_usd": 16000,
+            "note": "old",
+        },
+        {
+            "num": 2,
+            "date": "02.06.2026",
+            "total": 5_000,
+            "remaining": 0,
+            "rate": 250,
+            "rate_usd": 17000,
+            "note": "newest",
+        },
+    ]
+
+    result = expense._fifo_calculate(3_000, tranches)
+
+    # 1,000 at 200 = 5 ₽, the 2,000 deficit at the newest 250 = 8 ₽
+    assert result.amount_rub == 13
+    assert result.amount_usd == round(1_000 / 16_000 + 2_000 / 17_000, 2)
+    assert result.deficit_idr == 2_000
+    # The debt is parked on the tranche that priced it, not silently dropped.
+    assert tranches[0]["remaining"] == 0
+    assert tranches[1]["remaining"] == -2_000
+
+
+def test_fifo_without_deficit_reports_none():
+    tranches = [
+        {
+            "num": 1,
+            "date": "01.06.2026",
+            "total": 1_000_000,
+            "remaining": 1_000_000,
+            "rate": 233.5,
+            "rate_usd": 16300,
+            "note": "Test",
+        }
+    ]
+
+    result = expense._fifo_calculate(411_500, tranches)
+
+    assert result.deficit_idr == 0
+    assert tranches[0]["remaining"] == 1_000_000 - 411_500
+
+
+def test_add_expense_over_budget_converts_and_flags_stale_rate(monkeypatch, tmp_path):
+    """An IDR charge past the budget is still converted — and says so in the reply."""
+    budget_file = tmp_path / "BUDGET.md"
+    budget_file.write_text(_budget_text(remaining=1_000))
+
+    captured_properties = {}
+
+    monkeypatch.setattr(expense, "_budget_path", lambda: str(budget_file))
+    monkeypatch.setattr(expense, "_schedule_duplicate_cleanup", lambda **kwargs: None)
+
+    def fake_notion_create_page(properties):
+        captured_properties.update(properties)
+        return {"id": "page-id"}
+
+    monkeypatch.setattr(expense, "_notion_create_page", fake_notion_create_page)
+
+    result = expense.add_expense.invoke(
+        {
+            "description": "Payment to D'XAVIER FLORIST",
+            "amount": 250_000,
+            "currency": "IDR",
+            "category": "Shopping",
+        }
+    )
+
+    # Same single rate throughout, so the whole charge converts at 233.5 / 16300.
+    assert captured_properties["Amount_IDR"] == {"number": 250_000}
+    assert captured_properties["Amount_RUB"] == {"number": round(250_000 / 233.5)}
+    assert captured_properties["Amount_USD"] == {"number": round(250_000 / 16_300, 2)}
+    assert expense.FALLBACK_RATE_NOTE in result
+    assert "249,000 IDR сверх остатка" in result
+    # The overspend is carried as a negative remainder for the next top-up to settle.
+    assert expense._parse_tranches(budget_file.read_text())[0]["remaining"] == -249_000
+
+
+def test_add_expense_within_budget_has_no_stale_rate_note(monkeypatch, tmp_path):
+    budget_file = tmp_path / "BUDGET.md"
+    budget_file.write_text(_budget_text())
+
+    monkeypatch.setattr(expense, "_budget_path", lambda: str(budget_file))
+    monkeypatch.setattr(expense, "_schedule_duplicate_cleanup", lambda **kwargs: None)
+    monkeypatch.setattr(expense, "_notion_create_page", lambda properties: {"id": "page-id"})
+
+    result = expense.add_expense.invoke(
+        {"description": "Кафе", "amount": 411_500, "currency": "IDR", "category": "Food"}
+    )
+
+    assert expense.FALLBACK_RATE_NOTE not in result
+
+
+def test_add_tranche_settles_parked_deficit(monkeypatch, tmp_path):
+    """A top-up covers the overspend first — the same rupiah cannot be spent twice."""
+    budget_file = tmp_path / "BUDGET.md"
+    budget_file.write_text(_budget_text(remaining=-249_000))
+
+    monkeypatch.setattr(expense, "_budget_path", lambda: str(budget_file))
+
+    result = expense.add_tranche.invoke(
+        {"amount_idr": 14_000_000, "rate": 216.9, "rate_usd": 17701, "note": "Пополнение"}
+    )
+
+    tranches = expense._parse_tranches(budget_file.read_text())
+    assert tranches[0]["remaining"] == 0  # debt cleared
+    assert tranches[1]["remaining"] == 14_000_000 - 249_000
+    assert "Погашен перерасход: 249,000 IDR" in result
+
+
+def test_add_tranche_without_deficit_keeps_full_amount(monkeypatch, tmp_path):
+    budget_file = tmp_path / "BUDGET.md"
+    budget_file.write_text(_budget_text(remaining=5_000))
+
+    monkeypatch.setattr(expense, "_budget_path", lambda: str(budget_file))
+
+    result = expense.add_tranche.invoke({"amount_idr": 1_000_000, "rate": 216.9, "rate_usd": 17701})
+
+    tranches = expense._parse_tranches(budget_file.read_text())
+    assert tranches[1]["remaining"] == 1_000_000
+    assert "Погашен перерасход" not in result

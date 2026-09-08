@@ -422,3 +422,288 @@ async def test_already_processed_is_not_refetched(ledger, notes):
     assert counts["emails"] == 0
     assert writer.calls == []
     assert gmail.archived == []
+
+
+@pytest.mark.asyncio
+async def test_stale_rate_charges_get_their_own_report_block(ledger, notes):
+    """A charge converted past the exhausted budget is called out, not buried in the list."""
+    gmail = FakeGmail(
+        {"grab": [{"message_id": "g1", "thread_id": ""}]},
+        {"g1": EmailMessage("g1", "Grab receipt 250,000 IDR", "grab")},
+    )
+    mapping = {"g1": [ExtractedExpense("GrabFood", 250000, "IDR", "Food", 0.9, "2026-07-05")]}
+    writer = Writer(result=f"✅ 'GrabFood' — 250,000 IDR | {proc.FALLBACK_RATE_NOTE} (223,597 IDR сверх остатка)")
+
+    counts, _ = await _run(gmail, ledger, notes, mapping=mapping, writer=writer)
+
+    assert counts["recorded"] == 1
+    report = notes.captured[0][0]
+    assert "Бюджет IDR исчерпан" in report
+    assert "1 расход(ов) пересчитаны" in report
+    assert "[grab] 250,000 IDR — GrabFood" in report
+
+
+@pytest.mark.asyncio
+async def test_normal_charge_leaves_no_stale_rate_block(ledger, notes):
+    gmail = FakeGmail(
+        {"grab": [{"message_id": "g1", "thread_id": ""}]},
+        {"g1": EmailMessage("g1", "Grab receipt 41,500 IDR", "grab")},
+    )
+    mapping = {"g1": [ExtractedExpense("GrabFood", 41500, "IDR", "Food", 0.9, "2026-07-05")]}
+
+    await _run(gmail, ledger, notes, mapping=mapping, writer=Writer(result="✅ 'GrabFood' — 41,500 IDR = 191 ₽"))
+
+    assert "Бюджет IDR исчерпан" not in notes.captured[0][0]
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+async def test_extraction_failure_does_not_skip_or_archive_and_next_email_runs(ledger, notes, monkeypatch, dry_run):
+    monkeypatch.setenv("EMAIL_EXPENSES_ARCHIVE", "true")
+    gmail = FakeGmail(
+        {"grab": [{"message_id": "bad"}, {"message_id": "good"}]},
+        {"bad": EmailMessage("bad", "sensitive email"), "good": EmailMessage("good", "receipt")},
+    )
+
+    def extract(email, model=None):
+        if email.message_id == "bad":
+            raise TimeoutError("sensitive email must not appear in logs")
+        return [ExtractedExpense("Lunch", 42000, "IDR", "Food", 0.9, "2026-07-05")]
+
+    writer = Writer()
+    counts = await proc.run_email_expenses(
+        gmail_client=gmail,
+        ledger=ledger,
+        extractor=extract,
+        auditor=_auditor(),
+        expense_writer=writer,
+        notifier=notes,
+        dry_run=dry_run,
+    )
+    assert counts["errors"] == 1
+    assert counts["skipped"] == 0
+    assert counts["recorded"] == 1
+    assert not ledger.is_processed("bad")
+    assert "bad" not in gmail.archived
+    assert "повторная попытка" in notes.captured[0][0]
+    assert "sensitive email" not in notes.captured[0][0]
+    if dry_run:
+        assert ledger.get("bad") is None
+        assert writer.calls == []
+    else:
+        assert ledger.get("bad")["status"] == "error"
+        assert len(writer.calls) == 1
+
+    # The failed message must survive even after Gmail's lookback window ends.
+    if not dry_run:
+        gmail.by_source = {}
+        counts, retried = await _run(
+            gmail,
+            ledger,
+            notes,
+            mapping={
+                "bad": [ExtractedExpense("Retry", 43000, "IDR", "Food", 0.9, "2026-07-05")],
+            },
+        )
+        assert counts["emails"] == 1
+        assert len(retried.calls) == 1
+        assert ledger.is_processed("bad")
+
+
+async def test_real_extractor_timeout_keeps_email_nonterminal(ledger, notes):
+    from unittest.mock import Mock
+
+    model = Mock()
+    model.invoke.side_effect = TimeoutError("LLM unavailable")
+    gmail = FakeGmail({"grab": [{"message_id": "g1"}]}, {"g1": EmailMessage("g1", "receipt")})
+    writer = Writer()
+    counts = await proc.run_email_expenses(
+        gmail_client=gmail,
+        ledger=ledger,
+        model=model,
+        expense_writer=writer,
+        notifier=notes,
+    )
+    assert counts["errors"] == 1
+    assert counts["skipped"] == 0
+    assert not ledger.is_processed("g1")
+    assert ledger.get("g1")["status"] == "error"
+    assert writer.calls == []
+    assert gmail.archived == []
+
+
+@pytest.mark.parametrize("currency", ["IDR", "RUB", "USD"])
+async def test_partial_success_retries_only_failed_item_from_frozen_snapshot(ledger, notes, monkeypatch, currency):
+    monkeypatch.setenv("EMAIL_EXPENSES_ARCHIVE", "true")
+    gmail = FakeGmail({"grab": [{"message_id": "g1"}]}, {"g1": EmailMessage("g1", "two charges")})
+    first = ExtractedExpense("First", 100, currency, "Food", 0.9, "2026-07-05")
+    second = ExtractedExpense("Second", 200, currency, "Food", 0.9, "2026-07-05")
+    attempts = []
+    extractions = []
+
+    def extract(email, model=None):
+        extractions.append(email.message_id)
+        assert len(extractions) == 1, "a retry must reuse the original extraction"
+        return [first, second]
+
+    def write(payload):
+        attempts.append(payload)
+        return "[ERROR] rejected" if len(attempts) == 2 else "✅ recorded"
+
+    async def run(active_ledger):
+        return await proc.run_email_expenses(
+            gmail_client=gmail,
+            ledger=active_ledger,
+            extractor=extract,
+            auditor=_auditor(),
+            expense_writer=write,
+            notifier=notes,
+        )
+
+    counts = await run(ledger)
+    assert counts["recorded"] == 1 and counts["errors"] == 1
+    assert not ledger.is_processed("g1")
+    assert gmail.archived == []
+    assert [row["status"] for row in ledger.list_items("g1")] == ["recorded", "error"]
+    # Simulate restart, changed email content and expiry of the Gmail window.
+    gmail.by_source = {}
+    gmail.messages["g1"].text = "changed or shortened body"
+    reopened = ExpenseLedger(SafeDB(ledger._db._db_path))
+    counts = await run(reopened)
+    assert counts["recorded"] == 1
+    assert [p["description"] for p in attempts] == ["First", "Second", "Second"]
+    assert [p["ref"] for p in attempts] == ["g1:1", "g1:2", "g1:2"]
+    assert reopened.is_processed("g1")
+    assert gmail.archived == ["g1"]
+
+
+async def test_pending_sibling_does_not_block_retry_or_allow_early_archive(ledger, notes, monkeypatch):
+    from kronos.tools import expense_pending as ep
+
+    monkeypatch.setenv("EMAIL_EXPENSES_ARCHIVE", "true")
+    gmail = FakeGmail({"grab": [{"message_id": "g1"}]}, {"g1": EmailMessage("g1", "three charges")})
+    mapping = {
+        "g1": [
+            ExtractedExpense(name, amount, "IDR", "Food", 0.9, "2026-07-05")
+            for name, amount in [("Good", 100), ("Pending", 200), ("Retry", 300)]
+        ]
+    }
+    calls = []
+
+    def audit(text, exp, model=None):
+        return _auditor(ok=exp.description != "Pending")(text, exp, model)
+
+    def write(payload):
+        calls.append(payload["description"])
+        return "[ERROR] rejected" if payload["description"] == "Retry" and calls.count("Retry") == 1 else "✅ ok"
+
+    await _run(gmail, ledger, notes, mapping=mapping, auditor=audit, writer=write)
+    assert [r["status"] for r in ledger.list_items("g1")] == ["recorded", "pending", "error"]
+    assert ledger.needs_processing("g1")
+    assert gmail.archived == []
+    # Retry must run despite has_pending(), and must not enqueue the same item again.
+    await _run(gmail, ledger, notes, mapping={}, auditor=audit, writer=write)
+    assert calls == ["Good", "Retry", "Retry"]
+    assert len(ledger.list_pending()) == 1
+    assert not ledger.is_processed("g1")
+    assert gmail.archived == []
+    monkeypatch.setattr(ep, "get_ledger", lambda: ledger)
+    monkeypatch.setattr(ep, "get_gmail_client", lambda: gmail)
+    from unittest.mock import Mock
+
+    add = Mock()
+    add.invoke.return_value = "✅ ok"
+    monkeypatch.setattr(ep, "add_expense", add)
+    pending_id = ledger.list_pending()[0]["id"]
+    await ep.resolve_pending_expense.ainvoke({"pending_id": pending_id, "category": "Food"})
+    assert add.invoke.call_args.args[0]["ref"] == "g1:2"
+    assert ledger.is_processed("g1")
+    assert gmail.archived == ["g1"]
+
+
+async def test_equal_charges_in_one_email_are_not_cross_source_duplicates(ledger, notes):
+    gmail = FakeGmail({"grab": [{"message_id": "g1"}]}, {"g1": EmailMessage("g1", "two equal charges")})
+    mapping = {"g1": [ExtractedExpense(name, 100, "IDR", "Food", 0.9, "2026-07-05") for name in ["A", "B"]]}
+    counts, writer = await _run(gmail, ledger, notes, mapping=mapping)
+    assert counts["recorded"] == 2
+    assert len(writer.calls) == 2
+    assert writer.calls[0]["ref"] != writer.calls[1]["ref"]
+
+
+async def test_every_successful_item_is_available_for_cross_source_dedup(ledger, notes):
+    gmail = FakeGmail(
+        {"grab": [{"message_id": "g1"}], "wondr": [{"message_id": "w1"}]},
+        {"g1": EmailMessage("g1", "two charges"), "w1": EmailMessage("w1", "bank copy of second")},
+    )
+    mapping = {
+        "g1": [
+            ExtractedExpense("A", 100, "IDR", "Food", 0.9, "2026-07-05"),
+            ExtractedExpense("B", 200, "IDR", "Food", 0.9, "2026-07-05"),
+        ],
+        "w1": [ExtractedExpense("Bank B", 200, "IDR", "Food", 0.9, "2026-07-05")],
+    }
+    counts, writer = await _run(gmail, ledger, notes, mapping=mapping)
+    assert counts["recorded"] == 2
+    assert counts["duplicates"] == 1
+    assert len(writer.calls) == 2
+
+
+async def test_ambiguous_write_is_not_replayed_or_archived(ledger, notes, monkeypatch):
+    monkeypatch.setenv("EMAIL_EXPENSES_ARCHIVE", "true")
+    gmail = FakeGmail({"grab": [{"message_id": "g1"}]}, {"g1": EmailMessage("g1", "two charges")})
+    mapping = {
+        "g1": [
+            ExtractedExpense(name, amount, "USD", "Food", 0.9, "2026-07-05")
+            for name, amount in [("Unknown", 10), ("Good", 20)]
+        ]
+    }
+    calls = []
+
+    def write(payload):
+        calls.append(payload["description"])
+        if payload["description"] == "Unknown":
+            raise TimeoutError("response lost after POST")
+        return "✅ ok"
+
+    await _run(gmail, ledger, notes, mapping=mapping, writer=write)
+    await _run(gmail, ledger, notes, mapping=mapping, writer=write)
+    assert calls == ["Unknown", "Good"]
+    assert [row["status"] for row in ledger.list_items("g1")] == ["uncertain", "recorded"]
+    assert not ledger.is_processed("g1")
+    assert gmail.archived == []
+    assert "нужна сверка" in notes.captured[-1][0]
+
+
+async def test_partial_dry_run_leaves_item_journal_empty(ledger, notes):
+    gmail = FakeGmail({"grab": [{"message_id": "g1"}]}, {"g1": EmailMessage("g1", "two charges")})
+    expenses = [ExtractedExpense("A", 100, "IDR", "Food", 0.9), ExtractedExpense("B", 100, "EUR", "Food", 0.9)]
+    writer = Writer()
+    counts = await proc.run_email_expenses(
+        gmail_client=gmail,
+        ledger=ledger,
+        extractor=_extractor({"g1": expenses}),
+        auditor=_auditor(),
+        expense_writer=writer,
+        notifier=notes,
+        dry_run=True,
+    )
+    assert counts["recorded"] == 1 and counts["pending"] == 1
+    assert writer.calls == []
+    assert ledger.list_items("g1") == []
+    assert ledger.list_pending() == []
+    assert ledger.get("g1") is None
+
+
+async def test_restart_finalizes_completed_items_without_rewriting(ledger, notes, monkeypatch):
+    monkeypatch.setenv("EMAIL_EXPENSES_ARCHIVE", "true")
+    expenses = [ExtractedExpense("A", 10, "USD", "Food", 0.9, "2026-07-05")]
+    ledger.prepare_items("g1", "grab", expenses)
+    assert ledger.claim_item("g1", 0)
+    ledger.finish_item("g1", 0, "recorded")
+    # Crash after recording the item but before finalizing/archiving the email.
+    gmail = FakeGmail({}, {"g1": EmailMessage("g1", "receipt")})
+    counts, writer = await _run(gmail, ledger, notes, mapping={})
+    assert writer.calls == []
+    assert counts["emails"] == 1
+    assert counts["recorded"] == 0
+    assert ledger.is_processed("g1")
+    assert gmail.archived == ["g1"]

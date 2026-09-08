@@ -93,6 +93,11 @@ _BROWSER_TOOLS: list[BaseTool] = [
 # before the model sees them.
 mark_untrusted(_BROWSER_TOOLS, reason="browser")
 
+# Exposing these to the supervisor must not turn a read session into an
+# unapproved submit/delete action. JavaScript and form fields can mutate too.
+for _mutation in (browser_click, browser_type, browser_evaluate):
+    _mutation.metadata = {**(_mutation.metadata or {}), "needs_approval": True, "side_effect": True}
+
 
 def get_browser_tools() -> list[BaseTool]:
     """Get all browser tools. Returns empty list if playwright not available."""

@@ -70,7 +70,7 @@ def backend(monkeypatch):
 def test_a_fetched_page_goes_to_stdout(fetcher, backend, capsys):
     backend(FakeBrowser(html="<html><body>Example Domain</body></html>"))
 
-    code = fetcher.main(["https://example.com"])
+    code = fetcher.main(["https://example.com", "--proxy", "http://127.0.0.1:12345"])
 
     assert code == 0
     assert capsys.readouterr().out == "<html><body>Example Domain</body></html>"
@@ -80,7 +80,7 @@ def test_a_missing_backend_exits_nonzero_and_prints_no_page(fetcher, monkeypatch
     """The expected answer on a host that never installed it — not a traceback."""
     monkeypatch.setitem(sys.modules, "cloakbrowser", None)
 
-    code = fetcher.main(["https://example.com"])
+    code = fetcher.main(["https://example.com", "--proxy", "http://127.0.0.1:12345"])
 
     captured = capsys.readouterr()
     assert code == fetcher.EXIT_BACKEND_MISSING
@@ -92,7 +92,7 @@ def test_an_empty_document_is_a_failure_not_an_empty_page(fetcher, backend, caps
     """Exit 0 with nothing is how "the site has no products" gets invented."""
     backend(FakeBrowser(html="   \n  "))
 
-    code = fetcher.main(["https://example.com"])
+    code = fetcher.main(["https://example.com", "--proxy", "http://127.0.0.1:12345"])
 
     captured = capsys.readouterr()
     assert code == fetcher.EXIT_NO_PAGE
@@ -103,7 +103,7 @@ def test_an_empty_document_is_a_failure_not_an_empty_page(fetcher, backend, caps
 def test_a_navigation_failure_is_reported_on_stderr(fetcher, backend, capsys):
     backend(FakeBrowser(raises=TimeoutError("navigation timeout")))
 
-    code = fetcher.main(["https://example.com"])
+    code = fetcher.main(["https://example.com", "--proxy", "http://127.0.0.1:12345"])
 
     captured = capsys.readouterr()
     assert code == fetcher.EXIT_FETCH_FAILED
@@ -118,7 +118,7 @@ def test_the_browser_is_closed_even_when_the_fetch_fails(fetcher, backend):
     """A leaked headless browser on a six-agent host is nobody's obvious problem."""
     browser = backend(FakeBrowser(raises=RuntimeError("boom")))
 
-    fetcher.main(["https://example.com"])
+    fetcher.main(["https://example.com", "--proxy", "http://127.0.0.1:12345"])
 
     assert browser.closed is True
 
@@ -141,3 +141,19 @@ def test_nothing_but_the_page_is_ever_written_to_stdout():
     ]
 
     assert prints_to_stdout == [], "a diagnostic on stdout is read downstream as page content"
+
+
+def test_guard_proxy_cannot_be_omitted(fetcher):
+    with pytest.raises(SystemExit):
+        fetcher.main(["https://example.com"])
+
+
+def test_stealth_launch_disables_implicit_proxy_bypass(fetcher):
+    from unittest.mock import Mock
+
+    from kronos.security.public_web import BROWSER_PROXY_ARGS
+
+    launch = Mock(return_value=FakeBrowser(html="<p>public</p>"))
+    fetcher._fetch(launch, "https://example.com", proxy="http://127.0.0.1:1234", timeout_ms=100, settle_ms=0)
+    assert launch.call_args.kwargs["proxy"] == {"server": "http://127.0.0.1:1234", "bypass": "<-loopback>"}
+    assert set(BROWSER_PROXY_ARGS) <= set(launch.call_args.kwargs["args"])

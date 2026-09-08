@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from kronos.config import settings
@@ -82,7 +84,7 @@ def test_render_news_digest_is_unified_and_sanitizes_anecdote_language():
     rendered = render_digest("news", clusters, items_by_cluster, sources_by_id=sources)
 
     assert rendered.route.destination == "Digest: News"
-    assert rendered.body.startswith("<b>📱 Дайджест — ")
+    assert rendered.body.startswith("<b>📱 Дайджест недели — ")
     assert "<b>✅ Подтверждено / официально</b>" not in rendered.body
     assert "<b>📈 Формирующиеся сигналы</b>" not in rendered.body
     assert "<b>👀 Наблюдения к проверке</b>" not in rendered.body
@@ -113,6 +115,25 @@ def test_render_digest_keeps_full_body_for_sender_chunking():
 
     assert len(rendered.body) > 220
     assert "обрезано под лимит Telegram" not in rendered.body
+
+
+def test_render_news_digest_limits_weekly_output_to_twenty():
+    clusters = [
+        {
+            "id": index,
+            "category": "news",
+            "title": f"News #{index}",
+            "summary": "Official product update.",
+            "item_ids": [index],
+            "importance_score": 100 - index,
+        }
+        for index in range(1, 26)
+    ]
+    items_by_cluster = {index: [_item("x_openai_devs", "x", f"News #{index}")] for index in range(1, 26)}
+
+    rendered = render_digest("news", clusters, items_by_cluster)
+
+    assert len(rendered.cluster_ids) == 20
 
 
 def test_truncate_html_is_legacy_noop_because_sender_chunks():
@@ -385,6 +406,42 @@ def test_curate_news_digest_separates_items_with_blank_line(monkeypatch):
     assert curated.body.count("• <b>") == 2
     # a blank line precedes each bullet (after the title and between items)
     assert "\n\n• <b>" in curated.body
+
+
+def test_curate_weekly_news_considers_sixty_candidates_and_keeps_twenty(monkeypatch):
+    from kronos.signals.digest import curate_news_digest
+
+    clusters = [
+        {
+            "id": index,
+            "category": "news",
+            "title": f"Story {index}",
+            "summary": "Weekly update",
+            "item_ids": [index],
+            "importance_score": 100 - index,
+        }
+        for index in range(1, 66)
+    ]
+    items_by_cluster = {index: [_item("x_openai_devs", "x", f"Story {index}")] for index in range(1, 66)}
+    prompts: list[str] = []
+
+    class Response:
+        content = json.dumps([{"i": index, "why": f"Reason {index}"} for index in range(25)])
+
+    def fake_invoke(messages, tier):
+        prompts.append(messages[-1].content)
+        return Response()
+
+    monkeypatch.setattr("kronos.llm.is_runtime_llm_configured", lambda: True)
+    monkeypatch.setattr("kronos.llm.invoke_with_fallback", fake_invoke)
+
+    rendered = render_digest("news", clusters, items_by_cluster)
+    curated = curate_news_digest(rendered, clusters, items_by_cluster)
+
+    assert "[59]" in prompts[0]
+    assert "[60]" not in prompts[0]
+    assert len(curated.cluster_ids) == 20
+    assert "<b>💡 Итоги недели:</b>" in curated.body
 
 
 def test_synthesize_ideas_digest_replaces_body_with_generated_ideas(monkeypatch):

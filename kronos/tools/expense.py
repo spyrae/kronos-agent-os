@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from langchain_core.tools import tool
 
 from kronos.config import settings
+from kronos.tools.budget_lock import BudgetLockError, budget_transaction
 
 log = logging.getLogger("kronos.tools.expense")
 
@@ -50,15 +51,34 @@ VALID_CATEGORIES = {
 # - IDR expenses: Notion `Rate` stores the IDR/RUB value (for example 233.5) and
 #   `Rate_USD` the IDR/USD value (for example 16300).
 # - IDR expenses: `Amount_RUB` = round(Amount_IDR / Rate), `Amount_USD` = round(Amount_IDR / Rate_USD).
-# - RUB expenses: `Amount_RUB` stores the original amount, no Rate/Amount_IDR/Amount_USD/FIFO.
-# - USD expenses: `Amount_USD` stores the original amount, no Rate_USD/Amount_IDR/FIFO.
+# - RUB expenses: `Amount_RUB` stores the original amount and `Amount_USD` is derived from
+#   the newest tranche's cross rate (rate_usd / rate = RUB per 1 USD). No Amount_IDR, no FIFO.
+# - USD expenses: the mirror image — `Amount_USD` is the original, `Amount_RUB` is derived.
+# - A derived pair also carries the tranche's `Rate`/`Rate_USD`, so the cross rate that
+#   produced it stays visible in Notion instead of being an unexplained number.
 # Do not invert the rates (they are IDR per 1 unit, never unit per IDR or per 1000 IDR).
 # Legacy tranches without an IDR/USD rate still yield Amount_RUB; Amount_USD is left empty
 # until the tranche carries a USD rate.
+#
+# Budget deficit: an IDR charge bigger than the remaining budget is NOT left unconverted.
+# FIFO drains what is there, converts the shortfall at the newest tranche's rates, and
+# drives that tranche's remainder negative. The debt is real — those rupiah were spent —
+# so `add_tranche` settles it out of the next top-up rather than letting the budget
+# silently overstate itself.
+
+# Charge converted past the end of the budget. The reply carries this marker so both the
+# chat answer and the email pipeline's report (which greps for it) surface the stale rate.
+FALLBACK_RATE_NOTE = "⚠️ курс последнего транша — бюджет исчерпан"
 
 # Result of a FIFO pass over IDR tranches. amount_usd / rate_usd are None when any
 # consumed tranche lacks an IDR/USD rate (legacy budget) — RUB is always computed.
-FifoResult = namedtuple("FifoResult", ["amount_rub", "rate_rub", "amount_usd", "rate_usd", "tranches"])
+# deficit_idr > 0 means the tranches ran dry and that many rupiah were priced at the
+# newest tranche's (stale) rates.
+FifoResult = namedtuple(
+    "FifoResult",
+    ["amount_rub", "rate_rub", "amount_usd", "rate_usd", "tranches", "deficit_idr"],
+    defaults=(0.0,),
+)
 
 
 def _today() -> str:
@@ -106,6 +126,14 @@ def _budget_path() -> str:
     from kronos.workspace import ws
 
     return str(ws.skill_ref("expense-tracker", "BUDGET"))
+
+
+def _with_budget_transaction(operation, *args, **kwargs) -> str:
+    try:
+        with budget_transaction(_budget_path()) as budget_file:
+            return operation(budget_file, *args, **kwargs)
+    except BudgetLockError as exc:
+        return f"[ERROR] {exc}"
 
 
 def _expenses_db_id() -> str:
@@ -222,6 +250,54 @@ def _write_text_atomic(path: str, text: str) -> None:
         raise
 
 
+def _last_rated_tranche(tranches: list[dict], *, need_usd: bool = False) -> dict | None:
+    """Newest tranche with usable rates — the fallback once the budget runs dry.
+
+    Tranches are stored oldest-first, so scanning from the end yields the freshest rate
+    we know. `need_usd` additionally requires the IDR/USD rate (legacy tranches lack it).
+    """
+    for t in reversed(tranches):
+        if t.get("rate", 0) <= 0:
+            continue
+        if need_usd and not t.get("rate_usd"):
+            continue
+        return t
+    return None
+
+
+def _cross_convert(*, amount_rub: float | None = None, amount_usd: float | None = None):
+    """Derive the missing side of a RUB or USD charge from the newest tranche's rates.
+
+    Cross rate = rate_usd / rate (IDR per USD ÷ IDR per RUB = RUB per 1 USD). RUB and USD
+    charges never touch the IDR budget — they only borrow its rates — so a missing
+    BUDGET.md, a legacy tranche or an unreadable file just leaves the other side empty
+    instead of failing the write.
+
+    Returns (derived_amount, rate_idr_per_rub, rate_idr_per_usd), all None when no
+    tranche carries both rates.
+    """
+    empty = (None, None, None)
+    try:
+        budget_file = _budget_path()
+        if not os.path.isfile(budget_file):
+            return empty
+        with open(budget_file) as f:
+            tranche = _last_rated_tranche(_parse_tranches(f.read()), need_usd=True)
+    except Exception as e:
+        log.warning("Cross-rate lookup failed: %s", e)
+        return empty
+    if tranche is None:
+        return empty
+
+    rate, rate_usd = tranche["rate"], tranche["rate_usd"]
+    rub_per_usd = rate_usd / rate
+    if amount_rub is not None:
+        return round(amount_rub / rub_per_usd, 2), rate, rate_usd
+    if amount_usd is not None:
+        return round(amount_usd * rub_per_usd), rate, rate_usd
+    return empty
+
+
 def _fifo_calculate(amount_idr: float, tranches: list[dict]) -> FifoResult:
     """FIFO: calculate RUB + USD amounts and deduct from tranches.
 
@@ -231,7 +307,11 @@ def _fifo_calculate(amount_idr: float, tranches: list[dict]) -> FifoResult:
     USD is only reported when every consumed tranche carries a USD rate — a legacy
     tranche without `rate_usd` leaves amount_usd/rate_usd as None (RUB still computed).
 
-    Returns: FifoResult(amount_rub, rate_rub, amount_usd, rate_usd, updated_tranches)
+    When the tranches run dry the charge is still converted: the shortfall is priced at
+    the newest tranche's rates and that tranche's remainder goes negative, so the budget
+    carries the debt instead of the expense landing in Notion unconverted.
+
+    Returns: FifoResult(amount_rub, rate_rub, amount_usd, rate_usd, updated_tranches, deficit_idr)
     """
     remaining = amount_idr
     total_rub = 0.0
@@ -257,8 +337,29 @@ def _fifo_calculate(amount_idr: float, tranches: list[dict]) -> FifoResult:
         t["remaining"] -= take
         remaining -= take
 
+    deficit = 0.0
     if remaining > 0:
-        log.warning("FIFO: not enough budget! Deficit: %s IDR", remaining)
+        fallback = _last_rated_tranche(tranches)
+        if fallback is None:
+            log.warning("FIFO: %s IDR left unconverted — no tranche carries a rate", remaining)
+        else:
+            deficit = remaining
+            total_rub += remaining / fallback["rate"]
+            rate_usd = fallback.get("rate_usd")
+            if rate_usd and rate_usd > 0:
+                total_usd += remaining / rate_usd
+            else:
+                usd_complete = False
+            # Park the debt on the tranche that priced it — add_tranche settles it out of
+            # the next top-up, so the overspend is neither lost nor counted twice.
+            fallback["remaining"] -= remaining
+            remaining = 0
+            log.warning(
+                "FIFO: budget exhausted — %s IDR converted at tranche #%s rates (%s IDR/RUB)",
+                deficit,
+                fallback["num"],
+                fallback["rate"],
+            )
 
     effective_rate = amount_idr / total_rub if total_rub > 0 else 0
 
@@ -268,7 +369,7 @@ def _fifo_calculate(amount_idr: float, tranches: list[dict]) -> FifoResult:
         amount_usd = round(total_usd, 2)
         effective_rate_usd = amount_idr / total_usd
 
-    return FifoResult(round(total_rub), effective_rate, amount_usd, effective_rate_usd, tranches)
+    return FifoResult(round(total_rub), effective_rate, amount_usd, effective_rate_usd, tranches, deficit)
 
 
 def _notion_rate(rate_idr_per_rub: float) -> float:
@@ -449,8 +550,13 @@ def add_expense(
 
     For IDR expenses, automatically reads BUDGET.md, converts to BOTH RUB and USD
     from FIFO tranches, writes to Notion, and updates the budget. No need to provide
-    rates. For RUB expenses, writes Amount_RUB as-is; for USD expenses, writes
-    Amount_USD as-is. RUB and USD expenses never touch the IDR tranches.
+    rates. A charge bigger than the remaining budget is still converted — the shortfall
+    is priced at the newest tranche's rates and that tranche goes negative until the
+    next add_tranche settles it; the reply says so.
+
+    RUB and USD expenses never spend the tranches, but they do borrow their rates: a RUB
+    charge also gets Amount_USD (and vice versa) via the cross rate Rate_USD / Rate. With
+    no budget file or no USD rate, only the original amount is written.
 
     IMPORTANT: Do NOT pass `date` unless the user explicitly says a different date.
     The tool uses today's date automatically. Wrong dates will be auto-corrected.
@@ -479,6 +585,34 @@ def add_expense(
     if currency not in ("IDR", "RUB", "USD"):
         return f"[ERROR] Invalid currency '{currency}'. Must be IDR, RUB, or USD."
 
+    if currency != "IDR":
+        # RUB/USD only read an atomic rate snapshot; they never change tranches.
+        return _record_expense("", description, amount, currency, category, date, split, split_full, ref)
+    return _with_budget_transaction(
+        _record_expense,
+        description,
+        amount,
+        currency,
+        category,
+        date,
+        split,
+        split_full,
+        ref,
+    )
+
+
+def _record_expense(
+    budget_file: str,
+    description: str,
+    amount: float,
+    currency: str,
+    category: str,
+    date: str | None,
+    split: bool,
+    split_full: bool,
+    ref: str | None,
+) -> str:
+    """Record one expense; IDR callers must hold the budget transaction lock."""
     # Validate and sanitize date (catches LLM hallucinating wrong year/month)
     date, date_warning = _validate_date(date)
 
@@ -497,34 +631,30 @@ def add_expense(
     rate_idr_per_rub = None
     rate_idr_per_usd = None
     budget_updated = False
-    budget_file = ""
     budget_new_text = None
+    deficit_idr = 0.0
     tranches: list[dict] = []
 
     if currency == "IDR":
-        budget_file = _budget_path()
         if os.path.isfile(budget_file):
             with open(budget_file) as f:
                 budget_text = f.read()
 
             tranches = _parse_tranches(budget_text)
             if tranches:
-                total_remaining = sum(t["remaining"] for t in tranches)
-                if total_remaining >= amount:
-                    fifo = _fifo_calculate(amount, tranches)
-                    amount_rub = fifo.amount_rub
-                    rate_idr_per_rub = fifo.rate_rub
-                    amount_usd = fifo.amount_usd
-                    rate_idr_per_usd = fifo.rate_usd
-                    tranches = fifo.tranches
-                    if split:
-                        if amount_rub:
-                            amount_rub = round(amount_rub / 2)
-                        if amount_usd:
-                            amount_usd = round(amount_usd / 2, 2)
-                    budget_new_text = _update_budget(budget_text, tranches)
-                else:
-                    log.warning("FIFO: insufficient budget (%s IDR available, need %s)", total_remaining, amount)
+                fifo = _fifo_calculate(amount, tranches)
+                amount_rub = fifo.amount_rub
+                rate_idr_per_rub = fifo.rate_rub
+                amount_usd = fifo.amount_usd
+                rate_idr_per_usd = fifo.rate_usd
+                tranches = fifo.tranches
+                deficit_idr = fifo.deficit_idr
+                if split:
+                    if amount_rub:
+                        amount_rub = round(amount_rub / 2)
+                    if amount_usd:
+                        amount_usd = round(amount_usd / 2, 2)
+                budget_new_text = _update_budget(budget_text, tranches)
             else:
                 log.warning("No active tranches in BUDGET.md")
         else:
@@ -533,10 +663,12 @@ def add_expense(
         amount_rub = round(amount)
         if split:
             amount_rub = round(amount_rub / 2)
+        amount_usd, rate_idr_per_rub, rate_idr_per_usd = _cross_convert(amount_rub=amount_rub)
     elif currency == "USD":
         amount_usd = round(amount, 2)
         if split:
             amount_usd = round(amount_usd / 2, 2)
+        amount_rub, rate_idr_per_rub, rate_idr_per_usd = _cross_convert(amount_usd=amount_usd)
 
     # --- Build Notion properties ---
     properties: dict = {
@@ -604,18 +736,20 @@ def add_expense(
         amount_display = f"{amount:,.2f} $"
     else:
         amount_display = f"{amount:,.0f} {currency}"
+    # Show every side except the one already printed as the original amount.
     parts = [f"✅ '{description}' — {amount_display}"]
-    if currency == "IDR":
-        conv = []
-        if amount_rub is not None:
-            conv.append(f"{amount_rub:,} ₽")
-        if amount_usd is not None:
-            conv.append(f"{amount_usd:,.2f} $")
-        if conv:
-            parts.append("= " + " / ".join(conv))
+    conv = []
+    if currency != "RUB" and amount_rub is not None:
+        conv.append(f"{amount_rub:,} ₽")
+    if currency != "USD" and amount_usd is not None:
+        conv.append(f"{amount_usd:,.2f} $")
+    if conv:
+        parts.append("= " + " / ".join(conv))
     if mark_split:
         parts.append("(split, твоя доля)")
     parts.append(f"| Дата: {date}")
+    if deficit_idr > 0:
+        parts.append(f"| {FALLBACK_RATE_NOTE} ({deficit_idr:,.0f} IDR сверх остатка)")
     if budget_updated:
         remaining = sum(t["remaining"] for t in tranches)
         parts.append(f"| Остаток: {remaining:,.0f} IDR")
@@ -645,7 +779,17 @@ def add_tranche(
             Optional, but pass it with every new tranche so IDR expenses convert to USD too.
         note: Optional note (e.g. "Второй транш")
     """
-    budget_file = _budget_path()
+    return _with_budget_transaction(_add_tranche_locked, amount_idr, rate, rate_usd, note)
+
+
+def _add_tranche_locked(
+    budget_file: str,
+    amount_idr: float,
+    rate: float,
+    rate_usd: float | None,
+    note: str,
+) -> str:
+    """Append a tranche without overwriting concurrent expense deductions."""
     if not os.path.isfile(budget_file):
         return f"[ERROR] BUDGET.md not found at {budget_file}"
 
@@ -656,12 +800,23 @@ def add_tranche(
     next_num = max((t["num"] for t in tranches), default=0) + 1
     today = datetime.now(USER_TZ).strftime("%d.%m.%Y")
 
+    # Charges that outran the budget parked a negative remainder (see _fifo_calculate).
+    # Those rupiah are already spent, so the top-up covers them before anything else —
+    # otherwise the same money would be available to spend twice.
+    debt = 0.0
+    for t in tranches:
+        if t["remaining"] < 0:
+            debt += -t["remaining"]
+            t["remaining"] = 0
+    if debt:
+        log.info("Tranche #%d settles a parked deficit of %s IDR", next_num, debt)
+
     tranches.append(
         {
             "num": next_num,
             "date": today,
             "total": amount_idr,
-            "remaining": amount_idr,
+            "remaining": amount_idr - debt,
             "rate": rate,
             "rate_usd": rate_usd,
             "note": note or f"Транш #{next_num}",
@@ -669,8 +824,7 @@ def add_tranche(
     )
 
     new_text = _update_budget(text, tranches)
-    with open(budget_file, "w") as f:
-        f.write(new_text)
+    _write_text_atomic(budget_file, new_text)
 
     total_remaining = sum(t["remaining"] for t in tranches)
     log.info("Tranche added: %s IDR at %s IDR/RUB, %s IDR/USD", amount_idr, rate, rate_usd or "—")
@@ -678,8 +832,9 @@ def add_tranche(
     total_usd = sum(t["remaining"] / t["rate_usd"] for t in tranches if t.get("rate_usd"))
     rate_desc = f"{rate} IDR/RUB" + (f", {rate_usd:g} IDR/USD" if rate_usd else "")
     usd_note = f" / ≈ ${total_usd:,.0f}" if total_usd > 0 else ""
+    debt_note = f" Погашен перерасход: {debt:,.0f} IDR." if debt else ""
     return (
-        f"OK: Транш #{next_num} добавлен — {amount_idr:,.0f} IDR по курсу {rate_desc}. "
+        f"OK: Транш #{next_num} добавлен — {amount_idr:,.0f} IDR по курсу {rate_desc}.{debt_note} "
         f"Общий остаток: {total_remaining:,.0f} IDR ≈ {total_rub:,.0f} ₽{usd_note} ({len(tranches)} траншей)"
     )
 
@@ -705,7 +860,25 @@ def replace_tranche(
         new_amount_idr: New IDR amount. If not provided, keeps the current remaining amount.
         note: Optional note for the new tranche.
     """
-    budget_file = _budget_path()
+    return _with_budget_transaction(
+        _replace_tranche_locked,
+        tranche_num,
+        new_rate,
+        new_rate_usd,
+        new_amount_idr,
+        note,
+    )
+
+
+def _replace_tranche_locked(
+    budget_file: str,
+    tranche_num: int,
+    new_rate: float,
+    new_rate_usd: float | None,
+    new_amount_idr: float | None,
+    note: str,
+) -> str:
+    """Apply rate/amount edits to the latest committed budget snapshot."""
     if not os.path.isfile(budget_file):
         return "[ERROR] BUDGET.md not found"
 
@@ -732,8 +905,7 @@ def replace_tranche(
         target["note"] = note
 
     new_text = _update_budget(text, tranches)
-    with open(budget_file, "w") as f:
-        f.write(new_text)
+    _write_text_atomic(budget_file, new_text)
 
     effective_rate_usd = target.get("rate_usd")
     log.info(

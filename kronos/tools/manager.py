@@ -19,6 +19,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from kronos.audit import redact_secrets
 from kronos.health import STATUS_BROKEN, STATUS_OFF, STATUS_OK, HealthCheck
+from kronos.security.mcp_tools import mark_mcp_tools
 from kronos.tools.mcp_servers import KNOWN_SERVERS, build_mcp_config
 
 log = logging.getLogger("kronos.tools.manager")
@@ -152,8 +153,7 @@ async def _load_server_tools(
                 tools = await (asyncio.wait_for(client.get_tools(), timeout) if timeout else client.get_tools())
             finally:
                 said = read_back()
-        for tool in tools:
-            tool.metadata = {**(tool.metadata or {}), "mcp_server": name}
+        tools = mark_mcp_tools(tools, server=name)
         log.info("  [%s] loaded %d tools", name, len(tools))
         return tools, ""
     except TimeoutError:

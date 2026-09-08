@@ -438,19 +438,13 @@ def build_supervisor(
 
     model = get_orchestrator_model()
 
-    # Supervisor-only tools: skills, gateway, dynamic tools
-    SUPERVISOR_TOOL_NAMES = {
-        "load_skill",
-        "load_skill_reference",
-        "approve_skill",
-        "mcp_add_server",
-        "mcp_remove_server",
-        "mcp_list_servers",
-        "mcp_reload",
-        "create_new_tool",
-        "list_dynamic_tools",
-    }
-    supervisor_tools = [t for t in tools if t.name in SUPERVISOR_TOOL_NAMES]
+    # Registration is the local capability boundary: _init_tools has already
+    # applied feature gates. A second name whitelist silently stranded every
+    # new tool (plans, reminders, accounts, repositories, browser, comparisons).
+    # Raw MCP catalogs stay with specialists rather than bloating the root.
+    supervisor_tools = [
+        t for t in tools if not (t.metadata or {}).get("mcp_tool") and not (t.metadata or {}).get("mcp_server")
+    ]
 
     # Direct expense/budget tools — no delegation needed, deterministic
     from kronos.tools.expense import add_expense, add_tranche, get_budget, replace_tranche
@@ -471,7 +465,12 @@ def build_supervisor(
     ]
 
     # Combine: delegation tools + supervisor-only tools + direct tools
-    all_tools = delegation_tools + supervisor_tools + direct_tools
+    # Caller-registered instances keep their metadata/callbacks if a built-in
+    # fallback has the same name. Delegation names remain reserved.
+    by_name = {t.name: t for t in direct_tools}
+    by_name.update({t.name: t for t in supervisor_tools})
+    by_name.update({t.name: t for t in delegation_tools})
+    all_tools = list(by_name.values())
 
     async def run(
         messages: list[BaseMessage],
