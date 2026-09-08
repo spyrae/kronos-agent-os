@@ -200,6 +200,7 @@ class AgentResult:
     waiting_approval: bool = False
     approval_id: str | None = None
     approval_tool_name: str | None = None
+    failure_reason: str = ""
 
 
 def _approval_lists() -> tuple[set[str], tuple[str, ...], tuple[str, ...]]:
@@ -799,6 +800,7 @@ async def react_loop(
                 messages=messages,
                 content=error_msg.content,
                 tool_calls_count=total_tool_calls,
+                failure_reason="model_error",
             )
 
         messages.append(response)
@@ -1026,6 +1028,7 @@ async def react_loop(
                 messages=messages,
                 content=final.content,
                 tool_calls_count=total_tool_calls,
+                failure_reason="loop_circuit_breaker",
             )
         if level in (LoopLevel.WARNING, LoopLevel.CRITICAL) and level != last_nudge_level:
             nudge = SystemMessage(content=get_nudge_message(level, desc))
@@ -1044,6 +1047,7 @@ async def react_loop(
         messages=messages,
         content=final.content,
         tool_calls_count=total_tool_calls,
+        failure_reason="iteration_limit",
     )
 
 

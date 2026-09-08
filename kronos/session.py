@@ -21,6 +21,9 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
+from kronos.migrations.v001_turn_outcome import migrate as migrate_turn_outcome
+from kronos.outcomes import InvocationOutcome, InvocationStatus
+
 log = logging.getLogger("kronos.session")
 
 # Max messages to keep in history (oldest are dropped on save).
@@ -239,6 +242,7 @@ class SessionStore:
                     ON external_effects(turn_id, created_at)
             """)
             await db.commit()
+            await migrate_turn_outcome(db)
             self._initialized = True
 
     async def begin_turn(self, thread_id: str, input_message: str) -> str:
@@ -475,7 +479,7 @@ class SessionStore:
             cursor = await db.execute(
                 """
                 SELECT turn_id FROM active_turns
-                WHERE status NOT IN ('running', 'resuming')
+                WHERE status NOT IN ('running', 'resuming', 'waiting_approval')
                   AND COALESCE(completed_at, started_at) < datetime('now', ?)
                 """,
                 (cutoff,),
@@ -895,8 +899,14 @@ class SessionStore:
         thread_id: str,
         messages: list[BaseMessage],
         turn_id: str,
+        content: str | None = None,
+        failure_reason: str = "",
     ) -> None:
-        """Atomically save session history and close a durable turn."""
+        """Atomically save history, exact response and terminal execution state.
+
+        Omitted content stays unknown, rather than borrowing another turn's
+        answer from shared or compacted history.
+        """
         trimmed = messages[-MAX_HISTORY:] if len(messages) > MAX_HISTORY else messages
         data = json.dumps(
             [_serialize_message(m) for m in trimmed],
@@ -916,16 +926,77 @@ class SessionStore:
             await db.execute(
                 """
                 UPDATE active_turns
-                SET status = 'done', completed_at = CURRENT_TIMESTAMP, error = NULL
+                SET status = ?, completed_at = CURRENT_TIMESTAMP, error = ?,
+                    final_content = ?
                 WHERE turn_id = ?
                 """,
-                (turn_id,),
+                ("failed" if failure_reason else "done", failure_reason or None, content, turn_id),
             )
             await db.execute("DELETE FROM turn_journal WHERE turn_id = ?", (turn_id,))
             await db.execute("DELETE FROM tool_results WHERE turn_id = ?", (turn_id,))
             await db.commit()
 
         self._index_to_swarm_fts(thread_id, trimmed)
+
+    async def get_turn_outcome(self, turn_id: str) -> InvocationOutcome:
+        """Read a consistent execution/approval snapshot without running tools."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            async with db.execute(
+                """
+                SELECT t.thread_id, t.status, t.final_content, t.error,
+                       p.approval_id, p.status, p.requested_at
+                FROM active_turns t
+                LEFT JOIN pending_approvals p ON p.turn_id = t.turn_id
+                WHERE t.turn_id = ?
+                """,
+                (turn_id,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        if not rows:
+            return InvocationOutcome("unknown", turn_id=turn_id, reason="turn_missing")
+
+        thread_id, state, content, error = rows[0][:4]
+        approvals = [row[4:] for row in rows if row[4] is not None]
+        pending = [row for row in approvals if row[1] == "pending"]
+        decisions = {row[1] for row in approvals}
+        status: InvocationStatus = "unknown"
+        reason = error or ""
+        approval_id = None
+        if state in {"running", "resuming"}:
+            # Approve/Reject is not completion: the continuation may be live.
+            status = "running"
+        elif state == "waiting_approval":
+            if len(pending) == 1:
+                approval_id = pending[0][0]
+                status = "expired" if _approval_is_stale(pending[0][2]) else "waiting_approval"
+            elif "expired" in decisions:
+                status = "expired"
+            else:
+                reason = "approval_state_inconsistent"
+        elif state == "failed":
+            status = "failed"
+        elif state in {"recovered", "superseded"}:
+            status = "interrupted"
+        elif state == "done":
+            if pending:
+                reason = "completed_with_pending_approval"
+            elif "rejected" in decisions:
+                status = "rejected"
+            elif "expired" in decisions:
+                status = "expired"
+            elif content is not None:
+                status = "completed"
+            else:
+                reason = "terminal_content_missing"
+        return InvocationOutcome(
+            status,
+            content or "",
+            thread_id,
+            turn_id,
+            approval_id,
+            reason,
+        )
 
     async def fail_turn(self, turn_id: str, error: str) -> None:
         """Mark a turn failed after a handled exception."""

@@ -41,6 +41,7 @@ from kronos.engine import (
 from kronos.llm import get_model
 from kronos.memory.context_engine import get_context_engine
 from kronos.memory.nodes import retrieve_memories, store_memories_background
+from kronos.outcomes import InvocationOutcome
 from kronos.persona import build_system_prompt
 from kronos.router import classify_tier
 from kronos.security.shield import validate_input
@@ -490,6 +491,8 @@ class KronosAgent:
             thread_id=thread_id,
             messages=save_messages,
             turn_id=turn_id,
+            content=result.content,
+            failure_reason=getattr(result, "failure_reason", ""),
         )
         return result.content
 
@@ -549,6 +552,8 @@ class KronosAgent:
             thread_id=thread_id,
             messages=save_messages,
             turn_id=turn_id,
+            content=result.content,
+            failure_reason=getattr(result, "failure_reason", ""),
         )
         log.info("Resumed interrupted turn %s (attempt %s)", turn_id, turn.get("attempts"))
         return result.content
@@ -665,7 +670,43 @@ class KronosAgent:
         on_tool_event: ToolEventCallback | None = None,
         force_tier: str | None = None,
     ) -> str:
-        """Process a message and return the response text.
+        """Process a message, preserving the legacy text-only API.
+
+        For execution state and a call-local approval id use ``ainvoke_outcome``.
+        """
+        outcome = await self.ainvoke_outcome(
+            message=message,
+            thread_id=thread_id,
+            user_id=user_id,
+            session_id=session_id,
+            source_kind=source_kind,
+            persist_user_turn=persist_user_turn,
+            extra_system_context=extra_system_context,
+            on_tool_event=on_tool_event,
+            force_tier=force_tier,
+        )
+        return outcome.content
+
+    async def get_turn_outcome(self, turn_id: str) -> InvocationOutcome:
+        """Read a durable outcome without resuming or repeating the turn."""
+        if self._session_store is None:
+            return InvocationOutcome("unknown", turn_id=turn_id, reason="no_session_store")
+        return await self._session_store.get_turn_outcome(turn_id)
+
+    async def ainvoke_outcome(
+        self,
+        message: str,
+        thread_id: str,
+        user_id: str = "",
+        session_id: str = "",
+        source_kind: str = "user",
+        persist_user_turn: bool = True,
+        extra_system_context: str = "",
+        on_tool_event: ToolEventCallback | None = None,
+        force_tier: str | None = None,
+        on_turn_started: Callable[[str], None] | None = None,
+    ) -> InvocationOutcome:
+        """Process a message and return its explicit execution outcome.
 
         Args:
             message: raw user text (no bridge wrappers). For peer reactions
@@ -688,10 +729,16 @@ class KronosAgent:
                 yourself, be concise") or the text of the peer answer the
                 agent is reacting to.
 
+        ``on_turn_started`` durably links a caller's work to the turn before
+        any model/tool call. A failure aborts execution, never silently detaches
+        the work. It requires a persistent turn and a configured session store.
+
         Handles the full pipeline: load history → validate → memory →
         route → store memory → compact → save history.
         """
         is_ephemeral = not persist_user_turn
+        if on_turn_started and (is_ephemeral or self._session_store is None):
+            raise ValueError("on_turn_started requires a durable session store")
         self._last_pending_approval_id = None
 
         if self._session_store and not is_ephemeral and not getattr(self, "_durable_recovery_checked", False):
@@ -732,7 +779,7 @@ class KronosAgent:
                 persisted_history.append(AIMessage(content=response_text))
                 if self._session_store:
                     await self._session_store.save(thread_id, persisted_history)
-            return response_text
+            return InvocationOutcome("blocked", response_text, thread_id, reason="input_rejected")
 
         # Step 2: Retrieve memories (non-fatal — DB issues must not crash pipeline)
         if self._memory_enabled:
@@ -753,6 +800,12 @@ class KronosAgent:
         react_loop_kwargs: dict[str, Any] = {}
         if self._session_store and not is_ephemeral:
             turn_id = await self._session_store.begin_turn(thread_id, message)
+            if on_turn_started is not None:
+                try:
+                    on_turn_started(turn_id)
+                except Exception:
+                    await self._session_store.fail_turn(turn_id, "caller_turn_link_failed")
+                    raise
             react_loop_kwargs = self._build_durable_react_loop_kwargs(
                 turn_id=turn_id,
                 thread_id=thread_id,
@@ -784,7 +837,13 @@ class KronosAgent:
 
         if getattr(result, "waiting_approval", False):
             self._last_pending_approval_id = result.approval_id
-            return response_text
+            return InvocationOutcome(
+                "waiting_approval",
+                response_text,
+                thread_id,
+                turn_id,
+                result.approval_id,
+            )
 
         if not is_ephemeral:
             persisted_history.append(AIMessage(content=response_text))
@@ -821,11 +880,20 @@ class KronosAgent:
                     thread_id=thread_id,
                     messages=save_messages,
                     turn_id=turn_id,
+                    content=response_text,
+                    failure_reason=getattr(result, "failure_reason", ""),
                 )
             else:
                 await self._session_store.save(thread_id, save_messages)
 
-        return response_text
+        failure_reason = getattr(result, "failure_reason", "")
+        return InvocationOutcome(
+            "failed" if failure_reason else "completed",
+            response_text,
+            thread_id,
+            turn_id,
+            reason=failure_reason,
+        )
 
     async def clear_context(self, thread_id: str) -> str:
         """Clear conversation history for a thread.
