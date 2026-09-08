@@ -23,11 +23,11 @@ from tests.test_invocation_outcomes import agent as agent
 
 @pytest.fixture(autouse=True)
 def runtime(agent, monkeypatch):
+    monkeypatch.setattr("kronos.telegram_delivery.ready_sender", lambda: 0)
     monkeypatch.setattr(settings, "agent_name", "kronos")
     monkeypatch.setattr(settings, "tool_approvals_enabled", False)
     monkeypatch.setattr("kronos.bridge.get_agent", lambda: agent)
     monkeypatch.setattr("kronos.bridge.deliver_plan_approval", AsyncMock(return_value=True))
-    monkeypatch.setattr(poller, "send_webhook", lambda *a: True)
 
 
 def new_step():

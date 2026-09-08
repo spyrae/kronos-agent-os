@@ -1546,6 +1546,7 @@ def _plan_row(plan: dict) -> dict:
             if s["state"] == plans.STEP_WAITING
         ],
         "summary": plan["summary"],
+        "delivery": plans.delivery_status(plan),
     }
 
 
@@ -1597,6 +1598,11 @@ def run_plans_show(plan_id: int, as_json: bool) -> int:
         print(f"Stop requested: {pending} step(s) awaiting cleanup, {review} requiring review. No rollback.")
     if plan["summary"]:
         print(f"\n{plan['summary']}\n")
+    delivery = plans.delivery_status(plan)
+    print(
+        f"Delivery: summary={delivery['summary']}, pending={delivery['pending']}, "
+        f"needs_review={delivery['needs_review']}. Delivered means accepted by Telegram, not read."
+    )
     for step in steps:
         label = step["title"] or f"step {step['seq']}"
         line = f"  #{step['id']} {label}: {step['state']}"

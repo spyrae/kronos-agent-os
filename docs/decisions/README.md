@@ -16,3 +16,4 @@ gets a new record and marks the previous one superseded.
 | 0009 | [Durable tool-batch replay](ADR-0009-durable-tool-batch-replay.md) | accepted | 2026-09-08 |
 | 0010 | [Plan execution recovery](ADR-0010-plan-execution-recovery.md) | accepted | 2026-09-08 |
 | 0011 | [Cooperative plan stop](ADR-0011-cooperative-plan-stop.md) | accepted | 2026-09-08 |
+| 0012 | [Transactional plan delivery](ADR-0012-transactional-plan-delivery.md) | accepted | 2026-09-08 |

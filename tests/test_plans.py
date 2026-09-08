@@ -308,6 +308,9 @@ def test_an_expired_plan_says_so_instead_of_waiting_forever():
 
 def test_a_summary_is_kept_on_the_plan():
     plan_id = _plan()
+    step_id = plans.add_step(plan_id, "work")
+    plans.finish_step(step_id, "done")
+    plans.settle_plan(plan_id)
 
     plans.set_summary(plan_id, "  three flats, two landlords answered  ")
 

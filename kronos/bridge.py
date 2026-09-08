@@ -931,6 +931,7 @@ async def run_bridge(agent: KronosAgent) -> None:
     """Start Telethon client + webhook server, listen for messages."""
     global _agent, _client, _my_id, _my_username
     _agent = agent
+    _my_id = None
 
     session_file = os.environ.get("SESSION_FILE", f"{settings.agent_name}.session")
     _client = TelegramClient(session_file, settings.tg_api_id, settings.tg_api_hash)

@@ -252,7 +252,6 @@ def plan_bridge(agent, monkeypatch):
     from types import SimpleNamespace
 
     from kronos import bridge
-    from kronos.cron import plans as poller
 
     monkeypatch.setattr(settings, "agent_name", "kronos")
     monkeypatch.setattr(settings, "tg_bot_token", "")
@@ -261,7 +260,6 @@ def plan_bridge(agent, monkeypatch):
     monkeypatch.setattr(bridge, "_agent", agent)
     monkeypatch.setattr(bridge, "_client", client)
     monkeypatch.setattr(bridge, "_rate_limit_wait", AsyncMock())
-    monkeypatch.setattr(poller, "send_webhook", lambda *args, **kwargs: True)
     return client
 
 

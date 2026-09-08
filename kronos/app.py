@@ -185,6 +185,7 @@ async def main():
         # Start dashboard
         from dashboard.server import run_dashboard
         from kronos.bridge import run_bridge
+        from kronos.cron.delivery import run_delivery_worker
         from kronos.discord_bridge import run_discord
 
         # Run all services concurrently with graceful shutdown. A SIGTERM
@@ -204,6 +205,7 @@ async def main():
             asyncio.create_task(run_discord(agent), name="discord"),
             asyncio.create_task(scheduler.run(), name="scheduler"),
             asyncio.create_task(run_dashboard(scheduler=scheduler, agent=agent), name="dashboard"),
+            asyncio.create_task(run_delivery_worker(), name="delivery"),
         ]
         stop_task = asyncio.create_task(stop_event.wait(), name="stop")
 

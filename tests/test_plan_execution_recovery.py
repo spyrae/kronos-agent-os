@@ -21,6 +21,7 @@ from kronos.turn_ownership import own_conversation
 def runtime(tmp_path, monkeypatch):
     from kronos import db
 
+    monkeypatch.setattr("kronos.telegram_delivery.ready_sender", lambda: 0)
     monkeypatch.setattr(settings, "db_dir", str(tmp_path))
     monkeypatch.setattr(settings, "db_path", str(tmp_path / "session.db"))
     monkeypatch.setattr(settings, "swarm_db_path", str(tmp_path / "swarm.db"))
@@ -42,7 +43,6 @@ def runtime(tmp_path, monkeypatch):
 
     obj._run_model_loop = AsyncMock(side_effect=finish)
     monkeypatch.setattr("kronos.bridge.get_agent", lambda: obj)
-    monkeypatch.setattr(poller, "send_webhook", lambda *a: True)
     monkeypatch.setattr("kronos.bridge.deliver_plan_approval", AsyncMock(return_value=True))
     monkeypatch.setattr(
         poller,

@@ -70,6 +70,11 @@ class SafeDB:
         log.info("SafeDB connected: %s", self._db_path.name)
 
     @property
+    def path(self) -> Path:
+        """The database identity used by cross-process ownership protocols."""
+        return self._db_path
+
+    @property
     def conn(self) -> sqlite3.Connection:
         """Raw connection — only use inside init_schema(). Thread-unsafe."""
         if self._conn is None:

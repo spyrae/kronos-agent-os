@@ -48,6 +48,7 @@ def _plan_view(plan: dict, *, with_steps: bool = True) -> dict:
         "goal": plan["goal"],
         "state": plan["state"],
         "summary": plan["summary"],
+        "delivery": plans.delivery_status(plan),
         "stop_reason": plans.stop_reason(plan),
         "created_at": plan["created_at"],
         "updated_at": plan["updated_at"],

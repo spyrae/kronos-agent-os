@@ -14,19 +14,18 @@ Three things keep the loop honest:
 * **One step per plan per cycle, a few steps in total.** Each step is a model
   call. Without the cap, one plan with forty ready steps would spend a day's
   budget in a minute and starve every other plan.
-* **Routine progress is delivered only when asked for.** Approval requests
-  always notify the owner because work cannot continue without a decision. A step notifies only when it
-  was created with ``notify``; what always arrives is the plan finishing. A
+* **Routine progress is queued only when asked for.** Approval requests
+  notify the owner because work cannot continue without a decision. A step queues
+  a result only when created with ``notify``; the final summary has its own
+  durable delivery obligation. A
   week-long watch that sent a message every hour would be turned off in a day.
 """
 
-import asyncio
 import logging
 import time
 
 from kronos import plan_conditions, plans
 from kronos.config import settings
-from kronos.cron.notify import send_webhook
 from kronos.outcomes import InvocationOutcome
 from kronos.policy import get_policy
 from kronos.session import SessionStore
@@ -204,9 +203,7 @@ async def _apply_outcome(plan: dict, step: dict, outcome: InvocationOutcome) -> 
             plans.update_linked_step(step["id"], turn_id, state=plans.STEP_RUNNING, result=step["result"])
         return
     if outcome.status == "completed" and text:
-        changed = plans.complete_step_turn(step["id"], turn_id, text)
-        if changed and step["notify"]:
-            await _deliver(plan, text)
+        plans.complete_step_turn(step["id"], turn_id, text)
         return
     if outcome.status in {"blocked", "rejected", "expired"}:
         state = plans.STEP_FAILED
@@ -346,12 +343,6 @@ async def _reconcile_stops() -> None:
             plans.note_reconciled(candidate)
 
 
-async def _deliver(plan: dict, text: str) -> None:
-    if not plan.get("chat_id"):
-        return
-    await asyncio.to_thread(send_webhook, text, plan["chat_id"], None, plan.get("topic_id"))
-
-
 async def _summarize(plan: dict, state: str) -> None:
     """Say how it went, once, when the plan closes.
 
@@ -371,7 +362,6 @@ async def _summarize(plan: dict, state: str) -> None:
     fallback = f"План «{plan['goal']}» — {state}.\n\n" + "\n".join(rendered)
     if agent is None or plans.stop_reason(plan):
         plans.set_summary(plan["id"], fallback)
-        await _deliver(plan, fallback)
         return
 
     prompt = (
@@ -396,7 +386,6 @@ async def _summarize(plan: dict, state: str) -> None:
 
     text = (summary or "").strip() or fallback
     plans.set_summary(plan["id"], text)
-    await _deliver(plan, text)
 
 
 async def _check_condition(plan: dict, step: dict) -> tuple[bool, str]:
@@ -425,15 +414,15 @@ async def _retire_expired() -> None:
 async def _deliver_pending_summaries(limit: int) -> int:
     """Close out plans that finished but have not said so yet. Returns how many.
 
-    A plan owes the owner a summary until it has one, which is also what makes
-    this crash-safe: the marker is the empty summary on a finished plan, not a
-    variable in a loop that just died.
+    Empty summary tracks generation. Its durable outbox tracks actual delivery;
+    failed sends never require another model call or rerunning the plan.
     """
     if limit <= 0:
         return 0
     pending = plans.plans_awaiting_summary(settings.agent_name, limit=limit)
     for plan in pending:
-        await _summarize(plan, "выполнен" if plan["state"] == plans.PLAN_DONE else "не удался")
+        state = {plans.PLAN_DONE: "выполнен", plans.PLAN_CANCELLED: "остановлен"}.get(plan["state"], "не удался")
+        await _summarize(plan, state)
     return len(pending)
 
 

@@ -72,6 +72,12 @@ def _parse_after(raw: str) -> tuple[list[int], str]:
 
 def _render_plan(plan: dict, *, with_steps: bool = True) -> str:
     lines = [f"План #{plan['id']} ({plan['state']}): {plan['goal']}"]
+    delivery = plans.delivery_status(plan)
+    if plan.get("summary") or delivery["pending"] or delivery["needs_review"]:
+        lines.append(
+            f"Доставка итога: {delivery['summary']}; в очереди: {delivery['pending']}; "
+            f"нужна проверка: {delivery['needs_review']}. delivered = принят Telegram, не прочитан владельцем."
+        )
     if plans.stop_reason(plan):
         steps = plans.steps_of(plan["id"])
         pending = sum(not step["stop_reconciled"] for step in steps)
@@ -161,7 +167,7 @@ def plan_add_step(
             Page conditions accept "every_seconds" (minimum 300, default 3600).
         notify: send this step's result to the owner as soon as it is done. Leave
             false unless it is worth interrupting them for — the plan's closing
-            summary always reaches them anyway.
+            summary is queued separately for durable delivery.
     """
     condition, error = _parse_wait(wait)
     if error:

@@ -26,7 +26,7 @@
 | F06 | Межпроцессная сериализация всех budget writers | Перенесён, regression пройден | Код присутствует; live приёмка не выполнена |
 | F07 | Approval wait не завершает шаг; approve/reject/restart согласованы | Исправлено и проверено локально | Нужны миграции, rollout и Telegram smoke |
 | F08 | Отмена/падение шага восстанавливаются без слепого повтора эффектов | В работе: claim/link recovery, live cancel/TTL и fenced cleanup проверены; operator reconciliation и гарантированное stop-уведомление ещё нужны | Ожидает |
-| F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | Ожидает | Ожидает |
+| F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | В работе: transactional outbox для итогов/progress/stop планов проверен; session resume и остальные producers ещё нужны | Ожидает |
 | F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | В работе: intent/journal boundary проверен; полный перечень путей и reconciliation не закрыты | Ожидает |
 | F11 | Один resume на turn; live registry и atomic ownership | Исправлено и проверено локально | Нужен согласованный rollout без старых исполнителей |
 | F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | Ожидает | Ожидает |
@@ -557,3 +557,70 @@ Verification on final code:
    production-изоляцию. Ветка не объявлена готовым deploy candidate.
 5. Production approvals/config/rights/backup, миграции на копии, rollout и E2E
    остаются обязательными. Этот этап ничего не разворачивает на сервере.
+
+
+### F09 — этап 1: transactional outbox для планов
+
+- Миграция v007 создаёт `delivery_outbox` в **той же** SQLite-БД, что и план.
+  Итог/результат выполненного шага и обязанность отправки коммитятся вместе;
+  ошибка enqueue откатывает изменение producer. Перезапуск не требует повторной
+  модели или выполнения шага. Summary — first-writer-wins.
+- Очередь хранит неизменяемые chat/topic, plain-text chunks, Telegram random_id,
+  sender binding, receipts и retry metadata. UTF-16 chunk limit учитывает emoji;
+  перед записью применяется redaction. False/None/пустой/несвязанный receipt не
+  считается доставкой. Delivered — принят Telegram, не прочитан владельцем.
+- Отдельный application worker работает независимо от новых шагов/моделей,
+  ждёт готовности Telegram и обрабатывает ограниченный объём очереди. Poller
+  только сохраняет обязанности и не ждёт transport, даже если отправка зависла. Backoff,
+  FloodWait и timeout не удаляют обязанность. После частичной отправки продолжается
+  первый неподтверждённый chunk с тем же random_id, не новая операция.
+- Kernel ownership удерживается до записи receipt **или** retry metadata;
+  параллельный worker не крадёт живую отправку по TTL. Смена аккаунта и
+  некоррелируемый RANDOM_ID_DUPLICATE требуют review. Bot API fallback и платные
+  флаги не включаются. Не заявляется безусловное exactly-once внешнего Telegram.
+- Новая отмена плана теперь создаёт детерминированный финальный итог только после
+  fenced cleanup, включая честный needs_review. Исторические cancelled планы не
+  рассылаются при upgrade; старые сохранённые summary имеют legacy_unknown, не
+  искусственный delivered. API/UI/CLI/plan tools показывают доставку отдельно.
+- **2275 passed, 61 integration deselected, 1 warning**, 34.61 sec на локальном
+  Python 3.13. **22 SIGKILL/restart tests passed** (17 прежних + 5 новых), включая
+  producer rollback, committed queue, send-before-ack, partial ack и final ack.
+  32 новых unit cases и 5 новых crash cases относительно предыдущего этапа.
+  39 внешних integration cases не запускались. Реальные Telegram/MCP/provider
+  writes и production не вызывались. Ruff, отдельный F821, diff-check чистые;
+  Dashboard `tsc -b` и PlansPage ESLint прошли во временной копии со старыми deps.
+- Первый полный прогон выявил 8 ошибок из-за глобального FakeClient, оставленного
+  прежними bridge-тестами; плановые fixtures теперь явно изолируют readiness.
+  Исправление не ослабляет production transport contract.
+
+Изменённые файлы этапа:
+
+- `kronos/migrations/v007_delivery_outbox.py`, `kronos/delivery.py`,
+  `kronos/telegram_delivery.py`: схема, atomic enqueue, ownership, chunk receipts,
+  retry и корреляция MTProto.
+- `kronos/plans.py`, `kronos/cron/plans.py`, `kronos/cron/delivery.py`,
+  `kronos/app.py`, `kronos/bridge.py`, `kronos/db.py`: producer transactions,
+  stop notification, независимый worker, readiness и database identity.
+- `dashboard/api/plans.py`, `dashboard-ui/src/pages/PlansPage.tsx`,
+  `kronos/cli.py`, `kronos/tools/plans_tools.py`: generated/pending/delivered/review.
+- `tests/test_delivery.py`, `tests/test_telegram_delivery.py`,
+  `tests/test_delivery_kill.py`, `tests/helpers/delivery_crash.py`: новые проверки;
+  связанные plan/outcome fixtures обновлены на новый транспортный контракт.
+- `docs/decisions/ADR-0012-transactional-plan-delivery.md`, индекс ADR и этот реестр.
+
+Проверка: `KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python -m pytest
+-m 'not integration' -q`; отдельный crash suite — `tests/test_delivery_kill.py
+ tests/test_plan_kill.py tests/test_durable_kill.py`.
+
+**F09 не закрыт. Следующий этап обязателен:** durable delivery восстановленных
+session turns с закрытием окна finalize→enqueue; запуск resume/bridge без потери
+уведомлений; approval prompts/continuations, обычные ответы и остальные cron
+producers. Нужны также operator reconciliation/repair без слепого resend,
+согласованный retention/scoped reset очереди, live userbot/bot/topic smoke и rollout.
+Все остальные F/A/PROD/V пункты остаются в общей цели, без исключения инфраструктуры.
+
+Свежий read-only production-аудит 11:26 UTC подтвердил прежние риски прав/admin,
+92% диска, неполный backup и отсутствие позднего remediation rollout. Локальная
+ротация cron history `f31f283` ещё не соответствует production-файлу scheduler.
+Перед будущим релизом по-прежнему обязательна безопасная сверка с изменяемым main;
+этот worktree нельзя автоматически деплоить поверх более новых runtime исправлений.

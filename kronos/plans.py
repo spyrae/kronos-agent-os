@@ -30,10 +30,12 @@ import uuid
 
 from kronos.config import settings
 from kronos.db import get_db
+from kronos.delivery import enqueue, stream_status
 from kronos.execution_control import ExecutionStoppedError
 from kronos.migrations.v002_plan_turns import migrate as migrate_plan_turns
 from kronos.migrations.v005_plan_execution import migrate_plans as migrate_execution
 from kronos.migrations.v006_plan_stop import migrate as migrate_stop
+from kronos.migrations.v007_delivery_outbox import migrate as migrate_delivery
 from kronos.turn_ownership import TurnOwnership
 
 log = logging.getLogger("kronos.plans")
@@ -113,6 +115,7 @@ def _init_schema(conn) -> None:
     migrate_plan_turns(conn)
     migrate_execution(conn)
     migrate_stop(conn)
+    migrate_delivery(conn)
 
 
 def _db():
@@ -530,10 +533,15 @@ def park_step(step_id: int, wait: dict, *, wake_at: float = 0.0, now: float | No
 
 
 def complete_step_turn(step_id: int, turn_id: str, result: str) -> bool:
-    """Commit the result and any concurrent park request in the same statement."""
+    """Commit the result and any concurrent park request in the same transaction as its delivery obligation."""
     park = "repark_requested = 1 OR state = 'waiting'"
-    cursor = _db().write(
-        f"""UPDATE plan_steps SET
+
+    def complete(conn):
+        step = conn.execute("SELECT * FROM plan_steps WHERE id = ?", (step_id,)).fetchone()
+        if not step:
+            return False
+        cursor = conn.execute(
+            f"""UPDATE plan_steps SET
                state = CASE WHEN {park} THEN 'waiting' ELSE 'done' END,
                result = ?, last_turn_id = CASE WHEN {park} THEN turn_id ELSE last_turn_id END,
                turn_id = CASE WHEN {park} THEN '' ELSE turn_id END,
@@ -541,20 +549,35 @@ def complete_step_turn(step_id: int, turn_id: str, result: str) -> bool:
                approval_id = '', notified_approval_id = '', repark_requested = 0, updated_at = ?
            WHERE id = ? AND turn_id = ? AND turn_id != '' AND state IN (?, ?, ?, ?)
              AND plan_id IN (SELECT id FROM plans WHERE state = ? AND expires_at > ?)""",
-        (
-            result,
-            _now(),
-            step_id,
-            turn_id,
-            STEP_RUNNING,
-            STEP_APPROVAL,
-            STEP_WAITING,
-            STEP_INTERRUPTED,
-            PLAN_ACTIVE,
-            _now(),
-        ),
-    )
-    return cursor.rowcount == 1
+            (
+                result,
+                _now(),
+                step_id,
+                turn_id,
+                STEP_RUNNING,
+                STEP_APPROVAL,
+                STEP_WAITING,
+                STEP_INTERRUPTED,
+                PLAN_ACTIVE,
+                _now(),
+            ),
+        )
+        if cursor.rowcount != 1:
+            return False
+        if step["notify"]:
+            plan = conn.execute("SELECT * FROM plans WHERE id = ?", (step["plan_id"],)).fetchone()
+            if plan["chat_id"]:
+                enqueue(
+                    conn,
+                    event_key=f"plan:{plan['id']}:step:{step_id}:turn:{turn_id}",
+                    stream_key=f"plan:{plan['id']}",
+                    chat_id=plan["chat_id"],
+                    topic_id=plan["topic_id"] or None,
+                    text=result,
+                )
+        return True
+
+    return _db().write_tx(complete)
 
 
 def retry_unstarted_step(step: dict, *, ownership: TurnOwnership) -> bool:
@@ -648,11 +671,59 @@ def _touch_plan(plan_id: int, stamp: float) -> None:
     _db().write("UPDATE plans SET updated_at = ? WHERE id = ?", (stamp, plan_id))
 
 
-def set_summary(plan_id: int, summary: str, now: float | None = None) -> None:
-    _db().write(
-        "UPDATE plans SET summary = ?, updated_at = ? WHERE id = ?",
-        (summary.strip(), _now(now), plan_id),
+def set_summary(plan_id: int, summary: str, now: float | None = None) -> bool:
+    """Freeze a generated summary and its delivery duty in one transaction."""
+    text = summary.strip()
+    if not text:
+        raise PlanError("summary cannot be empty")
+
+    def save(conn):
+        plan = conn.execute("SELECT * FROM plans WHERE id = ?", (plan_id,)).fetchone()
+        if not plan or plan["state"] not in PLAN_TERMINAL or plan["summary"]:
+            return False
+        unsettled = conn.execute(
+            """SELECT 1 FROM plan_steps WHERE plan_id = ? AND
+               (state IN ('running', 'awaiting_approval', 'interrupted')
+                OR (? != '' AND stop_reconciled = 0)) LIMIT 1""",
+            (plan_id, plan["stop_reason"]),
+        ).fetchone()
+        if unsettled:
+            return False
+        if plan["chat_id"]:
+            enqueue(
+                conn,
+                event_key=f"plan:{plan_id}:summary",
+                stream_key=f"plan:{plan_id}",
+                chat_id=plan["chat_id"],
+                topic_id=plan["topic_id"] or None,
+                text=text,
+                now=now,
+            )
+        conn.execute("UPDATE plans SET summary = ?, updated_at = ? WHERE id = ?", (text, _now(now), plan_id))
+        return True
+
+    return _db().write_tx(save)
+
+
+def delivery_status(plan: dict) -> dict:
+    """Distinguish generation from acknowledged delivery, including legacy gaps."""
+    db = _db()
+    counts = stream_status(db, f"plan:{plan['id']}")
+    row = db.read_one("SELECT state FROM delivery_outbox WHERE event_key = ?", (f"plan:{plan['id']}:summary",))
+    summary = (
+        row["state"]
+        if row
+        else ("not_requested" if not plan["chat_id"] else "legacy_unknown" if plan["summary"] else "not_generated")
     )
+    return {"summary": summary, **counts}
+
+
+async def deliver_pending() -> int:
+    """Drain persisted plan notifications only when Telegram is ready."""
+    from kronos.delivery import drain
+    from kronos.telegram_delivery import ready_sender, send_chunk
+
+    return await drain(_db(), sender_id=ready_sender(), send=send_chunk)
 
 
 def settle_plan(plan_id: int, now: float | None = None) -> str:
@@ -675,7 +746,7 @@ def settle_plan(plan_id: int, now: float | None = None) -> str:
 
 def cancel_plan(plan_id: int, agent_name: str, now: float | None = None) -> bool:
     cursor = _db().write(
-        "UPDATE plans SET state = ?, stop_reason = 'plan_cancelled', updated_at = ? WHERE id = ? AND agent_name = ? AND state = ?",
+        "UPDATE plans SET state = ?, stop_reason = 'plan_cancelled', stop_notify = 1, updated_at = ? WHERE id = ? AND agent_name = ? AND state = ?",
         (PLAN_CANCELLED, _now(now), plan_id, agent_name, PLAN_ACTIVE),
     )
     return cursor.rowcount > 0
@@ -684,15 +755,14 @@ def cancel_plan(plan_id: int, agent_name: str, now: float | None = None) -> bool
 def plans_awaiting_summary(agent_name: str, *, limit: int = 5) -> list[dict]:
     """Finished plans that have not told the owner how it went yet.
 
-    The marker is the state plus an empty summary, not a variable in the poller's
-    loop — so a crash between finishing and reporting loses nothing, and a plan
-    stays owed its summary until it has one. Cancelled plans are not owed one:
-    the owner did that on purpose.
+    Empty summary means generation is owed; the outbox separately owns delivery.
+    New stop requests owe a final notice after fenced cleanup. Historical cancelled
+    plans are not backfilled into unsolicited notifications on upgrade.
     """
     rows = _db().read(
         """
         SELECT * FROM plans
-        WHERE agent_name = ? AND state IN (?, ?) AND summary = ''
+        WHERE agent_name = ? AND (state IN (?, ?) OR (state = 'cancelled' AND stop_notify = 1)) AND summary = ''
           AND NOT EXISTS (SELECT 1 FROM plan_steps s WHERE s.plan_id = plans.id
               AND s.state IN ('running', 'awaiting_approval', 'interrupted'))
           AND NOT EXISTS (SELECT 1 FROM plan_steps s WHERE s.plan_id = plans.id AND s.stop_reconciled = 0

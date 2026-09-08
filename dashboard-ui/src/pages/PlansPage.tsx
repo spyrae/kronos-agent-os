@@ -35,6 +35,7 @@ interface Plan {
   goal: string;
   state: string;
   summary: string;
+  delivery: { summary: string; pending: number; delivered: number; needs_review: number };
   created_at: number;
   updated_at: number;
   expires_at: number;
@@ -59,6 +60,15 @@ const STATE_COLOR: Record<string, string> = {
   interrupted: '#f59e0b',
   awaiting_approval: '#f59e0b',
   needs_review: '#ef4444',
+};
+
+const DELIVERY_LABEL: Record<string, string> = {
+  pending: 'Summary saved · waiting for Telegram delivery',
+  delivered: 'Summary accepted by Telegram (not a read receipt)',
+  needs_review: 'Delivery requires review · no confirmed receipt',
+  legacy_unknown: 'Legacy summary · delivery was not tracked',
+  not_requested: 'No notification destination',
+  not_generated: 'Summary not generated yet',
 };
 
 const card: React.CSSProperties = {
@@ -160,6 +170,13 @@ export default function PlansPage() {
                     <button style={{ ...ghost, marginLeft: '0.5rem' }} onClick={() => load()}>
                       Refresh status
                     </button>
+                  </div>
+                )}
+                {plan.delivery && (plan.state !== 'active' || plan.delivery.pending > 0 || plan.delivery.needs_review > 0) && (
+                  <div style={{ color: plan.delivery.needs_review ? '#fca5a5' : '#94a3b8', fontSize: '0.75rem', marginTop: '0.4rem' }}>
+                    {DELIVERY_LABEL[plan.delivery.summary] || 'Delivery status unavailable'}
+                    {plan.delivery.pending > 0 && ` · ${plan.delivery.pending} notification(s) queued`}
+                    {plan.delivery.needs_review > 0 && ` · ${plan.delivery.needs_review} notification(s) need review`}
                   </div>
                 )}
                 {plan.summary && (
