@@ -34,6 +34,7 @@
 | F14 | Desired/effective runtime settings совпадают или restart явно указан | Ожидает | Ожидает |
 | F15 | Model/memory I/O не блокирует event loop; responsiveness test | Ожидает | Ожидает |
 | F16 | Timeout/cancel Codex CLI завершает процесс и потомков, очищает ресурсы | Исправлено и проверено локально | Ожидает rollout |
+| F17 | Необязательный Dashboard без доступного пароля не выключает bridge/cron; crash возвращает failure | Новый дефект подтверждён изолированным startup probe | В коде production; текущие Dashboard работают |
 
 ## Production-аудит
 
@@ -50,6 +51,7 @@
 | PROD-09 | Согласованный ingress/key-only SSH; соседние сервисы не повреждены | Нужны отдельные согласования host/network изменений |
 | PROD-10 | Согласованный release manifest и loaded build identity | F01–F06 и прежние production-only изменения вошли в main; manifest/loaded identity отсутствуют |
 | PROD-11 | Основной агент выбирает собственный dotenv, не чужие memory/config paths | Новый пункт повторного аудита: неверный explicit env-source; ожидает согласования конфигурации |
+| PROD-12 | Registry usernames соответствуют Telegram; @адресация проверена для каждого агента | Четыре startup-предупреждения registry mismatch в снимке 12:40 UTC; live routing smoke ещё нужен |
 
 ## Дополнительные пункты обоих аудитов — входят в цель
 
@@ -62,10 +64,31 @@
 | A05 | FTS/shared memory доступна без обязательного DeepSeek key | Ожидает |
 | A06 | Сквозные chat→tool→approval→effect→delivery и fault-injection gates | Ожидает |
 | V01 | Актуальные CVE: installed Python, frontend и относящиеся к сервису OS packages | Передача inventory в OSV требует ранее запрошенного разрешения |
-| V02 | Причина reboot-required/OS updates проверена; безопасное решение по reboot | Ожидает, reboot не разрешён автоматически |
+| V02 | Причина reboot-required/OS updates проверена; безопасное решение по reboot | Список содержит libc6/linux-base и более новые kernel packages; CVE/maintenance window ещё не определены, reboot не разрешён автоматически |
 | V03 | Сверены старые approvals/исторические неопределённые расходы | Ожидает; не выполнять автоматически |
 
 ## Выполнено в объединённой ветке
+
+### Дополнение production-аудита 12:33–12:40 UTC
+
+- Все 383 проверенных хэша сервера совпали с 11:26; исправления отдельной
+  remediation-ветки по-прежнему нельзя считать развёрнутыми.
+- 2083 regression и 5 SIGKILL/restart тестов на неизменяемом main f31f283 прошли.
+  Восемь отрицательных fault probes повторно подтвердили F07–F13/F16;
+  дополнительные probes подтвердили A01, A03, блокировку event loop F15 и F17.
+- F17: real main/run_dashboard с fake bridge/MCP завершают весь процесс без
+  ошибки при отсутствии доступного Dashboard password. Это условный startup
+  дефект; пять живых Dashboard в снимке работали.
+- PROD-12: Kronos, Impulse, Lacuna, Resonant при текущем старте сообщили
+  `Agent registry out of sync`. Не подменять проверку реальной адресации
+  наличием startup-предупреждения или исправлением локального registry.
+- Discord disabled у всех пяти по startup-журналам; A01 остаётся незакрытой
+  границей для включённой интеграции, не доказанной текущей live-экспозицией.
+- Диск 92%, свободно 6.23 GiB. Backup job успешен 12:02:34 UTC, но по-прежнему
+  покрывает один workspace; полный restore не проверен. Три pending approvals
+  подтверждены повторно; автоматическое исполнение/отмена не разрешены аудитом.
+- Новые пункты входят в общую цель. Код и production этим аудитом не менялись;
+  полный отчёт и доказательства остаются приватными артефактами задачи.
 
 2026-09-08:
 
