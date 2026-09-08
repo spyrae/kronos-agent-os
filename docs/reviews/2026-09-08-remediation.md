@@ -39,7 +39,7 @@
 
 | ID | Требование / критерий приёмки | Статус |
 |---|---|---|
-| PROD-01 | Уникальные Telegram session paths и аккаунты; нет новых locked errors | Перепроверено: не исправлено; запрошено согласование путей/restart |
+| PROD-01 | Уникальные Telegram session paths и аккаунты; нет новых locked errors | В снимке 09:57 UTC пути уникальны, новых locked после старта нет; account identity/Telegram smoke ещё нужны |
 | PROD-02 | Раздельные session DB, cron-state/log paths; сохранена история | Запрошено согласование конфигурации и защищённого снимка |
 | PROD-03 | Непривилегированный пользователь не читает sessions/DB; безопасный umask | Запрошено согласование прав; shared ledger учесть отдельно |
 | PROD-04 | Runtime отделён от admin/deploy; минимальные sudo/Docker/systemd права | Ожидает проекта и согласования |
@@ -49,6 +49,7 @@
 | PROD-08 | Readiness всего swarm и рабочая OnFailure/доставка alerts | Ожидает |
 | PROD-09 | Согласованный ingress/key-only SSH; соседние сервисы не повреждены | Нужны отдельные согласования host/network изменений |
 | PROD-10 | Согласованный release manifest и loaded build identity | Production-only изменения перенесены; manifest/rollout ожидают |
+| PROD-11 | Основной агент выбирает собственный dotenv, не чужие memory/config paths | Новый пункт повторного аудита: неверный explicit env-source; ожидает согласования конфигурации |
 
 ## Дополнительные пункты обоих аудитов — входят в цель
 
