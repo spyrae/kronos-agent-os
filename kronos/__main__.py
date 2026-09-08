@@ -3,10 +3,6 @@
 import asyncio
 import logging
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
 from kronos.app import main
 from kronos.logging import install_pii_filter
 
