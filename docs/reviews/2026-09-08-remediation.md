@@ -33,7 +33,7 @@
 | F13 | Честный scoped reset по всем слоям, включая background writers | Ожидает | Ожидает |
 | F14 | Desired/effective runtime settings совпадают или restart явно указан | Ожидает | Ожидает |
 | F15 | Model/memory I/O не блокирует event loop; responsiveness test | Ожидает | Ожидает |
-| F16 | Timeout/cancel Codex CLI завершает процесс и потомков, очищает ресурсы | В работе | Ожидает |
+| F16 | Timeout/cancel Codex CLI завершает процесс и потомков, очищает ресурсы | Исправлено и проверено локально | Ожидает rollout |
 
 ## Production-аудит
 
@@ -80,3 +80,21 @@
 
 Исторические проверки F01–F06 подробно описаны в `2026-09-07-remediation.md`;
 их прежние статусы относятся к старой локальной ветке, а не к rollout.
+
+### F16 — владение процессом CLI
+
+- Вызов запускается в отдельной POSIX process group. Timeout/cancel сначала
+  отправляет TERM, затем KILL для оставшихся потомков, дожидается процесса и
+  завершает чтение pipes перед удалением output-файла. Sync-путь также очищает дерево.
+- Отмена во время запуска не теряет process handle; повторная отмена не обрывает
+  cleanup. Даже уже вышедший leader не скрывает оставшихся потомков.
+- 12 целевых тестов прошли, включая реальные локальные процессы: timeout,
+  exited leader + живой child, повторная отмена, отмена во время spawn,
+  ошибка spawn, успешный ответ, сохранность независимого процесса.
+- Полный локальный набор: **2079 passed, 44 integration deselected**, 28.16 sec;
+  Ruff, отдельный F821 и `git diff --check` без ошибок.
+- Изменены `kronos/llm_codex.py`, `tests/test_llm_codex.py`, добавлен
+  `tests/test_llm_codex_cleanup.py`. Codex и реальные провайдеры не запускались.
+- Проверенная граница — POSIX process group (production Linux и локальный macOS),
+  не sandbox против программы, намеренно отделяющейся через новую сессию. Windows
+  имеет cleanup непосредственного процесса, но не проверялся как production target.

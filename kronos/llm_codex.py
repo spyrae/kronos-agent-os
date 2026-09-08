@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import tempfile
 from pathlib import Path
@@ -22,6 +23,64 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import ConfigDict, Field
+
+_PROCESS_EXIT_GRACE_SECONDS = 1.0
+
+
+def _signal_process_tree(proc: subprocess.Popen | asyncio.subprocess.Process, *, kill: bool = False) -> None:
+    """Signal only this invocation's isolated process group on POSIX."""
+    try:
+        if os.name == "posix":
+            # Signal even after the leader exits: descendants may still hold
+            # stdout/stderr open or continue working without their parent.
+            os.killpg(proc.pid, signal.SIGKILL if kill else signal.SIGTERM)
+        elif proc.returncode is None:
+            proc.kill() if kill else proc.terminate()
+    except ProcessLookupError:
+        pass
+
+
+def _stop_sync_process(proc: subprocess.Popen) -> None:
+    _signal_process_tree(proc)
+    try:
+        proc.communicate(timeout=_PROCESS_EXIT_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        pass
+    finally:
+        # A descendant can outlive the leader without holding a pipe open.
+        _signal_process_tree(proc, kill=True)
+        proc.communicate()
+
+
+async def _stop_async_process(
+    spawn: asyncio.Task[asyncio.subprocess.Process],
+    communicate: asyncio.Task[tuple[bytes, bytes]] | None,
+) -> None:
+    try:
+        proc = await spawn
+    except Exception:
+        return  # Spawn failed; there is no process handle to clean up.
+    if communicate is None:
+        communicate = asyncio.create_task(proc.communicate())
+    _signal_process_tree(proc)
+    try:
+        await asyncio.wait_for(asyncio.shield(communicate), _PROCESS_EXIT_GRACE_SECONDS)
+    except TimeoutError:
+        pass
+    finally:
+        _signal_process_tree(proc, kill=True)
+        await proc.wait()
+        await communicate
+
+
+async def _finish_process_cleanup(task: asyncio.Task[None]) -> None:
+    """Finish ownership cleanup even if the caller is cancelled repeatedly."""
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+    task.result()
 
 
 class ChatCodexCLI(BaseChatModel):
@@ -92,32 +151,45 @@ class ChatCodexCLI(BaseChatModel):
         try:
             with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as output_file:
                 output_path = output_file.name
-            proc = subprocess.run(
+            with subprocess.Popen(
                 self._args(prompt, output_path),
-                capture_output=True,
                 stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=self.timeout_seconds,
-                check=False,
-            )
-            return _read_codex_result(proc.returncode, proc.stdout, proc.stderr, output_path)
+                start_new_session=os.name == "posix",
+            ) as proc:
+                try:
+                    stdout, stderr = proc.communicate(timeout=self.timeout_seconds)
+                    return _read_codex_result(proc.returncode, stdout, stderr, output_path)
+                except BaseException:
+                    _stop_sync_process(proc)
+                    raise
         finally:
             if output_path and os.path.exists(output_path):
                 os.unlink(output_path)
 
     async def _run_async(self, prompt: str) -> str:
         output_path = ""
+        spawn = None
+        communicate = None
         try:
             with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as output_file:
                 output_path = output_file.name
-            proc = await asyncio.create_subprocess_exec(
-                *self._args(prompt, output_path),
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            spawn = asyncio.create_task(
+                asyncio.create_subprocess_exec(
+                    *self._args(prompt, output_path),
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    start_new_session=os.name == "posix",
+                )
             )
+            # Cancellation during launch must not lose the process handle.
+            proc = await asyncio.shield(spawn)
+            communicate = asyncio.create_task(proc.communicate())
             stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
+                asyncio.shield(communicate),
                 timeout=self.timeout_seconds,
             )
             return _read_codex_result(
@@ -126,6 +198,11 @@ class ChatCodexCLI(BaseChatModel):
                 stderr.decode("utf-8", errors="replace"),
                 output_path,
             )
+        except BaseException:
+            if spawn is not None:
+                cleanup = asyncio.create_task(_stop_async_process(spawn, communicate))
+                await _finish_process_cleanup(cleanup)
+            raise
         finally:
             if output_path and os.path.exists(output_path):
                 os.unlink(output_path)
