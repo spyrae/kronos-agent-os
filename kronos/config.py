@@ -1,6 +1,7 @@
 """Application settings via Pydantic Settings."""
 
 import os
+from pathlib import PurePosixPath
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,6 +21,21 @@ def _select_env_file() -> str:
 
 _ENV_FILE = _select_env_file()
 load_dotenv(_ENV_FILE, override=False)
+
+
+def _is_legacy_flat_db_path(db_path: str) -> bool:
+    """True for the pre-isolation ``./data/<name>.db`` layout, whatever <name> is.
+
+    Matching only the agent's own name left a copy-pasted ``DB_PATH=./data/kronos.db``
+    intact in three ``.env.<agent>`` files, so lacuna, resonant and keystone all
+    resolved to one session store. ``sessions`` is keyed by ``thread_id`` alone and
+    every write replaces the whole row, so the agent that answered last silently
+    overwrote the others' history in that thread.
+    """
+    if not db_path:
+        return True
+    parts = PurePosixPath(db_path.removeprefix("./")).parts
+    return len(parts) == 2 and parts[0] == "data" and parts[1].endswith(".db")
 
 
 class Settings(BaseSettings):
@@ -204,8 +220,7 @@ class Settings(BaseSettings):
         moves the physical file to match.
         """
         # Detect a legacy flat DB_PATH and rewrite it in place.
-        legacy_flat = f"./data/{self.agent_name}.db"
-        if self.db_path in ("", legacy_flat, f"data/{self.agent_name}.db"):
+        if _is_legacy_flat_db_path(self.db_path):
             self.db_path = ""  # force re-resolution below
 
         if not self.db_dir:
