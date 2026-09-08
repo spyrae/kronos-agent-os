@@ -62,7 +62,7 @@
 | A03 | Browser screenshot доходит до модели полноценным изображением | Ожидает |
 | A04 | Полное резервирование вместо одного workspace | См. PROD-07; не исключено из цели |
 | A05 | FTS/shared memory доступна без обязательного DeepSeek key | Ожидает |
-| A06 | Сквозные chat→tool→approval→effect→delivery и fault-injection gates | Ожидает |
+| A06 | Сквозные chat→tool→approval→effect→delivery и fault-injection gates | Частично: 8 локальных invocation contracts возвращены в обычный regression; полный E2E/live gate ещё нужен |
 | V01 | Актуальные CVE: installed Python, frontend и относящиеся к сервису OS packages | Передача inventory в OSV требует ранее запрошенного разрешения |
 | V02 | Причина reboot-required/OS updates проверена; безопасное решение по reboot | Список содержит libc6/linux-base и более новые kernel packages; CVE/maintenance window ещё не определены, reboot не разрешён автоматически |
 | V03 | Сверены старые approvals/исторические неопределённые расходы | Ожидает; не выполнять автоматически |
@@ -1000,3 +1000,36 @@ upstream source и fake Mem0 tests этого не заменяют. Также 
 ledger, reservation, unknown outcomes/SDK retries и reconciliation; F12 не закрыт.
 F13 background writer/reset ownership, F15 event-loop responsiveness, A02 scoping,
 A05 keyless memory и остальные F/A/PROD/V пункты не исключены из цели.
+
+### A06 — локальные invocation contracts больше не скрыты integration marker
+
+- Убран blanket integration marker с `tests/test_graph_contract.py`: эти восемь
+  контрактов уже подменяют react_loop и не требуют реальных API. Добавлена
+  autouse fixture с имеющимися fake providers и изолированными ledger/settings;
+  сама factory/guardian boundary не отключена, return-value assertions сохранены.
+- Причина прежних шести failures — вызов factory при построении runtime-модели
+  до замоканного react_loop в окружении без provider configuration. Она отдельно
+  подтверждена на graph из 530717b, то есть до изменения invocation scope. После
+  исправления fixture все восемь реально выполняются в `-m 'not integration'`.
+- Focused набор (Mem0 + graph contracts + budget + memory + plan stop):
+  **95 passed**, 1.34 sec. Полный набор: **2467 passed, 58 integration deselected,
+  1 warning**, 38.27 sec. Ruff/diff-check — PASS. Runtime после e887327 не менялся;
+  его **27 crash tests** уже прошли выше, дополнительный crash-прогон для одного
+  test-fixture изменения не требовался.
+- 58 исключённых cases теперь состоят из 27 отдельно запущенных crash tests и
+  31 оставшегося environment/external integration case. Последние этим этапом
+  не запускались. Это не означает, что весь A06 или production E2E уже закрыт.
+
+Файлы: `tests/test_graph_contract.py` и этот реестр.
+Проверить: `KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python
+-m pytest tests/test_graph_contract.py tests/test_mem0_budget.py tests/test_model_budget.py
+tests/test_memory.py tests/test_plan_stop.py -m 'not integration' -q`.
+Логи: `/tmp/kaos-graph-contract-local-final.txt`,
+`/tmp/kaos-graph-contract-full-final.txt`; отрицательный baseline — выше.
+
+Порядок дальнейшей работы не должен открывать уже найденную дыру: A05 (включение
+keyless memory) нужно сочетать с A02. Проверка текущего кода вновь подтверждает,
+что `knowledge_graph.entities/relations` не имеют user_id, `get_graph_context`
+принимает только query/limit, а `session_search` ищет общий индекс. Простое снятие
+DeepSeek gate без user-scoping расширило бы выдачу общей памяти. Схема требует
+отдельной миграции и решения о старых записях; ничего не удалено/не мигрировано.
