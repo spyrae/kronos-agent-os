@@ -13,3 +13,4 @@ gets a new record and marks the previous one superseded.
 | 0006 | [Plan approval reconciliation](ADR-0006-plan-approval-reconciliation.md) | accepted | 2026-09-08 |
 | 0007 | [External effect intents](ADR-0007-external-effect-intents.md) | accepted | 2026-09-08 |
 | 0008 | [Conversation execution ownership](ADR-0008-conversation-execution-ownership.md) | accepted | 2026-09-08 |
+| 0009 | [Durable tool-batch replay](ADR-0009-durable-tool-batch-replay.md) | accepted | 2026-09-08 |

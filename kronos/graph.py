@@ -290,6 +290,9 @@ class KronosAgent:
         async def get_external_effect(key: str) -> str | None:
             return await self._session_store.get_external_effect(key)
 
+        async def recover_tool_result(tool_call: dict) -> str | None:
+            return await self._session_store.get_recorded_call_effect(turn_id, tool_call)
+
         async def record_external_effect(key: str, tool_name: str, result: str) -> None:
             await self._session_store.record_external_effect(
                 key=key,
@@ -336,6 +339,7 @@ class KronosAgent:
             "save_tool_result": save_tool_result,
             "request_tool_approval": request_tool_approval,
             "get_external_effect": get_external_effect,
+            "recover_tool_result": recover_tool_result,
             "record_external_effect": record_external_effect,
             "begin_external_effect": begin_external_effect,
             "finish_external_effect": finish_external_effect,
@@ -449,7 +453,11 @@ class KronosAgent:
         thread_id = str(pending["thread_id"])
         tool_call_id = str(pending["tool_call_id"])
         tool_name = str(pending["tool_name"])
-        messages = await self._session_store.load_turn_messages(thread_id, turn_id)
+        try:
+            messages = await self._session_store.load_turn_messages(thread_id, turn_id)
+        except DurableStateError:
+            await self._session_store.fail_turn(turn_id, "invalid durable journal; review required")
+            raise
 
         args = pending.get("args", {}) or {}
         delegation = pending.get("delegation")
@@ -604,7 +612,11 @@ class KronosAgent:
             await self._session_store.fail_turn(turn_id, "unresolved external effect; reconciliation required")
             return None
 
-        messages = await self._session_store.load_turn_messages(thread_id, turn_id)
+        try:
+            messages = await self._session_store.load_turn_messages(thread_id, turn_id)
+        except DurableStateError:
+            await self._session_store.fail_turn(turn_id, "invalid durable journal; review required")
+            return None
         if not messages:
             await self._session_store.fail_turn(turn_id, "nothing to resume")
             return None
@@ -613,6 +625,7 @@ class KronosAgent:
             turn_id=turn_id,
             thread_id=thread_id,
         )
+        react_loop_kwargs["resume_pending_tools"] = True
         audit_token = set_tool_audit_context(
             agent=settings.agent_name,
             thread_id=thread_id,

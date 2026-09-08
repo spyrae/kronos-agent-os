@@ -25,7 +25,9 @@ from langchain_core.messages import (
 from kronos.effect_state import DurableStateError, EffectClaim, EffectUncertainError
 from kronos.migrations.v001_turn_outcome import migrate as migrate_turn_outcome
 from kronos.migrations.v003_effect_intents import migrate as migrate_effect_intents
+from kronos.migrations.v004_effect_protocol import migrate as migrate_effect_protocol
 from kronos.outcomes import InvocationOutcome, InvocationStatus
+from kronos.tool_history import trim_completed_history, unanswered_tool_calls
 from kronos.turn_ownership import TurnBusyError, TurnOwnership, own_conversation
 
 log = logging.getLogger("kronos.session")
@@ -114,6 +116,27 @@ def _deserialize_message(data: dict) -> BaseMessage:
         )
     else:
         return HumanMessage(content=content)
+
+
+def _deserialize_journal_message(raw: str) -> BaseMessage:
+    """Decode execution evidence strictly; never silently skip a corrupt delta."""
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict) or data.get("type") not in {
+            "AIMessage", "HumanMessage", "SystemMessage", "ToolMessage"
+        }:
+            raise ValueError("invalid journal message type")
+        if not isinstance(data.get("content"), (str, list)):
+            raise ValueError("invalid journal content")
+        if data["type"] == "AIMessage" and not isinstance(data.get("tool_calls", []), list):
+            raise ValueError("invalid journal tool calls")
+        if data["type"] == "ToolMessage" and not (
+            isinstance(data.get("tool_call_id"), str) and data["tool_call_id"]
+        ):
+            raise ValueError("invalid journal tool result id")
+        return _deserialize_message(data)
+    except (ValueError, KeyError, TypeError) as error:
+        raise DurableStateError("invalid durable journal message; review required") from error
 
 
 class SessionStore:
@@ -262,6 +285,7 @@ class SessionStore:
             await db.commit()
             await migrate_turn_outcome(db)
             await migrate_effect_intents(db)
+            await migrate_effect_protocol(db)
             self._initialized = True
 
     async def begin_turn(self, thread_id: str, input_message: str) -> str:
@@ -272,8 +296,8 @@ class SessionStore:
             await db.execute(
                 """
                 INSERT INTO active_turns
-                    (turn_id, thread_id, status, input_message)
-                VALUES (?, ?, 'running', ?)
+                    (turn_id, thread_id, status, input_message, effect_protocol)
+                VALUES (?, ?, 'running', ?, 1)
                 """,
                 (turn_id, thread_id, input_message),
             )
@@ -331,6 +355,23 @@ class SessionStore:
             row = await cursor.fetchone()
         return str(row[0]) if row else None
 
+    async def get_recorded_call_effect(self, turn_id: str, tool_call: dict) -> str | None:
+        """Read a proven effect result using the frozen call identity, not a new key."""
+        args_json = json.dumps(tool_call["args"], sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                """SELECT e.result FROM effect_intents i
+                   JOIN external_effects e ON e.idempotency_key = i.idempotency_key
+                   WHERE i.turn_id = ? AND i.tool_call_id = ? AND i.tool = ?
+                     AND i.args_json = ? AND i.status = 'recorded'""",
+                (turn_id, tool_call["id"], tool_call["name"], args_json),
+            )
+            rows = await cursor.fetchall()
+        if len(rows) > 1:
+            raise EffectUncertainError("multiple effects for one tool call; reconcile before continuing")
+        return str(rows[0][0]) if rows else None
+
     async def save_tool_result(
         self,
         *,
@@ -385,7 +426,7 @@ class SessionStore:
             await self._ensure_table(db)
             cursor = await db.execute(
                 """
-                SELECT turn_id, thread_id, status, input_message, attempts, started_at, completed_at, error
+                SELECT turn_id, thread_id, status, input_message, attempts, started_at, completed_at, error, effect_protocol
                 FROM active_turns WHERE turn_id = ?
                 """,
                 (turn_id,),
@@ -402,6 +443,7 @@ class SessionStore:
                 "started_at",
                 "completed_at",
                 "error",
+                "effect_protocol",
             )
             turn = dict(zip(keys, row, strict=False))
 
@@ -643,10 +685,12 @@ class SessionStore:
                         raise EffectUncertainError("identical operation under a new call id; intent review required")
                     await db.commit()
                     return EffectClaim(result=str(recorded[0]))
-                cursor = await db.execute("SELECT status FROM active_turns WHERE turn_id = ?", (turn_id,))
+                cursor = await db.execute("SELECT status, effect_protocol FROM active_turns WHERE turn_id = ?", (turn_id,))
                 turn = await cursor.fetchone()
                 if not turn or turn[0] not in {"running", "resuming"}:
                     raise DurableStateError("external effect requires an active durable turn")
+                if turn[1] != 1:
+                    raise EffectUncertainError("legacy turn lacks intent-protocol proof; reconcile before dispatch")
                 cursor = await db.execute(
                     """SELECT 1 FROM effect_intents
                        WHERE idempotency_key = ? OR (status = 'pending'
@@ -987,12 +1031,12 @@ class SessionStore:
         async with self._open_db() as db:
             await self._ensure_table(db)
             cursor = await db.execute(
-                "SELECT input_message FROM active_turns WHERE turn_id = ?",
-                (turn_id,),
+                "SELECT input_message FROM active_turns WHERE turn_id = ? AND thread_id = ?",
+                (turn_id, thread_id),
             )
             turn_row = await cursor.fetchone()
             if not turn_row:
-                return messages
+                raise DurableStateError("durable turn missing or thread does not match")
 
             messages.append(HumanMessage(content=str(turn_row[0])))
             journal_cursor = await db.execute(
@@ -1006,10 +1050,8 @@ class SessionStore:
             journal_rows = await journal_cursor.fetchall()
 
         for (raw_message,) in journal_rows:
-            try:
-                messages.append(_deserialize_message(json.loads(raw_message)))
-            except (json.JSONDecodeError, KeyError, TypeError) as e:
-                log.warning("Skipping malformed journal message for turn %s: %s", turn_id, e)
+            messages.append(_deserialize_journal_message(raw_message))
+        unanswered_tool_calls(messages)
         return messages
 
     async def finish_turn(self, turn_id: str) -> None:
@@ -1044,7 +1086,7 @@ class SessionStore:
         Omitted content stays unknown, rather than borrowing another turn's
         answer from shared or compacted history.
         """
-        trimmed = messages[-MAX_HISTORY:] if len(messages) > MAX_HISTORY else messages
+        trimmed = trim_completed_history(messages, MAX_HISTORY)
         data = json.dumps(
             [_serialize_message(m) for m in trimmed],
             ensure_ascii=False,
@@ -1159,7 +1201,11 @@ class SessionStore:
         for turn in await self.resumable_turns():
             try:
                 async with own_conversation(self.db_path, turn["thread_id"], wait=False) as ownership:
-                    recovered += await self._report_abandoned_turn(turn["turn_id"], ownership)
+                    try:
+                        recovered += await self._report_abandoned_turn(turn["turn_id"], ownership)
+                    except DurableStateError:
+                        await self.fail_turn(turn["turn_id"], "invalid durable journal; review required")
+                        log.error("Turn %s requires journal review; history was not overwritten", turn["turn_id"])
             except TurnBusyError:
                 continue
         if recovered:
@@ -1194,7 +1240,7 @@ class SessionStore:
                 if session_row:
                     try:
                         data = json.loads(session_row[0])
-                        messages = [_deserialize_message(d) for d in data]
+                        messages = trim_completed_history([_deserialize_message(d) for d in data], MAX_HISTORY)
                     except (json.JSONDecodeError, KeyError, TypeError) as e:
                         log.warning("Skipping malformed session %s during turn recovery: %s", thread_id, e)
                         messages = []
@@ -1211,10 +1257,23 @@ class SessionStore:
                 )
                 journal_rows = await journal_cursor.fetchall()
                 for (raw_message,) in journal_rows:
-                    try:
-                        messages.append(_deserialize_message(json.loads(raw_message)))
-                    except (json.JSONDecodeError, KeyError, TypeError) as e:
-                        log.warning("Skipping malformed journal message for turn %s: %s", turn_id, e)
+                    messages.append(_deserialize_journal_message(raw_message))
+
+                for call in unanswered_tool_calls(messages):
+                    cursor = await db.execute(
+                        """SELECT content FROM tool_results WHERE turn_id = ? AND tool_call_id = ?
+                           AND NOT EXISTS (SELECT 1 FROM effect_intents WHERE turn_id = ? AND status = 'pending')""",
+                        (turn_id, call["id"], turn_id),
+                    )
+                    cached = await cursor.fetchone()
+                    # Close the provider protocol, not the business operation.
+                    # Keep the original journal/cache untouched for reconciliation.
+                    content = str(cached[0]) if cached else (
+                        "[INTERRUPTED: NO VERIFIED RESULT] The prior execution stopped. "
+                        "This is not evidence that the action succeeded or failed. "
+                        "Do not repeat the action without reconciling its actual outcome."
+                    )
+                    messages.append(ToolMessage(content=content, tool_call_id=call["id"]))
 
                 messages.append(
                     AIMessage(
@@ -1225,7 +1284,7 @@ class SessionStore:
                         ),
                     )
                 )
-                trimmed = messages[-MAX_HISTORY:] if len(messages) > MAX_HISTORY else messages
+                trimmed = trim_completed_history(messages, MAX_HISTORY)
                 data = json.dumps([_serialize_message(m) for m in trimmed], ensure_ascii=False)
                 await db.execute(
                     """INSERT INTO sessions (thread_id, messages, updated_at)
@@ -1276,7 +1335,7 @@ class SessionStore:
 
         try:
             data = json.loads(row[0])
-            return [_deserialize_message(d) for d in data]
+            return trim_completed_history([_deserialize_message(d) for d in data], MAX_HISTORY)
         except (json.JSONDecodeError, KeyError) as e:
             log.error("Failed to deserialize session %s: %s", thread_id, e)
             return []
@@ -1284,7 +1343,7 @@ class SessionStore:
     async def save(self, thread_id: str, messages: list[BaseMessage]) -> None:
         """Save conversation history, keeping only the last MAX_HISTORY messages."""
         # Trim to max history (keep most recent)
-        trimmed = messages[-MAX_HISTORY:] if len(messages) > MAX_HISTORY else messages
+        trimmed = trim_completed_history(messages, MAX_HISTORY)
 
         data = json.dumps(
             [_serialize_message(m) for m in trimmed],

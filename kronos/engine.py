@@ -33,6 +33,7 @@ from kronos.security.untrusted import (
     handle_injection,
     tool_output_is_untrusted,
 )
+from kronos.tool_history import unanswered_tool_calls
 from kronos.tools.error_handler import classify_tool_error
 
 log = logging.getLogger("kronos.engine")
@@ -43,6 +44,7 @@ ToolEventCallback = Callable[[str, dict[str, Any]], None]
 MessageDeltaCallback = Callable[[list[BaseMessage]], Any]
 ToolCacheGetCallback = Callable[[str], Any]
 ToolCacheSaveCallback = Callable[[str, str], Any]
+ToolRecoveryCallback = Callable[[dict], Any]
 ToolApprovalPredicate = Callable[[BaseTool, dict], Any]
 ToolApprovalRequestCallback = Callable[[BaseTool, dict], Any]
 EffectGetCallback = Callable[[str], Any]
@@ -587,6 +589,21 @@ def tool_runs_in_parallel(tool: BaseTool) -> bool:
     return not tool_has_side_effect(tool) and not tool_delegates(tool)
 
 
+def _tool_has_replay_contract(tool: BaseTool) -> bool:
+    """Only classified tools can restart without a child-level execution journal."""
+    if tool_delegates(tool):
+        return False
+    metadata = getattr(tool, "metadata", None) or {}
+    if metadata.get(SIDE_EFFECT_METADATA_KEY) is not None or getattr(tool, SIDE_EFFECT_METADATA_KEY, None) is not None:
+        return True
+    if tool_has_side_effect(tool):
+        return True
+    from kronos.security.mcp_tools import normalized_tool_name
+
+    _, _, read_only = _approval_lists()
+    return normalized_tool_name(tool.name).startswith(read_only)
+
+
 def side_effect_key(tool: BaseTool, args: dict, turn_id: str = "") -> str:
     """Idempotency key for one side-effecting call.
 
@@ -754,6 +771,8 @@ async def react_loop(
     begin_external_effect: EffectBeginCallback | None = None,
     finish_external_effect: EffectFinishCallback | None = None,
     turn_id: str = "",
+    resume_pending_tools: bool = False,
+    recover_tool_result: ToolRecoveryCallback | None = None,
 ) -> AgentResult:
     """Run the ReAct loop: LLM → tool_calls → execute → LLM → ...
 
@@ -764,6 +783,9 @@ async def react_loop(
         system_prompt: Optional system prompt prepended to messages.
         max_turns: Max LLM calls before forced stop.
         error_handler: Callback for tool execution errors.
+        resume_pending_tools: Finish only the journal's incomplete final batch
+            before the next model call, using original call ids and arguments.
+            Caller must own the durable turn and check unresolved intents.
 
     Returns:
         AgentResult with full message history and final text content.
@@ -789,6 +811,14 @@ async def react_loop(
     if system_prompt:
         call_messages = [SystemMessage(content=system_prompt)] + call_messages
 
+    pending_calls = unanswered_tool_calls(messages)
+    if pending_calls and not resume_pending_tools:
+        raise DurableStateError("unfinished tool batch requires explicit durable resume")
+    if pending_calls and not (turn_id and on_message_delta and get_cached_tool_result and save_tool_result):
+        raise DurableStateError("tool batch resume requires durable journal and cache callbacks")
+    if pending_calls and max_turns < 1:
+        raise DurableStateError("tool batch resume requires a positive model call budget")
+    pending_response = AIMessage(content="", tool_calls=pending_calls) if pending_calls else None
     total_tool_calls = 0
 
     def emit_tool_event(event: str, payload: dict[str, Any]) -> None:
@@ -856,25 +886,32 @@ async def react_loop(
     loop_detector = LoopDetector()
     last_nudge_level = LoopLevel.OK
 
-    for turn in range(max_turns):
-        # Call LLM
-        try:
-            response: AIMessage = await bound_model.ainvoke(call_messages)
-        except Exception as e:
-            log.error("LLM call failed (turn %d): %s", turn, e)
-            error_msg = AIMessage(content="Произошла ошибка при обработке. Попробуй ещё раз.")
-            messages.append(error_msg)
-            await emit_message_delta([error_msg])
-            return AgentResult(
-                messages=messages,
-                content=error_msg.content,
-                tool_calls_count=total_tool_calls,
-                failure_reason="model_error",
-            )
+    # Restoring a journalled batch is not another model call. It must not
+    # consume the only model turn available to summarize the recovered result.
+    for turn in range(max_turns + int(bool(pending_response) and max_turns > 0)):
+        replaying_batch = pending_response is not None
+        if pending_response is not None:
+            response = pending_response
+            pending_response = None
+        else:
+            try:
+                response: AIMessage = await bound_model.ainvoke(call_messages)
+            except Exception as e:
+                log.error("LLM call failed (turn %d): %s", turn, e)
+                error_msg = AIMessage(content="Произошла ошибка при обработке. Попробуй ещё раз.")
+                messages.append(error_msg)
+                await emit_message_delta([error_msg])
+                return AgentResult(
+                    messages=messages,
+                    content=error_msg.content,
+                    tool_calls_count=total_tool_calls,
+                    failure_reason="model_error",
+                )
 
-        messages.append(response)
-        call_messages.append(response)
-        await emit_message_delta([response])
+            unanswered_tool_calls([*call_messages, response])
+            messages.append(response)
+            call_messages.append(response)
+            await emit_message_delta([response])
 
         # No tool calls → done
         if not getattr(response, "tool_calls", None):
@@ -888,7 +925,7 @@ async def react_loop(
         # Run the independent calls of this message together, then walk the
         # calls in order as before. The sequential pass below is unchanged; it
         # just finds some results already computed.
-        precomputed = await _run_parallel_calls(
+        precomputed = {} if replaying_batch else await _run_parallel_calls(
             response.tool_calls,
             tool_map=tool_map,
             error_handler=error_handler,
@@ -917,7 +954,29 @@ async def react_loop(
             )
             tool_started = time.perf_counter()
 
-            if tool is None:
+            cached_content = await read_cached_tool_result(tool_call_id)
+            if cached_content is not None and tool is None:
+                cached_content = wrap_untrusted(cached_content, label=f"tool:{tool_name}")
+            if cached_content is None and replaying_batch:
+                try:
+                    recovered = await maybe_await(recover_tool_result(tc)) if recover_tool_result else None
+                    if recovered is None and tool is not None and tool_has_side_effect(tool) and get_external_effect:
+                        key = side_effect_key(tool, tc.get("args", {}), turn_id)
+                        recovered = await maybe_await(get_external_effect(key))
+                except DurableStateError:
+                    raise
+                except Exception as error:
+                    raise DurableStateError("effect result recovery failed") from error
+                if recovered is not None:
+                    cached_content = str(recovered)
+                    if tool is None or tool_output_is_untrusted(tool):
+                        if tool is not None:
+                            cached_content, _ = _handle_injection_in_untrusted(tool, cached_content)
+                        cached_content = wrap_untrusted(cached_content, label=f"tool:{tool_name}")
+                    await write_tool_result(tool_call_id, cached_content)
+            if replaying_batch and cached_content is None and tool is not None and not _tool_has_replay_contract(tool):
+                raise EffectUncertainError("tool lacks a safe replay contract; child execution review required")
+            if tool is None and cached_content is None:
                 log.warning("Unknown tool called: '%s'", tool_name)
                 tm = ToolMessage(
                     content=f"[ERROR] Unknown tool: '{tool_name}'. Available: {list(tool_map.keys())}",
@@ -942,7 +1001,6 @@ async def react_loop(
                     },
                 )
             else:
-                cached_content = await read_cached_tool_result(tool_call_id)
                 if cached_content is not None:
                     tm = ToolMessage(content=cached_content, tool_call_id=tool_call_id)
                     log.info("Tool result cache hit: %s (%s)", tool_name, tool_call_id)

@@ -61,7 +61,9 @@ def _sender(marker: Path):
     return tool
 
 
-async def _crash(workdir: Path, *, before_result: bool = False) -> None:
+async def _crash(
+    workdir: Path, *, before_result: bool = False, before_dispatch: bool = False, before_cache: bool = False
+) -> None:
     from kronos.engine import execute_tool, side_effect_key
     from kronos.session import SessionStore
 
@@ -80,6 +82,15 @@ async def _crash(workdir: Path, *, before_result: bool = False) -> None:
     # Perform the real side effect and record it, exactly as react_loop would.
     tool = _sender(workdir / "sent.log")
 
+    def kill_with_marker():
+        (workdir / "crashed.txt").write_text(
+            f"{turn_id}\n{side_effect_key(tool, call['args'], turn_id)}\n", encoding="utf-8"
+        )
+        os.kill(os.getpid(), signal.SIGKILL)
+
+    if before_dispatch:
+        kill_with_marker()
+
     async def finish_effect(key, token, name, result):
         if before_result:
             (workdir / "crashed.txt").write_text(f"{turn_id}\n{key}\n", encoding="utf-8")
@@ -95,6 +106,8 @@ async def _crash(workdir: Path, *, before_result: bool = False) -> None:
         finish_external_effect=finish_effect,
         turn_id=turn_id,
     )
+    if before_cache:
+        kill_with_marker()
     await store.save_tool_result(turn_id=turn_id, tool_call_id=TOOL_CALL_ID, content=str(message.content))
 
     (workdir / "crashed.txt").write_text(
@@ -122,6 +135,17 @@ async def _resume(workdir: Path) -> int:
             return self
 
         async def ainvoke(self, messages, *args, **kwargs):
+            from langchain_core.messages import ToolMessage
+
+            pending = set()
+            for message in messages:
+                if isinstance(message, ToolMessage):
+                    assert message.tool_call_id in pending, "orphan tool result on real restart"
+                    pending.remove(message.tool_call_id)
+                else:
+                    assert not pending, "incomplete batch reached model on real restart"
+                    pending = {call["id"] for call in getattr(message, "tool_calls", [])}
+            assert not pending, "unanswered tool call reached model on real restart"
             return AIMessage(content="Отчёт отправлен, подтверждаю.")
 
         def invoke(self, messages, *args, **kwargs):
@@ -186,19 +210,22 @@ async def _report(workdir: Path) -> int:
     return 0
 
 
-async def _owned_crash(workdir: Path, *, before_result: bool) -> None:
+async def _owned_crash(workdir: Path, *, mode: str) -> None:
     from kronos.turn_ownership import own_conversation
 
     async with own_conversation(str(workdir / "session.db"), THREAD_ID):
-        await _crash(workdir, before_result=before_result)
+        await _crash(
+            workdir, before_result=mode == "crash-before-result",
+            before_dispatch=mode == "crash-before-dispatch", before_cache=mode == "crash-before-cache",
+        )
 
 
 def main() -> int:
     mode, workdir = sys.argv[1], Path(sys.argv[2])
     _configure(workdir)
 
-    if mode in {"crash", "crash-before-result"}:
-        asyncio.run(_owned_crash(workdir, before_result=mode == "crash-before-result"))
+    if mode in {"crash", "crash-before-result", "crash-before-dispatch", "crash-before-cache"}:
+        asyncio.run(_owned_crash(workdir, mode=mode))
         return 0  # unreachable: the process is killed above
     if mode == "resume":
         return 0 if asyncio.run(_resume(workdir)) else 1

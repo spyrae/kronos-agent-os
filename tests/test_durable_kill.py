@@ -175,3 +175,24 @@ def test_kill_after_dispatch_before_result_commit_refuses_blind_resume(workdir):
         status, reason = db.execute("SELECT status, error FROM active_turns WHERE turn_id = ?", (turn_id,)).fetchone()
     assert status == "failed"
     assert "reconciliation required" in reason
+
+
+@pytest.mark.parametrize("mode", ["crash-before-dispatch", "crash-before-cache"])
+def test_restart_finishes_original_batch_before_calling_model(workdir, mode):
+    import sqlite3
+
+    crashed = _run(mode, workdir)
+    assert crashed.returncode == -signal.SIGKILL, crashed.stderr[-2000:]
+    turn_id = (workdir / "crashed.txt").read_text().splitlines()[0]
+    if mode == "crash-before-dispatch":
+        assert not (workdir / "sent.log").exists()
+    else:
+        assert len((workdir / "sent.log").read_text().splitlines()) == 1
+    with sqlite3.connect(workdir / "session.db") as db:
+        assert db.execute("SELECT COUNT(*) FROM tool_results").fetchone()[0] == 0
+    resumed = _run("resume", workdir)
+    assert resumed.returncode == 0, resumed.stderr[-2000:]
+    assert "finished=1 delivered=1" in resumed.stdout
+    assert len((workdir / "sent.log").read_text().splitlines()) == 1
+    with sqlite3.connect(workdir / "session.db") as db:
+        assert db.execute("SELECT status FROM active_turns WHERE turn_id = ?", (turn_id,)).fetchone()[0] == "done"

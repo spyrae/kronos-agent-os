@@ -295,10 +295,7 @@ async def test_dashboard_resumes_with_live_tools_and_refuses_racing_request(agen
 
     agent._tools = [StructuredTool.from_function(coroutine=send, name="send_message", description="live tool")]
     model = AsyncMock()
-    model.ainvoke = AsyncMock(side_effect=[
-        AIMessage(content="", tool_calls=[{"name": "send_message", "args": {}, "id": "c1"}]),
-        AIMessage(content="done"),
-    ])
+    model.ainvoke = AsyncMock(return_value=AIMessage(content="done"))
     model.bind_tools = lambda tools: model
     monkeypatch.setattr("kronos.graph.get_model", lambda tier: model)
 

@@ -1374,6 +1374,8 @@ def run_turns_show(turn_id: str) -> int:
     print(f"turn {detail['turn_id']}  [{detail['status']}]  thread={detail['thread_id']}")
     print(f"  started: {detail.get('started_at')}   completed: {detail.get('completed_at') or '—'}")
     print(f"  attempts: {detail.get('attempts', 0)}")
+    protocol = detail.get("effect_protocol", 0)
+    print(f"  effect protocol: {protocol}" + (" — legacy; missing intent is not proof of no effect" if not protocol else ""))
     if detail.get("error"):
         print(f"  error: {detail['error']}")
     print(f"  input: {str(detail.get('input_message') or '')[:200]}")

@@ -56,8 +56,8 @@ async def _run(tool, store, *, turn_id="turn-1", args=None, call_id="c1"):
     await store.load("init")
     with sqlite3.connect(store.db_path) as db:
         db.execute(
-            "INSERT OR IGNORE INTO active_turns (turn_id, thread_id, status, input_message) "
-            "VALUES (?, 'test', 'running', 'test operation')",
+            "INSERT OR IGNORE INTO active_turns (turn_id, thread_id, status, input_message, effect_protocol) "
+            "VALUES (?, 'test', 'running', 'test operation', 1)",
             (turn_id,),
         )
     return await execute_tool(

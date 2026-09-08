@@ -25,7 +25,7 @@
 | F05 | Per-item ledger; partial/unknown outcomes не теряются и не дублируются | Перенесён, regression пройден | Нужна миграция и сверка |
 | F06 | Межпроцессная сериализация всех budget writers | Перенесён, regression пройден | Не развёрнуто |
 | F07 | Approval wait не завершает шаг; approve/reject/restart согласованы | Исправлено и проверено локально | Нужны миграции, rollout и Telegram smoke |
-| F08 | Отмена/падение шага восстанавливаются без слепого повтора эффектов | В работе: есть F10 intents и F11 ownership; lifecycle/recovery шагов ещё нужны | Ожидает |
+| F08 | Отмена/падение шага восстанавливаются без слепого повтора эффектов | В работе: intents, ownership и восстановление tool batch проверены; lifecycle шагов и operator workflow ещё нужны | Ожидает |
 | F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | Ожидает | Ожидает |
 | F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | В работе: intent/journal boundary проверен; полный перечень путей и reconciliation не закрыты | Ожидает |
 | F11 | Один resume на turn; live registry и atomic ownership | Исправлено и проверено локально | Нужен согласованный rollout без старых исполнителей |
@@ -310,3 +310,92 @@
   provider idempotency, прямые custom/cron writers, retention business keys остаются.
 - F09: transport readiness и durable outbox; F13: scope reset/background writers.
   Сериализация выполнения не доказывает exactly-once внешней операции или доставки.
+
+### F08/F10 — восстановление исходного tool batch и граница legacy-данных
+
+- Resume больше не отправляет модели незавершённый assistant→tool протокол.
+  Сначала восстанавливает только недостающие ответы последнего batch, с исходными
+  call id/аргументами. Уже записанные sibling results не повторяются, исходный
+  AIMessage не дублируется. Replay идёт последовательно и не расходует лишний
+  model-call iteration.
+- Результат берётся из tool cache либо recorded effect, совпадающего по turn,
+  call id, tool и frozen args. Это работает даже после удаления tool из registry.
+  Для legacy сохраняется чтение по известному idempotency key. Положительный
+  результат восстанавливается до approval, поэтому выполненная операция не
+  запрашивает повторного подтверждения. Untrusted framing сохраняется.
+- Новый вызов проходит прежние approval/intent guards. Pending intent по-прежнему
+  запрещает resume до модели. Незавершённые delegates/custom pipelines без
+  доказанного replay-контракта не перезапускаются целиком: нужна работа по
+  child journal/reconciliation. Готовый cached parent result восстановить можно.
+- Миграция `v004_effect_protocol` оставляет старым ходам версию 0; `begin_turn`
+  нового runtime атомарно записывает 1. Отсутствие intent у старого хода **не**
+  даёт права на новую мутацию. Legacy recorded results и read-only вызовы доступны.
+  API/CLI показывают версию, чтобы оператор видел эту границу.
+- Повреждённые journal rows больше не пропускаются. Непарные/повторные tool results,
+  duplicate call ids, смена аргументов под прежним id, не-JSON args и незавершённый
+  batch перед следующим сообщением останавливают продолжение. Исходный journal
+  остаётся для проверки; ошибка не становится успешным результатом.
+- Report-only recovery закрывает протокольные слоты в conversation history
+  явным `NO VERIFIED RESULT`, не выдуманным success/failure. Такой placeholder
+  не записывается в execution journal или tool cache и не разрешает replay.
+  При повреждённом journal прежняя история не перезаписывается.
+- Обрезка completed history по MAX_HISTORY больше не оставляет в начале хвост
+  ToolMessage без исходного запроса. Старый обрезанный prefix пропускается при
+  чтении без изменения его SQLite-источника. Активный journal не обрезается и
+  не «чинится» пропуском неоднозначных записей.
+
+Проверки финального кода:
+
+- **2184 passed, 49 integration deselected, 1 warning; 31.10 sec**, exit 0.
+- Отдельно **10 integration SIGKILL/restart passed; 7.72 sec**, exit 0. Два новых
+  сценария убивают процесс после записи tool request до dispatch и после effect
+  result commit до tool cache. Новый процесс завершает исходный batch и оставляет
+  ровно одну реальную строку side effect. Mock model в crash helper теперь строго
+  отвергает неполную историю: старые положительные тесты тоже стали сильнее.
+- **35 новых unit/adapter cases**: partial batch, cache/ledger, удалённый tool,
+  повторный approval, legacy protocol, concurrent migration, malformed journal,
+  changed call identity, approval/deferred batch continuation, untrusted framing,
+  отказ blind custom replay, границы trimming и report-only без ложных результатов.
+- **ChatOpenAI и ChatDeepSeek** запускались с их настоящей сериализацией и
+  `httpx.MockTransport`: проверяется JSON HTTP request с полными tool-call/result
+  парами. Это проверка адаптеров, **не** вызов настоящего провайдера.
+- Ruff, отдельный F821 и `git diff --check` чистые. Зависимости и эксплуатационная
+  конфигурация не менялись. Остальные **39 integration cases не запускались**.
+- Первый общий sandbox-запуск выявил 15 ограничений socket/process тестов и 5
+  fixtures, вручную создававших legacy rows для проверки новых эффектов. Эти
+  fixtures явно переведены на новый protocol; запрет legacy replay покрыт
+  отдельными новыми тестами. Финальный полный набор запущен с разрешением
+  локальных socket/process проверок — ошибки не скрыты исключением тестов.
+
+Изменённые файлы этапа:
+
+- `kronos/tool_history.py`, `kronos/engine.py`, `kronos/graph.py`: pairing validation,
+  guarded replay исходного batch и восстановление recorded results.
+- `kronos/session.py`, `kronos/migrations/v004_effect_protocol.py`: строгий журнал,
+  protocol migration, result lookup, report/history boundaries.
+- `kronos/cli.py`: отображение legacy protocol.
+- `tests/test_durable_tool_replay.py`, `tests/test_external_effects.py`,
+  `tests/test_turn_ownership.py`, `tests/test_durable_kill.py`,
+  `tests/helpers/durable_crash.py`: новые/усиленные regression gates.
+- ADR-0009, индекс ADR и этот реестр: контракт, альтернативы и границы.
+
+Повторная проверка из worktree:
+
+```sh
+KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python -m pytest -m 'not integration' -q
+KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python -m pytest tests/test_durable_kill.py -q
+../app/.venv/bin/ruff check kronos/ dashboard/ aso/ tests/
+```
+
+**F08/F10 остаются открытыми**, production не изменён. Обязательные продолжения:
+
+1. Lifecycle plan step: claim/link crash window, cancellation/expiry, park/release,
+   orphan recovery и уведомление владельца. Сейчас poller ещё может оставить
+   running step без turn или бесконечно наблюдать остановившийся running turn.
+2. Полный operator workflow, включая legacy и неоднозначные действия; поддержка
+   child-level continuation для custom/delegated pipelines, не вечный запрет replay.
+3. Не удалять evidence до завершения review: текущий finished-turn retention
+   защищает pending intents, но ещё не все failed/corrupt reviews и глобальные
+   business keys. Этот риск остаётся частью F08/F10/V03.
+4. Инвентаризация прямых/custom writers вне engine, distinct logical operation ids,
+   provider idempotency, F09 transport readiness/outbox и live rollout verification.
