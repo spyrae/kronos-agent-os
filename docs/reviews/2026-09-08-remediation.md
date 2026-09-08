@@ -18,12 +18,12 @@
 
 | ID | Требование / критерий приёмки | Код | Production |
 |---|---|---|---|
-| F01 | Public-web DNS/redirect/subrequest защита; live browser smoke | Перенесён, regression пройден | Не развёрнуто |
-| F02 | MCP writes/unknown требуют approval; проверки до эффекта | Перенесён, regression пройден | Не развёрнуто; проверить effective flags |
-| F03 | Зарегистрированные capabilities достижимы через supervisor | Перенесён, regression пройден | Не развёрнуто |
-| F04 | Ошибка extraction сохраняется для retry, не считается empty | Перенесён, regression пройден | Не развёрнуто; историческая сверка отдельно |
-| F05 | Per-item ledger; partial/unknown outcomes не теряются и не дублируются | Перенесён, regression пройден | Нужна миграция и сверка |
-| F06 | Межпроцессная сериализация всех budget writers | Перенесён, regression пройден | Не развёрнуто |
+| F01 | Public-web DNS/redirect/subrequest защита; live browser smoke | Перенесён, regression пройден | Код подтверждён хэшами в 10:37–10:44 UTC; live smoke ещё нужен |
+| F02 | MCP writes/unknown требуют approval; проверки до эффекта | Перенесён, regression пройден | Код присутствует; approvals выключены во всех пяти initial env |
+| F03 | Зарегистрированные capabilities достижимы через supervisor | Перенесён, regression пройден | Код присутствует; сквозная приёмка не выполнена |
+| F04 | Ошибка extraction сохраняется для retry, не считается empty | Перенесён, regression пройден | Код присутствует; live приёмка и историческая сверка отдельно |
+| F05 | Per-item ledger; partial/unknown outcomes не теряются и не дублируются | Перенесён, regression пройден | Код присутствует; таблицы email_expense_items в 10:44 ещё нет; нужны инициализация и сверка |
+| F06 | Межпроцессная сериализация всех budget writers | Перенесён, regression пройден | Код присутствует; live приёмка не выполнена |
 | F07 | Approval wait не завершает шаг; approve/reject/restart согласованы | Исправлено и проверено локально | Нужны миграции, rollout и Telegram smoke |
 | F08 | Отмена/падение шага восстанавливаются без слепого повтора эффектов | В работе: claim/link recovery, policy-aware resume и park/release реализованы; live cancel/TTL и operator reconciliation ещё нужны | Ожидает |
 | F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | Ожидает | Ожидает |
@@ -39,16 +39,16 @@
 
 | ID | Требование / критерий приёмки | Статус |
 |---|---|---|
-| PROD-01 | Уникальные Telegram session paths и аккаунты; нет новых locked errors | В снимке 09:57 UTC пути уникальны, новых locked после старта нет; account identity/Telegram smoke ещё нужны |
-| PROD-02 | Раздельные session DB, cron-state/log paths; сохранена история | Запрошено согласование конфигурации и защищённого снимка |
+| PROD-01 | Уникальные Telegram session paths и аккаунты; нет новых locked errors | В снимке 10:37–10:44 UTC пути уникальны, новых locked после старта нет; account identity/Telegram smoke ещё нужны |
+| PROD-02 | Раздельные session DB, cron-state/log paths; сохранена история | Runtime-пути DB/cron раздельны после старта 10:36; историческая сверка старой общей БД ещё нужна |
 | PROD-03 | Непривилегированный пользователь не читает sessions/DB; безопасный umask | Запрошено согласование прав; shared ledger учесть отдельно |
 | PROD-04 | Runtime отделён от admin/deploy; минимальные sudo/Docker/systemd права | Ожидает проекта и согласования |
-| PROD-05 | F01–F06 реально работают на сервере; effective approvals проверены | Подготовлена объединённая ветка; rollout не выполнен |
+| PROD-05 | Защитные контракты реально работают на сервере; effective approvals проверены | F01–F06 на диске подтверждены, expense schema/E2E ещё нет; F07–F11 не развёрнуты |
 | PROD-06 | Запас диска ниже alert-порога; безопасная очистка и retention | Ожидает согласованного плана, данные не удалены |
 | PROD-07 | Полный encrypted off-host backup и успешный isolated restore drill | Ожидает; не закрывать по одному успешному workspace job |
 | PROD-08 | Readiness всего swarm и рабочая OnFailure/доставка alerts | Ожидает |
 | PROD-09 | Согласованный ingress/key-only SSH; соседние сервисы не повреждены | Нужны отдельные согласования host/network изменений |
-| PROD-10 | Согласованный release manifest и loaded build identity | Production-only изменения перенесены; manifest/rollout ожидают |
+| PROD-10 | Согласованный release manifest и loaded build identity | F01–F06 и прежние production-only изменения вошли в main; manifest/loaded identity отсутствуют |
 | PROD-11 | Основной агент выбирает собственный dotenv, не чужие memory/config paths | Новый пункт повторного аудита: неверный explicit env-source; ожидает согласования конфигурации |
 
 ## Дополнительные пункты обоих аудитов — входят в цель
@@ -460,3 +460,21 @@ Verification on final code:
 - Local Python is 3.13; production Python 3.12 has not been used for these tests.
   Four process-loss cases and 28 unit/regression cases were added versus the
   previous committed baseline. These do not close full end-to-end acceptance.
+
+### Production — повторное подтверждение 10:37–10:44 UTC
+
+- Пять служб запущены в 10:36:17 UTC не этим аудитом. Уникальны Telegram sessions,
+  исправлены фактические session DB и cron-state Lacuna/Resonant. Старый общий
+  transcript не удалён; доступность прежнего контекста каждому агенту не подтверждена.
+- F01–F06 теперь совпадают с main `5cca79a` по хэшам. Таблица `email_expense_items`
+  ещё отсутствует: инициализация ленивой миграции и pipeline smoke не проверены.
+- Сохраняются права чтения runtime DB/session от nobody, sudo/Docker privileges,
+  диск 92%, неполный backup, неверный env-source Kronos и отсутствие build identity.
+- 50/50 SQLite quick_check ok; 10 health 200, 15 protected GET 401. Это не E2E.
+  Полный immutable main suite: 2071 passed; 5 SIGKILL tests passed; static/UI checks ok.
+  Повторные fault-probes подтверждают оставшиеся F07–F13/F16, не исправность сценариев.
+- Полный экспорт production-исходников заблокирован авто-проверкой. Хэши имеющихся
+  локальных файлов дали 382 совпадения; полный diff оставшегося swarm_config.py
+  требует ранее запрошенного отдельного разрешения. Экспорт не обходился.
+- Приватный отчёт задачи: `PRODUCTION-AUDIT-2026-09-08-1044.md`, evidence JSONL,
+  source provenance и логи тестов. Этот проход не менял production/main/remediation.
