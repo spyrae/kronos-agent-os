@@ -87,6 +87,24 @@ def estimate_cost_usd(model: str, input_tokens: int, output_tokens: int, *, bill
     return (input_tokens * in_price + output_tokens * out_price) / 1_000_000
 
 
+def estimate_audio_cost_usd(model: str, duration_seconds: float) -> float:
+    """Estimate Whisper cost from audio seconds, not generated text tokens.
+
+    Groq's published turbo rate is $0.04/hour with a 10-second billing minimum
+    (https://console.groq.com/docs/speech-to-text, checked 2026-09-08). This is
+    a price snapshot, not an invoice or a bound on unknown provider outcomes.
+    """
+    if model != "whisper-large-v3-turbo":
+        raise ValueError("No audio price configured for this model")
+    if (
+        type(duration_seconds) not in (int, float)
+        or not math.isfinite(duration_seconds)
+        or duration_seconds <= 0
+    ):
+        raise ValueError("Audio duration must be finite and positive")
+    return max(10, duration_seconds) / 3600 * 0.04
+
+
 def _content_text(content: Any) -> str:
     if isinstance(content, str):
         return content

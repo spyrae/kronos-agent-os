@@ -17,6 +17,7 @@ from telethon.tl.types import DocumentAttributeAudio
 
 from kronos.audit import get_tool_audit_context, reset_tool_audit_context, set_tool_audit_context
 from kronos.config import settings
+from kronos.security.direct_model import admit_fixed_model, record_direct_audio_response
 from kronos.security.sanitize import wrap_untrusted
 from kronos.vision import analyze_image_bytes, is_supported_image_mime, is_vision_configured
 
@@ -195,11 +196,11 @@ def _compose_document_agent_message(caption: str, filename: str, text: str) -> s
 
 
 async def _transcribe_voice(file_path: str) -> str:
-    """Transcribe audio via Groq Whisper API."""
-    async with aiohttp.ClientSession() as session:
-        data = aiohttp.FormData()
-        fh = open(file_path, "rb")
-        try:
+    """Admit and account the fixed low-cost ASR model without text substitution."""
+    admit_fixed_model("Voice transcription", lite_compatible=True)
+    with open(file_path, "rb") as fh:
+        async with aiohttp.ClientSession() as session:
+            data = aiohttp.FormData()
             data.add_field(
                 "file",
                 fh,
@@ -207,6 +208,7 @@ async def _transcribe_voice(file_path: str) -> str:
                 content_type="audio/ogg",
             )
             data.add_field("model", GROQ_WHISPER_MODEL)
+            data.add_field("response_format", "verbose_json")
             async with session.post(
                 GROQ_WHISPER_URL,
                 headers={"Authorization": f"Bearer {settings.groq_api_key}"},
@@ -214,9 +216,10 @@ async def _transcribe_voice(file_path: str) -> str:
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
                 if resp.status != 200:
-                    body = await resp.text()
-                    raise RuntimeError(f"Groq STT error {resp.status}: {body}")
+                    raise RuntimeError(f"Groq STT error {resp.status}")
                 result = await resp.json()
-                return result.get("text", "").strip()
-        finally:
-            fh.close()
+                record_direct_audio_response(model=GROQ_WHISPER_MODEL, response=result)
+                text = result.get("text")
+                if not isinstance(text, str) or not text.strip():
+                    raise RuntimeError("Voice transcription returned no text")
+                return text.strip()

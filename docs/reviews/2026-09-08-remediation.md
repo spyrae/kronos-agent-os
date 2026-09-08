@@ -29,7 +29,7 @@
 | F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | В работе: transactional outbox планов и восстановленных session turns проверен; обычные ответы, остальные producers и operator repair ещё нужны | Ожидает |
 | F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | В работе: intent/journal boundary проверен; полный перечень путей и reconciliation не закрыты | Ожидает |
 | F11 | Один resume на turn; live registry и atomic ownership | Исправлено и проверено локально | Нужен согласованный rollout без старых исполнителей |
-| F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | В работе: factory/fallback/supervisor и прямые ASO/GEO/Vision/scripts проверены; Mem0, Whisper, durable session ledger, reservations и unknown outcomes ещё нужны | Ожидает |
+| F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | В работе: factory/fallback/supervisor и прямые ASO/GEO/Vision/scripts/Whisper проверены локально; Mem0, durable session ledger, reservations и unknown outcomes ещё нужны | Ожидает |
 | F13 | Честный scoped reset по всем слоям, включая background writers | Ожидает | Ожидает |
 | F14 | Desired/effective runtime settings совпадают или restart явно указан | Ожидает | Ожидает |
 | F15 | Model/memory I/O не блокирует event loop; responsiveness test | Ожидает | Ожидает |
@@ -898,3 +898,53 @@ suite из четырёх `test_*_kill.py` — как выше. Логи:
 | Приёмка и rollout | Новые пути проверены с fake transports и настоящим изолированным ledger; live E2E, Linux/Codex и controlled rollout ещё нужны. Main isolation/cron-rotation changes надо согласованно совместить с веткой перед rollout |
 
 Нельзя объявлять закрытым F12 или весь аудит по этим локальным тестам.
+
+### F12 — этап 3: Whisper, длительность аудио и voice cleanup
+
+- `_transcribe_voice` теперь проверяет daily/session/execution boundary до открытия
+  файла и HTTP. При soft downgrade остаётся уже выбранный turbo ASR, без подмены
+  текстовой моделью; hard refusal предотвращает отправку.
+- Запрашивается `verbose_json`. Валидная положительная длительность считается
+  по опубликованному тарифу turbo с минимальным billed duration; входные/выходные
+  text tokens не выдумываются. Расход записывается в общем media chat/session scope
+  до проверки текста и закрытия клиента. Основание расчёта: [Groq speech-to-text
+  pricing](https://console.groq.com/docs/speech-to-text), проверено 2026-09-08.
+- Невалидный/пустой transcript не считается успешным, но полученный usage не
+  теряется. Отсутствующая/невалидная длительность даёт `ModelUsageUnknownError`,
+  а не фиктивный бесплатный success. Никакого автоматического retry не добавлено.
+- HTTP provider body больше не вкладывается в исключение. Bridge логирует только
+  тип ошибки голоса и показывает фиксированное сообщение, отдельно сообщает
+  budget refusal. Temp audio удаляется в finally, включая CancelledError и сбой
+  отправки уведомления. HTTP contexts и file handle освобождаются при отмене.
+- 31 новый case: 30 сначала воспроизвели прежние дефекты, один подтвердил уже
+  работавшее закрытие file/client при отмене внутри HTTP. Проверены минимальное,
+  дробное и длинное audio duration, daily/session/unavailable ledger, soft limit,
+  невалидный usage/text, stop до/после response, cleanup error, HTTP 401/429/500,
+  отмена HTTP и реальные temp files зарегистрированного bridge handler.
+- **2440 passed, 66 integration deselected, 1 warning**, 41.67 sec;
+  **27 crash/restart tests passed**, 29.08 sec; focused suite — **66 passed**.
+  Ruff, F821, compileall и diff-check — PASS. Daily reporting округляет итог,
+  поэтому отдельная проверка читает raw SQLite и подтверждает, что сам расход
+  хранится без такого округления. Защитные проверки в тестах не отключались.
+
+Файлы: `kronos/bridge.py`, `kronos/bridge_media.py`,
+`kronos/security/cost_tracking.py`, `kronos/security/direct_model.py`,
+`tests/test_voice_budget.py`, ADR-0018, индекс ADR и этот реестр.
+Проверить: `KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python
+-m pytest tests/test_voice_budget.py tests/test_observer_bridge_capture.py
+tests/test_direct_model_budget.py -q`; полный набор и четыре crash files — как
+выше. Логи: `/tmp/kaos-voice-budget-red.txt`, `/tmp/kaos-voice-budget-focused.txt`,
+`/tmp/kaos-voice-budget-full.txt`, `/tmp/kaos-voice-budget-kill.txt`.
+
+**Границы:** цена — опубликованная оценка, не invoice. Whisper timeout/cancel до
+получения usage, invalid duration и сбой recorder пока не создают durable unknown
+receipt. Это обязательный остаток F12, а не «нулевой расход»; новый error лишь
+прекращает конкретную обработку. Mem0 по-прежнему вне общей boundary. Durable
+session scope, межпроцессные reservations, retries/reconciliation и live provider
+приёмка остаются открытыми. Stage 2 table выше — историческое состояние до этого
+фикса. Все остальные F/A/PROD/V пункты сохраняются в полной цели.
+
+39 внешних integration cases, реальный Groq/Codex и production не запускались.
+Конфигурация, зависимости, DB schema и UI не менялись; 12 dirty main-файлов
+не затронуты. До rollout по-прежнему нужно согласованно объединить ветку с
+main isolation/cron-rotation изменениями, не потеряв пользовательские правки.

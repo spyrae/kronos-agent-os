@@ -7,8 +7,12 @@ from collections.abc import Mapping
 from typing import Any
 
 from kronos.execution_control import check_execution
-from kronos.security.cost_tracking import BillingKind, estimate_cost_usd, record_llm_cost
+from kronos.security.cost_tracking import BillingKind, estimate_audio_cost_usd, estimate_cost_usd, record_llm_cost
 from kronos.security.model_budget import ModelBudgetError, admit_model_call
+
+
+class ModelUsageUnknownError(RuntimeError):
+    """A dispatched request has no usable usage; reconciliation is required."""
 
 
 def admit_fixed_model(label: str, *, lite_compatible: bool = False) -> None:
@@ -61,6 +65,20 @@ def record_direct_response(
         output_tokens = math.ceil(len(json.dumps(output_content, ensure_ascii=False, default=str)) / 3.5)
     cost = estimate_cost_usd(model, input_tokens, output_tokens, billing=billing)
     record_llm_cost(model, input_tokens, output_tokens, cost)
+    check_execution()
+
+
+def record_direct_audio_response(*, model: str, response: Any) -> None:
+    """Record returned audio duration before cleanup; never invent text usage.
+
+    Missing/invalid duration is explicitly unknown, not a zero-cost success.
+    Durable unknown-outcome recording remains part of the next ledger stage.
+    """
+    try:
+        cost = estimate_audio_cost_usd(model, _field(response, "duration"))
+    except (ValueError, OverflowError) as error:
+        raise ModelUsageUnknownError("Invalid audio duration or price; cost is unknown and needs reconciliation") from error
+    record_llm_cost(model, 0, 0, cost)
     check_execution()
 
 

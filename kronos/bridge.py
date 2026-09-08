@@ -1286,12 +1286,24 @@ async def run_bridge(agent: KronosAgent) -> None:
                 await event.message.download_media(file=tmp_path)
                 with media_cost_scope(chat_id=event.chat_id, topic_id=_extract_topic_id(event), user_id=user_id):
                     clean_text = await _transcribe_voice(tmp_path)
-                os.unlink(tmp_path)
+            except ModelBudgetError:
+                await _send_to_chat(
+                    event.chat_id,
+                    "Распознавание голоса остановлено бюджетным контролем.",
+                    topic_id=_extract_topic_id(event),
+                )
+                return
             except Exception as e:
-                log.error("[Voice] Failed: %s", e)
+                log.error("[Voice] Failed (%s)", type(e).__name__)
+                await _send_to_chat(
+                    event.chat_id,
+                    "Не удалось распознать голосовое сообщение. Автоматически повторять запрос не буду.",
+                    topic_id=_extract_topic_id(event),
+                )
+                return
+            finally:
                 if tmp_path and os.path.exists(tmp_path):
                     os.unlink(tmp_path)
-                return
             if not clean_text:
                 return
         elif image:
