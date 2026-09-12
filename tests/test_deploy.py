@@ -237,6 +237,10 @@ def test_deploy_runs_eval_gate_before_sync() -> None:
 
     assert "run_eval_gate()" in text
     assert "pytest -q -m eval" in text
+    # pytest is an optional dependency, so the gate has to ask for it by name —
+    # otherwise it only runs in a checkout that already had dev installed, and
+    # dies on a fresh worktree.
+    assert "uv run --extra dev pytest -q -m eval" in text
     assert text.index("run_eval_gate\nsync_files") < text.index('if [ "${1:-}" = "--first-run" ]; then')
 
 
@@ -271,7 +275,7 @@ def test_deploy_aborts_when_eval_gate_fails_before_sync(tmp_path: Path) -> None:
 
     assert result.returncode == 7
     assert "Running deploy eval gate: pytest -m eval" in result.stdout
-    assert "run pytest -q -m eval" in uv_log.read_text(encoding="utf-8")
+    assert "run --extra dev pytest -q -m eval" in uv_log.read_text(encoding="utf-8")
     assert not rsync_log.exists()
 
 

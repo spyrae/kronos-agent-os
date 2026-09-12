@@ -77,7 +77,13 @@ run_eval_gate() {
 
   echo "Running deploy eval gate: pytest -m eval"
   if command -v uv >/dev/null 2>&1; then
-    (cd "$SOURCE_DIR" && uv run pytest -q -m eval)
+    # --extra dev, because pytest is an optional dependency: `uv run pytest`
+    # only found it when the checkout already had a .venv someone had installed
+    # dev into. From a fresh worktree — the one safe way to deploy, since rsync
+    # ships the working tree and a shared checkout leaks a parallel session's
+    # edits — uv built a base-only venv and the gate died on "Failed to spawn:
+    # pytest" instead of running.
+    (cd "$SOURCE_DIR" && uv run --extra dev pytest -q -m eval)
   elif [ -x "$SOURCE_DIR/.venv/bin/python" ]; then
     (cd "$SOURCE_DIR" && .venv/bin/python -m pytest -q -m eval)
   else
