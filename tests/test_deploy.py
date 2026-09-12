@@ -244,6 +244,20 @@ def test_deploy_runs_eval_gate_before_sync() -> None:
     assert text.index("run_eval_gate\nsync_files") < text.index('if [ "${1:-}" = "--first-run" ]; then')
 
 
+def test_deploy_excludes_git_as_both_file_and_directory() -> None:
+    """A worktree's .git is a file, so the trailing-slash pattern alone misses it.
+
+    Without the bare pattern rsync tries to write that file over the host's .git
+    directory, empties it, and aborts the deploy — which is exactly the setup the
+    worktree exists for: shipping a commit instead of whatever a parallel session
+    left in a shared checkout.
+    """
+    text = DEPLOY.read_text(encoding="utf-8")
+
+    assert "--exclude='.git/'" in text
+    assert "--exclude='.git'" in text
+
+
 def test_deploy_aborts_when_eval_gate_fails_before_sync(tmp_path: Path) -> None:
     remote_dir = tmp_path / "remote"
     remote_dir.mkdir()
