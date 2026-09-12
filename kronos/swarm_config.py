@@ -41,6 +41,21 @@ log = logging.getLogger("kronos.swarm_config")
 DEFAULT_AGENTS_FILE = "agents.yaml"
 ENV_AGENTS_FILE = "AGENTS_CONFIG_PATH"
 
+# The registry answers two questions that do not belong in the same file.
+#
+# *What the swarm does* — roles, ownership, escalation, budgets — is shared
+# configuration: it is edited in the checkout and shipped to the host with the
+# rest of the code. *Who the agents are* — the Telegram @usernames Telethon
+# hands back at login — is per-installation, and a public checkout must not
+# carry the handles of one private swarm.
+#
+# So `agents.yaml` keeps the org chart, and an optional sibling overlay carries
+# the identity of this installation. The overlay is deployed-around (excluded
+# from the deploy rsync) and gitignored, so it survives a deploy that rewrites
+# `agents.yaml`, and never reaches the public repository.
+DEFAULT_LOCAL_AGENTS_FILE = "agents.local.yaml"
+ENV_LOCAL_AGENTS_FILE = "AGENTS_LOCAL_CONFIG_PATH"
+
 DISSENT_MODES = ("allow", "require")
 
 # Owner-first routing defaults. 15 minutes is short enough that a silent owner
@@ -149,16 +164,17 @@ def agents_file_path(path: str | Path | None = None) -> Path:
     return (Path(__file__).resolve().parent.parent / DEFAULT_AGENTS_FILE).resolve()
 
 
-def load_profiles(path: str | Path | None = None) -> dict[str, AgentProfile]:
-    """Load and validate the registry.
+def local_agents_file_path(base: Path) -> Path:
+    """Where the per-installation overlay lives: env > sibling of the registry."""
+    from_env = os.environ.get(ENV_LOCAL_AGENTS_FILE)
+    if from_env:
+        return Path(from_env)
+    return base.parent / DEFAULT_LOCAL_AGENTS_FILE
 
-    A missing file yields an empty swarm (the packaged distribution ships
-    without one), an unparsable or self-contradicting file raises.
-    """
-    config_path = agents_file_path(path)
 
+def _read_registry(config_path: Path) -> dict[str, Any]:
+    """Parse one registry file. A missing file reads as an empty mapping."""
     if not config_path.exists():
-        log.warning("agents.yaml not found at %s — using empty profile set", config_path)
         return {}
 
     try:
@@ -169,7 +185,45 @@ def load_profiles(path: str | Path | None = None) -> dict[str, AgentProfile]:
     if not isinstance(raw, dict):
         raise SwarmConfigError(f"{config_path} must map agent names to profiles, got {type(raw).__name__}")
 
-    profiles = {name: profile_from_dict(name, entry) for name, entry in raw.items()}
+    return raw
+
+
+def _merge_registries(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Overlay entries win field by field, so an overlay can set only a username.
+
+    Merging per field rather than per agent is the whole point: the overlay
+    exists to correct identity, and re-stating `owns`/`escalates_to` there would
+    fork the org chart into two files that drift apart.
+    """
+    merged: dict[str, Any] = {}
+    for source in (base, overlay):
+        for name, entry in source.items():
+            if entry and not isinstance(entry, dict):
+                raise SwarmConfigError(f"agent '{name}' must be a mapping of fields, got {type(entry).__name__}")
+            merged[name] = {**merged.get(name, {}), **(entry or {})}
+    return merged
+
+
+def load_profiles(path: str | Path | None = None) -> dict[str, AgentProfile]:
+    """Load and validate the registry, with the local overlay applied.
+
+    A missing file yields an empty swarm (the packaged distribution ships
+    without one), an unparsable or self-contradicting file raises.
+    """
+    config_path = agents_file_path(path)
+    overlay_path = local_agents_file_path(config_path)
+
+    raw = _read_registry(config_path)
+    overlay = _read_registry(overlay_path)
+
+    if not raw and not overlay:
+        log.warning("agents.yaml not found at %s — using empty profile set", config_path)
+        return {}
+
+    if overlay:
+        log.info("agents registry: %d entries overlaid from %s", len(overlay), overlay_path)
+
+    profiles = {name: profile_from_dict(name, entry) for name, entry in _merge_registries(raw, overlay).items()}
     validate_profiles(profiles)
     return profiles
 
@@ -262,3 +316,45 @@ def topic_owner(profiles: dict[str, AgentProfile], topic: str) -> str:
         return ""
     owners = [name for name, profile in profiles.items() if profile.owns_topic(topic)]
     return owners[0] if len(owners) == 1 else ""
+
+
+def registry_username_mismatch(agent_name: str, actual_username: str | None) -> str:
+    """Compare what Telegram calls this agent against what the registry claims.
+
+    An agent never reads its own entry to recognise its own name — Telethon
+    hands it the real @username at login — so a stale registry is invisible
+    from the inside and stays green in every health check. It only bites the
+    *other* five processes: they build their "this message is for lacuna, not
+    me" index out of the registry alone, so a wrong entry means an @-address to
+    that agent reads as addressed to nobody, no one skips, and the wrong agent
+    answers. That is the failure this returns a string for.
+
+    Empty string means "nothing to report" — either they agree, or Telegram
+    gave no username to compare (a bot-token login, say).
+    """
+    actual = (actual_username or "").lower().lstrip("@")
+    if not actual:
+        return ""
+
+    from kronos.group_router import AGENT_PROFILES
+
+    entry = AGENT_PROFILES.get(agent_name)
+    overlay_path = local_agents_file_path(agents_file_path())
+
+    if entry is None:
+        return (
+            f"agent '{agent_name}' logged in as @{actual} but is absent from the registry — "
+            f"the other agents cannot tell that @{actual} is this agent, so a message addressed "
+            f"to it may be answered by someone else. Add it to {overlay_path}"
+        )
+
+    registered = (entry.get("username") or "").lower().lstrip("@")
+    if registered == actual:
+        return ""
+
+    return (
+        f"agent '{agent_name}' logged in as @{actual} but the registry says @{registered} — "
+        f"the other agents will not recognise @{actual} as this agent, so a message addressed "
+        f"to it may be answered by someone else. Fix it in {overlay_path} "
+        f"(or set AGENT_USERNAME_{agent_name.upper()})"
+    )

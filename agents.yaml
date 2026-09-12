@@ -12,6 +12,20 @@
 #   budget_usd_daily: this agent's slice of the swarm budget (0 = swarm cap only)
 #
 # Usernames can be overridden per-agent via env: AGENT_USERNAME_KRONOS=..., etc.
+#
+# Identity vs org chart: this file is shared configuration and travels with a
+# deploy, so it carries generic placeholder usernames. The real Telegram
+# @usernames of one installation belong in `agents.local.yaml` next to this
+# file — an optional overlay merged field by field over the entries here. It is
+# gitignored and excluded from the deploy rsync, so it survives a deploy and
+# never reaches a public checkout. Only override what actually differs:
+#
+#   kronos:
+#     username: my_real_handle
+#
+# Each agent checks its own entry against Telegram at login and logs
+# "Agent registry out of sync" when they disagree — a wrong entry is invisible
+# to the agent it describes and only misroutes the other agents' replies.
 
 kronos:
   username: kronosagnt

@@ -4,6 +4,26 @@ All notable changes to Kronos Agent OS are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A stale @username in the registry sent replies to the wrong agent, and no
+  agent could see it** — an agent learns its own name from Telethon at login and
+  never from `agents.yaml`, so its own entry can be wrong indefinitely without
+  that agent noticing anything. The registry is what the *other* agents read to
+  build "this message is for lacuna, not me": with a wrong entry, her real handle
+  matches nobody, nobody skips, the implicit tiers stay open, and another agent
+  answers in her place — the same class of bug the cross-agent addressing guard
+  was written to close. Two changes. Identity is now separable from the org
+  chart: `agents.local.yaml`, an optional overlay beside the registry, is merged
+  field by field, so an installation overrides a username without restating the
+  ownership and escalation around it. It is gitignored and excluded from the
+  deploy rsync — the registry is deployed *over*, so anything that has to outlive
+  a deploy cannot live in it — which also keeps one installation's real Telegram
+  handles out of a public checkout. And every agent now compares its own entry
+  against Telegram at login and logs `Agent registry out of sync`, naming both
+  sides and the file to fix, because login is the only moment where the two
+  values are in the same process at the same time.
+
 ## [0.3.0] - 2026-08-18
 
 ### Added

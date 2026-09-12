@@ -1662,6 +1662,15 @@ async def run_bridge(agent: KronosAgent) -> None:
     _my_username = me.username
     log.info("Logged in as: %s (@%s, %d)", me.first_name, me.username, me.id)
 
+    # The registry is what the *other* agents read to route around me. A stale
+    # entry never breaks this process, so it has to be shouted about here or it
+    # stays invisible until someone @-addresses me and a peer answers instead.
+    from kronos.swarm_config import registry_username_mismatch
+
+    mismatch = registry_username_mismatch(settings.agent_name, me.username)
+    if mismatch:
+        log.warning("Agent registry out of sync: %s", mismatch)
+
     # Initialize group router for multi-agent chats
     global _group_router
     from kronos.group_router import GroupRouter

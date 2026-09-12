@@ -113,6 +113,7 @@ sync_files() {
     --exclude='data/' \
     --exclude='.env' \
     --exclude='.env.*' \
+    --exclude='agents.local.yaml' \
     --exclude='*.session' \
     --exclude='*.session-*' \
     --exclude='.venv/' \
