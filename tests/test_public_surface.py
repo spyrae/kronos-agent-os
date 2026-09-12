@@ -39,6 +39,19 @@ def test_private_runtime_files_are_ignored():
     assert "dashboard-ui/dist/" in gitignore
 
 
+def test_examples_do_not_set_flat_storage_paths() -> None:
+    """A copy-pasted flat path is what put three agents on one session store.
+
+    config.py now rewrites those, so a value set here is silently ignored —
+    worse than useless, since it reads as configuration that does something.
+    Both examples must leave the storage paths commented out.
+    """
+    for name in (".env.example", ".env.worker.example"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        active = [line for line in text.splitlines() if line.startswith(("DB_PATH=", "DB_DIR=", "MEM0_QDRANT_PATH="))]
+        assert not active, f"{name} sets a storage path the config ignores: {active}"
+
+
 def test_workspace_env_roles_are_documented():
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
     backup_script = (ROOT / "scripts" / "workspace-backup.sh").read_text(encoding="utf-8")
