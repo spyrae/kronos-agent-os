@@ -6,6 +6,32 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Fixed
 
+- **Three agents shared one session database, and the last one to answer won** —
+  `.env.lacuna`, `.env.resonant` and `.env.keystone` each carried a copy-pasted
+  `DB_PATH=./data/kronos.db`. The legacy-path rewrite only recognised
+  `./data/<own agent_name>.db`, so the literal value survived and all three
+  resolved to a single store. `sessions` is keyed by `thread_id` alone and every
+  write replaces the whole row, so in any thread two of them could see, one
+  agent's history silently overwrote the other's — and everything derived from
+  the path's parent directory (`cron_state.json`, `logs/`, `mcp_registry.db`,
+  `sandbox/`) was shared the same way, down to two agents clobbering each other's
+  cron timestamps. A flat `./data/<name>.db` is now treated as the pre-isolation
+  layout whatever `<name>` says, and startup refuses a `DB_PATH` that resolves
+  outside the agent's own directory, the way a malformed policy already stops the
+  process rather than falling back to something permissive.
+- **Two agents wrote into one Qdrant directory and dropped each other's
+  memories** — `MEM0_QDRANT_PATH` was normalised only by the startup migration
+  moving the directory, never by the config, so a value naming another agent
+  survived. The main agent inherits `./data/nexus-qdrant` from the unit drop-in
+  that supplies the daily pulse its analytics keys; with two live processes on
+  one directory, the collection there flipped from `nexus_memories` to
+  `kronos_memories`, each dropping the other's. `./data/qdrant` and
+  `./data/<name>-qdrant` now normalise like flat DB paths, and the startup guard
+  covers both stores.
+- **Cron run history grew without bound** — thirteen jobs, some firing every 30
+  seconds, one JSON line each and nothing ever truncated: `cron_runs.jsonl` had
+  reached 174 MB on a disk at 92%. One rotated generation is kept at 32 MB.
+
 - **A stale @username in the registry sent replies to the wrong agent, and no
   agent could see it** — an agent learns its own name from Telethon at login and
   never from `agents.yaml`, so its own entry can be wrong indefinitely without
