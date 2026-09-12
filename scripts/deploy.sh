@@ -103,10 +103,19 @@ sync_files() {
   fi
 
   # Sync code — explicitly exclude everything that must survive deploy.
+  #
+  # .git is listed twice on purpose: in a worktree it is a file, not a
+  # directory, so the trailing-slash pattern misses it and rsync tries to put
+  # that file where the host keeps its .git directory — "could not make way for
+  # new regular file: .git", then "cannot delete non-empty directory: .git",
+  # after it has already emptied the directory. That blocked deploying from a
+  # worktree at all, which is the only way that does not ship a parallel
+  # session's uncommitted edits to production.
   echo "Syncing files..."
   rsync -avz --delete \
     --exclude='.DS_Store' \
     --exclude='.git/' \
+    --exclude='.git' \
     --exclude='.codegraph/' \
     --exclude='.pytest_cache/' \
     --exclude='.ruff_cache/' \
