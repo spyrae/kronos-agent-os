@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from kronos.config import _is_legacy_flat_db_path
+from kronos.config import _is_legacy_flat_db_path, _is_legacy_flat_qdrant_path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -92,6 +92,7 @@ def test_startup_refuses_a_session_db_outside_the_agent_directory(monkeypatch, t
 
     monkeypatch.setattr(settings, "db_dir", str(tmp_path / "lacuna"))
     monkeypatch.setattr(settings, "db_path", str(tmp_path / "kronos" / "session.db"))
+    monkeypatch.setattr(settings, "mem0_qdrant_path", str(tmp_path / "lacuna" / "qdrant"))
 
     with pytest.raises(SystemExit):
         _validate_storage_layout_or_exit()
@@ -103,5 +104,66 @@ def test_startup_accepts_the_resolved_per_agent_layout(monkeypatch, tmp_path: Pa
 
     monkeypatch.setattr(settings, "db_dir", str(tmp_path / "lacuna"))
     monkeypatch.setattr(settings, "db_path", str(tmp_path / "lacuna" / "session.db"))
+    monkeypatch.setattr(settings, "mem0_qdrant_path", str(tmp_path / "lacuna" / "qdrant"))
 
     _validate_storage_layout_or_exit()
+
+
+@pytest.mark.parametrize(
+    "qdrant_path",
+    ["", "./data/qdrant", "data/qdrant", "./data/nexus-qdrant", "./data/impulse-qdrant"],
+)
+def test_flat_qdrant_dirs_are_legacy(qdrant_path: str) -> None:
+    assert _is_legacy_flat_qdrant_path(qdrant_path)
+
+
+@pytest.mark.parametrize(
+    "qdrant_path",
+    ["./data/kronos/qdrant", "data/nexus/qdrant", "/srv/qdrant", "./data/kronos.db"],
+)
+def test_nested_qdrant_dirs_are_kept(qdrant_path: str) -> None:
+    assert not _is_legacy_flat_qdrant_path(qdrant_path)
+
+
+def test_another_agents_qdrant_dir_resolves_to_own_directory(tmp_path: Path) -> None:
+    """kronos inherited MEM0_QDRANT_PATH=./data/nexus-qdrant from a unit drop-in."""
+    (tmp_path / ".env").write_text("AGENT_NAME=kronos\nMEM0_QDRANT_PATH=./data/nexus-qdrant\n", encoding="utf-8")
+
+    env = os.environ.copy()
+    for key in ("DB_PATH", "DB_DIR", "MEM0_QDRANT_PATH", "KAOS_ENV_FILE", "KRONOS_ENV_FILE"):
+        env.pop(key, None)
+    env["AGENT_NAME"] = "kronos"
+    env["PYTHONPATH"] = os.pathsep.join(part for part in (str(REPO_ROOT), env.get("PYTHONPATH", "")) if part)
+
+    script = """
+import json
+
+from kronos.config import settings
+
+print(json.dumps({"qdrant": settings.mem0_qdrant_path, "db_dir": settings.db_dir}))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout.splitlines()[-1]) == {
+        "qdrant": "./data/kronos/qdrant",
+        "db_dir": "./data/kronos",
+    }
+
+
+def test_startup_refuses_a_qdrant_dir_outside_the_agent_directory(monkeypatch, tmp_path: Path) -> None:
+    from kronos.app import _validate_storage_layout_or_exit
+    from kronos.config import settings
+
+    monkeypatch.setattr(settings, "db_dir", str(tmp_path / "kronos"))
+    monkeypatch.setattr(settings, "db_path", str(tmp_path / "kronos" / "session.db"))
+    monkeypatch.setattr(settings, "mem0_qdrant_path", str(tmp_path / "nexus" / "qdrant"))
+
+    with pytest.raises(SystemExit):
+        _validate_storage_layout_or_exit()

@@ -90,18 +90,24 @@ def _validate_storage_layout_or_exit() -> None:
     be shared too, and ``sessions`` rows (keyed by ``thread_id`` alone) would
     overwrite each other. Same fail-closed reasoning as the policy loader.
     """
-    db_path = Path(settings.db_path).resolve()
     db_dir = Path(settings.db_dir).resolve()
-    if db_path.parent != db_dir:
-        log.error(
-            "Refusing to start: DB_PATH=%s lives outside this agent's data directory %s. "
-            "Agents sharing one session store overwrite each other's history. "
-            "Unset DB_PATH so it resolves to %s/session.db.",
-            settings.db_path,
-            settings.db_dir,
-            settings.db_dir,
-        )
-        raise SystemExit(1)
+    for label, configured in (
+        ("DB_PATH", settings.db_path),
+        ("MEM0_QDRANT_PATH", settings.mem0_qdrant_path),
+    ):
+        if Path(configured).resolve().parent != db_dir:
+            log.error(
+                "Refusing to start: %s=%s lives outside this agent's data directory %s. "
+                "Agents sharing one store overwrite each other — session history by "
+                "thread_id, Qdrant collections through meta.json. Unset %s to resolve "
+                "it under %s.",
+                label,
+                configured,
+                settings.db_dir,
+                label,
+                settings.db_dir,
+            )
+            raise SystemExit(1)
 
 
 def _ensure_data_dirs() -> None:
