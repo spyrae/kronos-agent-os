@@ -17,6 +17,7 @@ from kronos.swarm_config import (
     load_profiles,
     profile_for,
     profile_from_dict,
+    registry_username_mismatch,
     topic_owner,
     validate_profiles,
 )
@@ -282,3 +283,129 @@ def test_startup_accepts_a_valid_registry(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENTS_CONFIG_PATH", _write(tmp_path, ORGANISED))
 
     _load_swarm_registry_or_exit()  # must not raise
+
+
+# --- identity overlay ---------------------------------------------------------
+#
+# The org chart is shared configuration and travels with a deploy; the Telegram
+# @usernames belong to one installation and must not reach a public checkout.
+# `agents.local.yaml` is where the two are allowed to disagree.
+
+
+def _write_overlay(tmp_path, payload) -> None:
+    (tmp_path / "agents.local.yaml").write_text(yaml.safe_dump(payload, allow_unicode=True), encoding="utf-8")
+
+
+def test_overlay_corrects_the_username_and_keeps_the_org_chart(tmp_path):
+    base = _write(tmp_path, ORGANISED)
+    _write_overlay(tmp_path, {"kronos": {"username": "kronosiibot"}})
+
+    profiles = load_profiles(base)
+
+    kronos = profiles["kronos"]
+    assert kronos.username == "kronosiibot"
+    # Merging per field, not per agent: an overlay that only sets a username
+    # must not silently drop ownership or escalation with it.
+    assert kronos.owns == ["planning", "priorities"]
+    assert kronos.escalates_to == "nexus"
+    assert kronos.role == "strategic advisor"
+    assert profiles["nexus"].username == "nexusagnt"
+
+
+def test_overlay_alone_is_enough_when_the_registry_is_absent(tmp_path):
+    _write_overlay(tmp_path, {"impulse": {"username": "impulseag", "role": "action catalyst"}})
+
+    profiles = load_profiles(tmp_path / "agents.yaml")
+
+    assert profiles["impulse"].username == "impulseag"
+
+
+def test_no_overlay_leaves_the_registry_untouched(tmp_path):
+    profiles = load_profiles(_write(tmp_path, LEGACY))
+
+    assert profiles["kronos"].username == "kronosagnt"
+
+
+def test_overlay_path_is_configurable(tmp_path, monkeypatch):
+    elsewhere = tmp_path / "private" / "identity.yaml"
+    elsewhere.parent.mkdir()
+    elsewhere.write_text(yaml.safe_dump({"kronos": {"username": "kronosiibot"}}), encoding="utf-8")
+    monkeypatch.setenv("AGENTS_LOCAL_CONFIG_PATH", str(elsewhere))
+
+    profiles = load_profiles(_write(tmp_path, LEGACY))
+
+    assert profiles["kronos"].username == "kronosiibot"
+
+
+def test_env_still_wins_over_the_overlay(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_USERNAME_KRONOS", "kronos_staging")
+    base = _write(tmp_path, LEGACY)
+    _write_overlay(tmp_path, {"kronos": {"username": "kronosiibot"}})
+
+    profiles = load_profiles(base)
+
+    assert profiles["kronos"].username == "kronos_staging"
+
+
+def test_an_overlay_that_is_not_a_mapping_is_an_error(tmp_path):
+    base = _write(tmp_path, LEGACY)
+    _write_overlay(tmp_path, {"kronos": "kronosiibot"})
+
+    with pytest.raises(SwarmConfigError, match="mapping of fields"):
+        load_profiles(base)
+
+
+# --- drift between the registry and Telegram ----------------------------------
+#
+# An agent reads its own name from Telethon, never from the registry, so a
+# stale entry is invisible to the agent it describes. It only misroutes the
+# other five, which is why login is the one place worth checking.
+
+
+@pytest.fixture
+def registry(monkeypatch):
+    from kronos import group_router
+
+    def _install(profiles):
+        monkeypatch.setattr(group_router, "AGENT_PROFILES", dict(profiles))
+
+    return _install
+
+
+def test_matching_username_reports_nothing(registry):
+    registry(LEGACY)
+
+    assert registry_username_mismatch("kronos", "kronosagnt") == ""
+
+
+def test_matching_username_ignores_case_and_the_at_sign(registry):
+    registry(LEGACY)
+
+    assert registry_username_mismatch("kronos", "@KronosAgnt") == ""
+
+
+def test_a_stale_entry_is_reported_with_both_names(registry):
+    registry(LEGACY)
+
+    warning = registry_username_mismatch("kronos", "kronosiibot")
+
+    assert "kronosiibot" in warning
+    assert "kronosagnt" in warning
+    assert "agents.local.yaml" in warning
+    assert "AGENT_USERNAME_KRONOS" in warning
+
+
+def test_an_unregistered_agent_is_reported(registry):
+    registry(LEGACY)
+
+    warning = registry_username_mismatch("lacuna", "lacunaagent")
+
+    assert "lacunaagent" in warning
+    assert "absent from the registry" in warning
+
+
+def test_a_login_without_a_username_has_nothing_to_compare(registry):
+    registry(LEGACY)
+
+    assert registry_username_mismatch("kronos", None) == ""
+    assert registry_username_mismatch("kronos", "") == ""

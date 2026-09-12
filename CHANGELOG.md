@@ -4,6 +4,52 @@ All notable changes to Kronos Agent OS are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Three agents shared one session database, and the last one to answer won** —
+  `.env.lacuna`, `.env.resonant` and `.env.keystone` each carried a copy-pasted
+  `DB_PATH=./data/kronos.db`. The legacy-path rewrite only recognised
+  `./data/<own agent_name>.db`, so the literal value survived and all three
+  resolved to a single store. `sessions` is keyed by `thread_id` alone and every
+  write replaces the whole row, so in any thread two of them could see, one
+  agent's history silently overwrote the other's — and everything derived from
+  the path's parent directory (`cron_state.json`, `logs/`, `mcp_registry.db`,
+  `sandbox/`) was shared the same way, down to two agents clobbering each other's
+  cron timestamps. A flat `./data/<name>.db` is now treated as the pre-isolation
+  layout whatever `<name>` says, and startup refuses a `DB_PATH` that resolves
+  outside the agent's own directory, the way a malformed policy already stops the
+  process rather than falling back to something permissive.
+- **Two agents wrote into one Qdrant directory and dropped each other's
+  memories** — `MEM0_QDRANT_PATH` was normalised only by the startup migration
+  moving the directory, never by the config, so a value naming another agent
+  survived. The main agent inherits `./data/nexus-qdrant` from the unit drop-in
+  that supplies the daily pulse its analytics keys; with two live processes on
+  one directory, the collection there flipped from `nexus_memories` to
+  `kronos_memories`, each dropping the other's. `./data/qdrant` and
+  `./data/<name>-qdrant` now normalise like flat DB paths, and the startup guard
+  covers both stores.
+- **Cron run history grew without bound** — thirteen jobs, some firing every 30
+  seconds, one JSON line each and nothing ever truncated: `cron_runs.jsonl` had
+  reached 174 MB on a disk at 92%. One rotated generation is kept at 32 MB.
+
+- **A stale @username in the registry sent replies to the wrong agent, and no
+  agent could see it** — an agent learns its own name from Telethon at login and
+  never from `agents.yaml`, so its own entry can be wrong indefinitely without
+  that agent noticing anything. The registry is what the *other* agents read to
+  build "this message is for lacuna, not me": with a wrong entry, her real handle
+  matches nobody, nobody skips, the implicit tiers stay open, and another agent
+  answers in her place — the same class of bug the cross-agent addressing guard
+  was written to close. Two changes. Identity is now separable from the org
+  chart: `agents.local.yaml`, an optional overlay beside the registry, is merged
+  field by field, so an installation overrides a username without restating the
+  ownership and escalation around it. It is gitignored and excluded from the
+  deploy rsync — the registry is deployed *over*, so anything that has to outlive
+  a deploy cannot live in it — which also keeps one installation's real Telegram
+  handles out of a public checkout. And every agent now compares its own entry
+  against Telegram at login and logs `Agent registry out of sync`, naming both
+  sides and the file to fix, because login is the only moment where the two
+  values are in the same process at the same time.
+
 ## [0.3.0] - 2026-08-18
 
 ### Added

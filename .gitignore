@@ -16,6 +16,8 @@ venv/
 *.session-journal
 servers.yaml
 agents.yaml
+# Per-installation identity overlay (real Telegram @usernames) — never public.
+agents.local.yaml
 
 # Data
 data/

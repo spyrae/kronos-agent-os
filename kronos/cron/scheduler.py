@@ -30,10 +30,25 @@ def _history_file() -> Path:
     return Path(settings.db_path).parent / "logs" / "cron_runs.jsonl"
 
 
+# One line per job run, ~13 jobs firing as often as every 30s: the file grows
+# without bound and nothing ever read it beyond the recent tail. Keep one
+# rotated generation so a post-mortem still has yesterday.
+MAX_HISTORY_BYTES = 32 * 1024 * 1024
+
+
+def _rotate_history_if_large(path: Path) -> None:
+    try:
+        if path.exists() and path.stat().st_size > MAX_HISTORY_BYTES:
+            path.replace(path.with_name(path.name + ".1"))
+    except OSError as e:
+        log.debug("Failed to rotate cron run history: %s", e)
+
+
 def _append_run_history(entry: dict) -> None:
     try:
         path = _history_file()
         path.parent.mkdir(parents=True, exist_ok=True)
+        _rotate_history_if_large(path)
         with open(path, "a") as f:
             f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
     except Exception as e:

@@ -19,6 +19,11 @@
 #   max_implicit_replies: per-agent override of the global implicit-reply cap
 #
 # You can have 1 to N agents. Each runs as a separate process.
+#
+# Real @usernames of a private installation do not belong here — this file is
+# shared configuration. Put them in `agents.local.yaml` beside it: an optional
+# overlay merged field by field over these entries, gitignored and excluded
+# from the deploy rsync, so it survives a deploy and stays out of the repo.
 
 strategist:
   username: strategist_bot

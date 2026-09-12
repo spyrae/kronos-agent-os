@@ -385,3 +385,42 @@ def test_manifest_prunes_frontend_and_runtime_artifacts():
     assert "prune dashboard-ui/dist" in manifest
     assert "prune workspaces" in manifest
     assert "prune data" in manifest
+
+
+def test_tracked_agent_registry_carries_no_real_handles():
+    """The org chart is public; the identities behind it are not.
+
+    `agents.yaml` travels with a deploy and sits in a public checkout, so it
+    keeps the generated `<name>agnt` placeholders and `agents.local.yaml`
+    carries the real ones. Asserting the shape rather than a denylist means
+    this test never has to spell a real handle out to defend against it.
+    """
+    if not _git_ls_files("agents.yaml"):
+        return  # untracked registry — nothing public to leak
+
+    registry = yaml.safe_load((ROOT / "agents.yaml").read_text(encoding="utf-8")) or {}
+    assert registry, "a tracked agents.yaml should not be empty"
+
+    for name, entry in registry.items():
+        username = (entry or {}).get("username", f"{name}agnt")
+        assert username == f"{name}agnt", (
+            f"agents.yaml gives '{name}' a non-placeholder username — real handles belong in agents.local.yaml"
+        )
+
+
+def test_identity_overlay_stays_private_and_survives_deploy():
+    """The overlay is only useful if a deploy cannot overwrite it.
+
+    `agents.yaml` is rsynced from the checkout, so the installation's real
+    usernames have to live in a file the same rsync skips — otherwise every
+    deploy silently restores the placeholders and the swarm starts misrouting
+    @-addresses again.
+    """
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+    deploy = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+
+    assert "agents.local.yaml" in gitignore
+    assert "agents.local.yaml" in dockerignore
+    assert "--exclude='agents.local.yaml'" in deploy
+    assert not _git_ls_files("agents.local.yaml")

@@ -80,6 +80,36 @@ def _migrate_legacy_layout() -> None:
         shutil.move(str(src), str(dst))
 
 
+def _validate_storage_layout_or_exit() -> None:
+    """Refuse to start when this agent's session DB sits outside its own data dir.
+
+    ``_is_legacy_flat_db_path`` normalises the flat ``./data/<name>.db`` form, but
+    an explicit ``DB_PATH=./data/kronos/session.db`` copied into another agent's
+    ``.env`` would slip through. Everything derived from ``db_path.parent`` —
+    ``cron_state.json``, ``logs/``, ``mcp_registry.db``, ``sandbox/`` — would then
+    be shared too, and ``sessions`` rows (keyed by ``thread_id`` alone) would
+    overwrite each other. Same fail-closed reasoning as the policy loader.
+    """
+    db_dir = Path(settings.db_dir).resolve()
+    for label, configured in (
+        ("DB_PATH", settings.db_path),
+        ("MEM0_QDRANT_PATH", settings.mem0_qdrant_path),
+    ):
+        if Path(configured).resolve().parent != db_dir:
+            log.error(
+                "Refusing to start: %s=%s lives outside this agent's data directory %s. "
+                "Agents sharing one store overwrite each other — session history by "
+                "thread_id, Qdrant collections through meta.json. Unset %s to resolve "
+                "it under %s.",
+                label,
+                configured,
+                settings.db_dir,
+                label,
+                settings.db_dir,
+            )
+            raise SystemExit(1)
+
+
 def _ensure_data_dirs() -> None:
     """Create required data directories at startup."""
     _migrate_legacy_layout()
@@ -150,6 +180,7 @@ async def main():
     log.info("Starting Kronos Agent OS v%s", __version__)
     _activate_policy_or_exit()
     _load_swarm_registry_or_exit()
+    _validate_storage_layout_or_exit()
     _ensure_data_dirs()
 
     session_store = SessionStore(settings.db_path, agent_name=settings.agent_name)

@@ -24,6 +24,7 @@ data/
 logs/
 servers.yaml
 agents.yaml
+agents.local.yaml
 
 dashboard-ui/node_modules/
 dashboard-ui/.vite/

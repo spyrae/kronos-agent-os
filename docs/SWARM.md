@@ -77,6 +77,27 @@ strategist:
   max_implicit_replies: 2            # this agent's own tolerance for peers
 ```
 
+### Identity is per-installation
+
+The org chart is shared configuration and travels with a deploy. The Telegram
+@usernames are not: they belong to one installation, and a public checkout must
+not carry them. So `agents.yaml` holds placeholder usernames, and an optional
+`agents.local.yaml` beside it overlays the real ones, merged field by field —
+override only the username and the rest of the entry still comes from the org
+chart. The overlay is gitignored and excluded from the deploy rsync, so it
+survives a deploy that rewrites `agents.yaml`. `AGENTS_LOCAL_CONFIG_PATH` moves
+it; `AGENT_USERNAME_<NAME>` overrides one entry from the environment.
+
+A stale username is worth spelling out, because it fails in a direction that
+looks like nothing at all. An agent recognises its own name from what Telethon
+returns at login, never from the registry, so its own entry can be wrong
+forever without that agent noticing. The registry is what the *other* five read
+to build "this message is for lacuna, not me". With a wrong entry, `@lacuna`'s
+real handle matches nobody: no one skips, the implicit tiers stay open, and
+another agent answers in her place. Every agent therefore compares its entry
+against Telegram at login and logs `Agent registry out of sync` when they
+disagree — the only place the mismatch is visible.
+
 Validation is split by consequence (`kronos/swarm_config.py`). A broken
 `escalates_to` **raises at startup** — it names a delivery path that does not
 exist. Contested ownership and per-agent budgets summing above the swarm cap only

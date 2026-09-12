@@ -1,6 +1,7 @@
 """Application settings via Pydantic Settings."""
 
 import os
+from pathlib import PurePosixPath
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,6 +21,39 @@ def _select_env_file() -> str:
 
 _ENV_FILE = _select_env_file()
 load_dotenv(_ENV_FILE, override=False)
+
+
+def _is_legacy_flat_db_path(db_path: str) -> bool:
+    """True for the pre-isolation ``./data/<name>.db`` layout, whatever <name> is.
+
+    Matching only the agent's own name left a copy-pasted ``DB_PATH=./data/kronos.db``
+    intact in three ``.env.<agent>`` files, so lacuna, resonant and keystone all
+    resolved to one session store. ``sessions`` is keyed by ``thread_id`` alone and
+    every write replaces the whole row, so the agent that answered last silently
+    overwrote the others' history in that thread.
+    """
+    if not db_path:
+        return True
+    parts = PurePosixPath(db_path.removeprefix("./")).parts
+    return len(parts) == 2 and parts[0] == "data" and parts[1].endswith(".db")
+
+
+def _is_legacy_flat_qdrant_path(qdrant_path: str) -> bool:
+    """True for the pre-isolation ``./data/qdrant`` and ``./data/<name>-qdrant``.
+
+    The same failure as the flat DB path, one directory over. Nothing ever
+    normalised MEM0_QDRANT_PATH — only ``_migrate_legacy_layout`` moved the
+    directory — so a value naming another agent survived indefinitely. kronos
+    inherited ``./data/nexus-qdrant`` through its unit drop-in, and two live
+    processes on one Qdrant directory then raced on ``meta.json``, each
+    dropping the other's collection.
+    """
+    if not qdrant_path:
+        return True
+    parts = PurePosixPath(qdrant_path.removeprefix("./")).parts
+    if len(parts) != 2 or parts[0] != "data":
+        return False
+    return parts[1] == "qdrant" or parts[1].endswith("-qdrant")
 
 
 class Settings(BaseSettings):
@@ -198,15 +232,19 @@ class Settings(BaseSettings):
             ./data/<agent_name>/qdrant/          — Mem0 vector store
             ./data/swarm.db                       — shared cross-agent ledger
 
-        Legacy env overrides (``DB_PATH=./data/<name>.db``) are silently
-        rewritten to the new layout so existing ``.env`` files keep working
-        after upgrade — the migration in ``app._migrate_legacy_layout`` then
-        moves the physical file to match.
+        Legacy env overrides (``DB_PATH=./data/<name>.db``,
+        ``MEM0_QDRANT_PATH=./data/<name>-qdrant``) are silently rewritten to
+        the new layout so existing ``.env`` files keep working after upgrade —
+        the migration in ``app._migrate_legacy_layout`` then moves the physical
+        file to match. ``<name>`` is deliberately not matched against this
+        agent's own name: a copy-pasted value naming a *different* agent is the
+        exact failure these rewrites exist to prevent.
         """
-        # Detect a legacy flat DB_PATH and rewrite it in place.
-        legacy_flat = f"./data/{self.agent_name}.db"
-        if self.db_path in ("", legacy_flat, f"data/{self.agent_name}.db"):
+        # Detect legacy flat paths and rewrite them in place.
+        if _is_legacy_flat_db_path(self.db_path):
             self.db_path = ""  # force re-resolution below
+        if _is_legacy_flat_qdrant_path(self.mem0_qdrant_path):
+            self.mem0_qdrant_path = ""
 
         if not self.db_dir:
             self.db_dir = f"./data/{self.agent_name}"

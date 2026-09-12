@@ -274,6 +274,7 @@ curl http://127.0.0.1:8789/api/health
     │   └── swarm.db
     ├── .env
     ├── agents.yaml
+    ├── agents.local.yaml     # real @usernames, never deployed over
     └── servers.yaml
 ```
 
@@ -296,4 +297,7 @@ app/
 └── servers.yaml
 ```
 
-`data/`, `.env`, `agents.yaml`, `servers.yaml`, `*.session`, and live `workspaces/<agent>/` files should not be committed.
+`data/`, `.env`, `agents.yaml`, `agents.local.yaml`, `servers.yaml`, `*.session`, and live
+`workspaces/<agent>/` files should not be committed. `agents.local.yaml` is also excluded
+from the deploy rsync: it carries this installation's real Telegram @usernames, so it has to
+survive a deploy that rewrites `agents.yaml`.
