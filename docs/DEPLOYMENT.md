@@ -297,7 +297,9 @@ app/
 └── servers.yaml
 ```
 
-`data/`, `.env`, `agents.yaml`, `agents.local.yaml`, `servers.yaml`, `*.session`, and live
-`workspaces/<agent>/` files should not be committed. `agents.local.yaml` is also excluded
-from the deploy rsync: it carries this installation's real Telegram @usernames, so it has to
-survive a deploy that rewrites `agents.yaml`.
+`data/`, `.env`, `agents.local.yaml`, `servers.yaml`, `*.session`, and live
+`workspaces/<agent>/` files should not be committed. `agents.yaml` is the exception and is
+tracked on purpose: it is the shared org chart and has to travel with a deploy, so it carries
+placeholder usernames only. `agents.local.yaml` is also excluded from the deploy rsync: it
+carries this installation's real Telegram @usernames, so it has to survive a deploy that
+rewrites `agents.yaml`.

@@ -34,8 +34,15 @@ def test_private_runtime_files_are_ignored():
     assert "workspace/" in gitignore
     assert "workspaces/*" in gitignore
     assert "!workspaces/_template/**" in gitignore
-    assert "agents.yaml" in gitignore
-    assert "servers.yaml" in gitignore
+    # Line-exact: "agents.yaml" as a substring also matches "agents.local.yaml",
+    # which hid that the org chart was ignored and tracked at the same time.
+    ignored = {line.strip() for line in gitignore.splitlines()}
+    assert "agents.local.yaml" in ignored
+    assert "servers.yaml" in ignored
+    assert "agents.yaml" not in ignored, (
+        "agents.yaml is tracked on purpose — it is the shared org chart and has to "
+        "travel with a deploy; ignoring it here contradicts the index"
+    )
     assert "dashboard-ui/dist/" in gitignore
 
 

@@ -15,7 +15,10 @@ venv/
 *.session
 *.session-journal
 servers.yaml
-agents.yaml
+# agents.yaml is deliberately NOT ignored: it is the shared org chart (role,
+# owns, escalates_to, budgets) and has to travel with a deploy. It carries
+# placeholder usernames following the <name>agnt scheme, which
+# test_public_surface enforces, so no real handle can reach the public repo.
 # Per-installation identity overlay (real Telegram @usernames) — never public.
 agents.local.yaml
 
