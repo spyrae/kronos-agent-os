@@ -49,7 +49,9 @@ from kronos.bridge_media import (
     _is_image_message,
     _is_voice_message,
     _transcribe_voice,
+    media_cost_scope,
 )
+from kronos.bridge_plan_approval import deliver_plan_approval, handle_plan_approval_command
 from kronos.bridge_topics import (
     TopicDecision,
     TopicRoute,
@@ -70,6 +72,7 @@ from kronos.dissent import review_before_send
 from kronos.graph import KronosAgent
 from kronos.observer.capture import CaptureDecision, classify_capture, record_capture
 from kronos.security.cost_guardian import get_guardian
+from kronos.security.model_budget import ModelBudgetError
 from kronos.security.output_validator import validate_output
 from kronos.swarm_store import get_swarm
 from kronos.tts import get_voice_mode, set_voice_mode, should_synthesize, synthesize
@@ -79,6 +82,7 @@ log = logging.getLogger("kronos.bridge")
 # Re-exported from the bridge_* helper modules so kronos.bridge.<name>
 # keeps resolving for callers and tests after the split.
 __all__ = [
+    "deliver_plan_approval",
     "APPROVAL_CALLBACK_PREFIX",
     "TopicDecision",
     "TopicRoute",
@@ -353,6 +357,14 @@ async def _approval_callback_allowed(
     pending: dict | None = None,
 ) -> bool:
     """Return whether a Telegram user may resolve this approval callback."""
+    if pending and str(pending.get("thread_id", "")).startswith("plan:"):
+        from kronos import plans
+
+        plan = plans.plan_for_turn(str(pending["turn_id"]), settings.agent_name)
+        if not plan or not _same_telegram_chat(getattr(event, "chat_id", None), plan["chat_id"]):
+            return False
+        topic = await _approval_callback_topic_id(event, pending)
+        return sender_id in settings.allowed_user_ids and (topic or None) == (plan.get("topic_id") or None)
     if settings.is_telegram_user_allowed(sender_id):
         return True
     if bool(getattr(event, "is_private", False)):
@@ -626,6 +638,7 @@ async def _ask_agent(
     persist_user_turn: bool = True,
     extra_system_context: str = "",
     force_tier: str | None = None,
+    recovery_owner_review: bool = False,
 ) -> str | None:
     """Send message to KronosAgent and return response text.
 
@@ -642,6 +655,8 @@ async def _ask_agent(
     This is the contract that stops peer text from polluting session
     history and causing verbatim-parrot replies.
     """
+    from kronos.bridge_recovery import recovery_route
+
     # Topic-aware thread isolation
     thread_id = _thread_id_for(chat_id, topic_id)
 
@@ -665,6 +680,9 @@ async def _ask_agent(
                 extra_system_context=extra_system_context,
                 on_tool_event=reporter.on_event,
                 force_tier=force_tier,
+                recovery_destination=recovery_route(chat_id, topic_id, owner_review=recovery_owner_review)
+                if persist_user_turn and source_kind == "user"
+                else None,
             )
     except Exception as e:
         log.error("Agent error: %s", e)
@@ -934,6 +952,7 @@ async def run_bridge(agent: KronosAgent) -> None:
     """Start Telethon client + webhook server, listen for messages."""
     global _agent, _client, _my_id, _my_username
     _agent = agent
+    _my_id = None
 
     session_file = os.environ.get("SESSION_FILE", f"{settings.agent_name}.session")
     _client = TelegramClient(session_file, settings.tg_api_id, settings.tg_api_hash)
@@ -962,8 +981,20 @@ async def run_bridge(agent: KronosAgent) -> None:
             return
 
         topic_id = await _approval_callback_topic_id(event, pending)
+        from kronos.bridge_recovery import has_delivery_duty, recovery_decision_allowed
+
+        queued = await has_delivery_duty(_agent, pending)
+        if queued and not await recovery_decision_allowed(
+            _agent,
+            pending,
+            sender_id=sender_id,
+            chat_id=int(getattr(event, "chat_id", 0) or 0),
+            topic_id=await _approval_callback_topic_id(event),
+        ):
+            await event.answer("Not allowed", alert=True)
+            return
         approved = action == "approve"
-        await event.answer("Approved" if approved else "Rejected")
+        await event.answer("Обрабатываю решение" if queued else ("Approved" if approved else "Rejected"))
         # Serialize the resolve against new messages on the same thread.
         approval_thread = str(pending["thread_id"]) if pending else f"approval:{approval_id}"
         try:
@@ -977,11 +1008,17 @@ async def run_bridge(agent: KronosAgent) -> None:
             log.error("Approval callback failed: %s", e)
             reply = "Не удалось обработать approval callback. Проверь логи."
 
+        if queued:
+            return  # The durable worker, never this callback, sends the result.
+
         validation = validate_output(reply)
         if not validation.is_clean:
             reply = validation.redacted_text
 
-        next_approval_id = _last_pending_approval_id()
+        # Plan gates are delivered by the poller from durable state, not the
+        # shared last-approval property, which another turn can change.
+        is_plan_approval = pending and str(pending.get("thread_id", "")).startswith("plan:")
+        next_approval_id = None if is_plan_approval else _last_pending_approval_id()
         buttons = _approval_buttons(next_approval_id) if next_approval_id else None
         bot_markup = _approval_bot_reply_markup(next_approval_id) if next_approval_id else None
         chat_id = int(getattr(event, "chat_id", 0) or 0)
@@ -1024,6 +1061,13 @@ async def run_bridge(agent: KronosAgent) -> None:
         text = event.raw_text
 
         if user_id == _my_id:
+            return
+
+        from kronos.bridge_recovery import handle_recovery_approval_command
+
+        if await handle_recovery_approval_command(event):
+            return
+        if await handle_plan_approval_command(event):
             return
 
         is_dm = event.is_private
@@ -1253,19 +1297,40 @@ async def run_bridge(agent: KronosAgent) -> None:
                 with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
                     tmp_path = tmp.name
                 await event.message.download_media(file=tmp_path)
-                clean_text = await _transcribe_voice(tmp_path)
-                os.unlink(tmp_path)
+                with media_cost_scope(chat_id=event.chat_id, topic_id=_extract_topic_id(event), user_id=user_id):
+                    clean_text = await _transcribe_voice(tmp_path)
+            except ModelBudgetError:
+                await _send_to_chat(
+                    event.chat_id,
+                    "Распознавание голоса остановлено бюджетным контролем.",
+                    topic_id=_extract_topic_id(event),
+                )
+                return
             except Exception as e:
-                log.error("[Voice] Failed: %s", e)
+                log.error("[Voice] Failed (%s)", type(e).__name__)
+                await _send_to_chat(
+                    event.chat_id,
+                    "Не удалось распознать голосовое сообщение. Автоматически повторять запрос не буду.",
+                    topic_id=_extract_topic_id(event),
+                )
+                return
+            finally:
                 if tmp_path and os.path.exists(tmp_path):
                     os.unlink(tmp_path)
-                return
             if not clean_text:
                 return
         elif image:
             clean_text = _strip_mention(text) if not is_dm else text
             try:
-                image_analysis = await _analyze_image_message(event, clean_text)
+                with media_cost_scope(chat_id=event.chat_id, topic_id=_extract_topic_id(event), user_id=user_id):
+                    image_analysis = await _analyze_image_message(event, clean_text)
+            except ModelBudgetError as error:
+                await _send_to_chat(
+                    event.chat_id,
+                    f"Обработка изображения остановлена бюджетным контролем: {error}",
+                    topic_id=_extract_topic_id(event),
+                )
+                return
             except Exception as e:
                 log.error("[Vision] Failed: %s", e)
                 reply = (
@@ -1457,6 +1522,9 @@ async def run_bridge(agent: KronosAgent) -> None:
                     persist_user_turn=invoke_persist,
                     extra_system_context=group_extra_context,
                     force_tier=degrade_tier,
+                    recovery_owner_review=bool(
+                        not is_dm and decision is not None and decision.topic_owner == settings.agent_name
+                    ),
                 )
 
         # Peer-reaction "PASS" protocol: the agent is instructed to reply

@@ -10,10 +10,11 @@ everything else here.
 
 import logging
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from dashboard.auth import verify_token
 from kronos.config import settings
+from kronos.turn_ownership import TurnBusyError
 
 router = APIRouter(prefix="/api/turns", tags=["turns"], dependencies=[Depends(verify_token)])
 log = logging.getLogger("kronos.dashboard.turns")
@@ -49,14 +50,16 @@ async def list_turns(
 @router.get("/{turn_id}")
 async def get_turn(turn_id: str) -> dict:
     """One turn: journal timeline, memoized tool results, recorded effects."""
-    detail = await _store().get_turn_detail(turn_id)
+    store = _store()
+    detail = await store.get_turn_detail(turn_id)
     if not detail:
         raise HTTPException(status_code=404, detail=f"turn {turn_id} not found")
+    detail["delivery"] = await store.delivery_status(turn_id)
     return detail
 
 
 @router.post("/{turn_id}/resume")
-async def resume_turn(turn_id: str) -> dict:
+async def resume_turn(turn_id: str, request: Request) -> dict:
     """Finish an interrupted turn now.
 
     Only in-flight turns can be resumed: re-running a finished turn would
@@ -69,20 +72,26 @@ async def resume_turn(turn_id: str) -> dict:
     if detail["status"] not in IN_FLIGHT:
         raise HTTPException(status_code=409, detail=f"turn is '{detail['status']}', only in-flight turns can resume")
 
-    from kronos.graph import KronosAgent
-
-    agent = KronosAgent(session_store=store)
-    answer = await agent.resume_interrupted_turn(
-        {
-            "turn_id": turn_id,
-            "thread_id": detail["thread_id"],
-            "input_message": detail.get("input_message", ""),
-            "attempts": detail.get("attempts", 0),
-        }
-    )
+    agent = getattr(request.app.state, "agent", None)
+    if agent is None:
+        raise HTTPException(status_code=503, detail="live agent is unavailable; resume was not started")
+    try:
+        answer = await agent.resume_interrupted_turn(turn_id)
+    except TurnBusyError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     if not answer:
-        raise HTTPException(status_code=500, detail="resume produced no answer; the turn was marked failed")
-    return {"ok": True, "turn_id": turn_id, "answer": answer}
+        outcome = await agent.get_turn_outcome(turn_id)
+        if outcome.status in {"failed", "unknown", "interrupted"}:
+            raise HTTPException(status_code=500, detail=f"resume did not complete; outcome={outcome.status}")
+        raise HTTPException(status_code=409, detail=f"turn is not resumable; outcome={outcome.status}")
+    outcome = await agent.get_turn_outcome(turn_id)
+    return {
+        "ok": True,
+        "turn_id": turn_id,
+        "answer": answer,
+        "status": outcome.status,
+        "delivery": await store.delivery_status(turn_id),
+    }
 
 
 @router.post("/{turn_id}/fork")

@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from kronos.execution_control import check_execution
 from kronos.security.pii import mask_pii_object
 from kronos.workspace import Workspace, ws
 
@@ -63,6 +64,7 @@ class KnowledgeQueue:
         safe_metadata = mask_pii_object(metadata or {})
         now = utc_now()
 
+        check_execution()
         inbox_path.write_text(
             "\n".join(
                 [
@@ -115,6 +117,7 @@ class KnowledgeQueue:
 
     def save_task(self, task: dict[str, Any]) -> Path:
         """Atomically write a task file."""
+        check_execution()
         task = dict(task)
         task["updated_at"] = utc_now()
         path = self.task_path(str(task["task_id"]))

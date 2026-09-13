@@ -5,10 +5,13 @@ that already happened is recognised as such — otherwise a crash between "messa
 sent" and "result journalled" sends it twice on recovery.
 """
 
+import sqlite3
+
 import pytest
 from langchain_core.tools import BaseTool, tool
 
 from kronos.config import settings
+from kronos.effect_state import DurableStateError, EffectUncertainError
 from kronos.engine import execute_tool, side_effect_key, tool_has_side_effect
 from kronos.security.effects import mark_side_effect
 from kronos.session import SessionStore
@@ -50,12 +53,25 @@ def _sending() -> SendingTool:
 
 
 async def _run(tool, store, *, turn_id="turn-1", args=None, call_id="c1"):
+    await store.load("init")
+    with sqlite3.connect(store.db_path) as db:
+        db.execute(
+            "INSERT OR IGNORE INTO active_turns (turn_id, thread_id, status, input_message, effect_protocol) "
+            "VALUES (?, 'test', 'running', 'test operation', 1)",
+            (turn_id,),
+        )
     return await execute_tool(
         tool,
         {"id": call_id, "args": args or {"chat_id": 1, "text": "привет"}},
-        get_external_effect=store.get_external_effect,
-        record_external_effect=lambda key, name, result: store.record_external_effect(
-            key=key, turn_id=turn_id, tool=name, result=result
+        begin_external_effect=lambda key, name, args, call_id, dedupe_by_key: store.begin_external_effect(
+            key=key, turn_id=turn_id, tool=name, args=args, tool_call_id=call_id, dedupe_by_key=dedupe_by_key
+        ),
+        finish_external_effect=lambda key, token, name, result: store.finish_external_effect(
+            key=key,
+            token=token,
+            turn_id=turn_id,
+            tool=name,
+            result=result,
         ),
         turn_id=turn_id,
     )
@@ -102,14 +118,11 @@ def test_custom_key_function_narrows_identity():
     assert first == second == "send_message:chat:7:привет"
 
 
-def test_broken_key_function_falls_back_instead_of_failing(caplog):
+def test_broken_key_function_fails_closed():
     sender = SendingTool()
     sender.metadata = {"side_effect": True, "idempotency_key": lambda args: 1 / 0}
-
-    key = side_effect_key(sender, {"text": "a"}, "turn-1")
-
-    assert key.startswith("send_message:turn-1:")
-    assert "idempotency_key callable failed" in caplog.text
+    with pytest.raises(DurableStateError, match="key function failed"):
+        side_effect_key(sender, {"text": "a"}, "turn-1")
 
 
 @pytest.mark.asyncio
@@ -158,17 +171,15 @@ async def test_unmarked_tool_is_never_deduplicated(store):
 
 
 @pytest.mark.asyncio
-async def test_failed_effect_is_not_recorded(store):
-    """A send that raised did not happen, so a retry must be allowed."""
+async def test_failed_effect_is_uncertain_not_retried(store):
+    """A timeout/error can happen after dispatch; absence of a reply proves nothing."""
     failing = FailingTool()
     mark_side_effect([failing])
-
-    first = await _run(failing, store)
-    second = await _run(failing, store)
-
-    assert failing.calls == 2
-    assert "[ERROR]" in first.content or "smtp" in first.content
-    assert first.content == second.content
+    for _ in range(2):
+        with pytest.raises(EffectUncertainError):
+            await _run(failing, store)
+    assert failing.calls == 1
+    assert (await store.list_external_effects("turn-1"))[0]["status"] == "pending"
 
 
 @pytest.mark.asyncio
@@ -197,15 +208,12 @@ async def test_recording_the_same_key_twice_reports_not_new(store):
 
 
 @pytest.mark.asyncio
-async def test_without_callbacks_behaviour_is_unchanged(store):
-    """Paths that do not pass the ledger (sub-agents, cron) keep working."""
+async def test_without_callbacks_side_effects_are_blocked(store):
+    """An ephemeral/standalone path must not bypass durable protection."""
     sender = _sending()
-
-    first = await execute_tool(sender, {"id": "c1", "args": {"text": "a"}})
-    second = await execute_tool(sender, {"id": "c2", "args": {"text": "a"}})
-
-    assert sender.calls == 2
-    assert first.content == "sent #1" and second.content == "sent #2"
+    with pytest.raises(DurableStateError, match="intent ledger"):
+        await execute_tool(sender, {"id": "c1", "args": {"text": "a"}})
+    assert sender.calls == 0
 
 
 @pytest.mark.asyncio

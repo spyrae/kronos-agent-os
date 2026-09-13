@@ -6,6 +6,8 @@ which is only safe because tool results are memoized per turn and side-effecting
 tools consult the effects ledger.
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
@@ -13,6 +15,8 @@ from langchain_core.tools import BaseTool
 from kronos.config import settings
 from kronos.security.effects import mark_side_effect
 from kronos.session import SessionStore
+from kronos.turn_delivery import RecoveryDestination
+from kronos.turn_ownership import TurnBusyError, own_conversation
 
 
 class Sender(BaseTool):
@@ -86,9 +90,9 @@ def store(tmp_path, monkeypatch):
     _swarm._singleton = None
 
 
-async def _interrupted_turn(store, *, thread_id="chat-1", text="отправь отчёт"):
+async def _interrupted_turn(store, *, thread_id="chat-1", text="отправь отчёт", destination=None):
     """A turn that started, called a tool, and never finished."""
-    turn_id = await store.begin_turn(thread_id, text)
+    turn_id = await store.begin_turn(thread_id, text, recovery_destination=destination)
     await store.append_turn_messages(
         turn_id=turn_id,
         thread_id=thread_id,
@@ -101,12 +105,13 @@ async def _interrupted_turn(store, *, thread_id="chat-1", text="отправь �
 async def test_claim_flips_status_and_counts_attempts(store):
     turn_id = await _interrupted_turn(store)
 
-    claimed = await store.claim_turns_for_resume()
-
-    assert [row["turn_id"] for row in claimed] == [turn_id]
-    assert claimed[0]["attempts"] == 1
-    # A second claim finds nothing: the turn is no longer 'running'.
-    assert await store.claim_turns_for_resume() == []
+    async with own_conversation(store.db_path, "chat-1") as ownership:
+        claimed = await store.claim_turn_for_resume(turn_id, ownership=ownership)
+        assert claimed["turn_id"] == turn_id
+        assert claimed["attempts"] == 1
+        with pytest.raises(TurnBusyError):
+            async with own_conversation(store.db_path, "chat-1", wait=False):
+                pytest.fail("a second executor must not acquire a live conversation")
 
 
 @pytest.mark.asyncio
@@ -115,13 +120,12 @@ async def test_attempts_are_capped(store):
     turn_id = await _interrupted_turn(store)
 
     for _ in range(2):
-        await store.claim_turns_for_resume(max_attempts=2)
-        # Simulate another crash: back to running with the attempt recorded.
-        async with store._open_db() as db:
-            await db.execute("UPDATE active_turns SET status = 'running' WHERE turn_id = ?", (turn_id,))
-            await db.commit()
+        async with own_conversation(store.db_path, "chat-1") as ownership:
+            assert await store.claim_turn_for_resume(turn_id, ownership=ownership, max_attempts=2)
+        # A crash releases the lock but leaves status=resuming, not running.
 
-    assert await store.claim_turns_for_resume(max_attempts=2) == []
+    async with own_conversation(store.db_path, "chat-1") as ownership:
+        assert await store.claim_turn_for_resume(turn_id, ownership=ownership, max_attempts=2) is None
 
     async with store._open_db() as db:
         cursor = await db.execute("SELECT status, error FROM active_turns WHERE turn_id = ?", (turn_id,))
@@ -136,9 +140,10 @@ async def test_superseded_turn_is_not_resumed(store):
     stale = await _interrupted_turn(store, text="первый вопрос")
     fresh = await store.begin_turn("chat-1", "второй вопрос")
 
-    claimed = await store.claim_turns_for_resume()
-
-    assert [row["turn_id"] for row in claimed] == [fresh]
+    async with own_conversation(store.db_path, "chat-1") as ownership:
+        assert await store.claim_turn_for_resume(stale, ownership=ownership) is None
+        claimed = await store.claim_turn_for_resume(fresh, ownership=ownership)
+    assert claimed["turn_id"] == fresh
     async with store._open_db() as db:
         cursor = await db.execute("SELECT status FROM active_turns WHERE turn_id = ?", (stale,))
         (status,) = await cursor.fetchone()
@@ -147,21 +152,21 @@ async def test_superseded_turn_is_not_resumed(store):
 
 @pytest.mark.asyncio
 async def test_resume_finishes_the_turn_and_delivers(store, monkeypatch):
-    turn_id = await _interrupted_turn(store)
+    turn_id = await _interrupted_turn(store, thread_id="77", destination=RecoveryDestination(77, 55))
     sender = Sender()
     mark_side_effect([sender])
 
     agent = _agent_with_scripted_model(monkeypatch, store, [AIMessage(content="Отчёт отправлен.")], tools=[sender])
 
-    delivered: list[tuple[str, str]] = []
-
-    async def deliver(thread_id, text):
-        delivered.append((thread_id, text))
-
-    finished = await agent.resume_abandoned_turns(deliver=deliver)
-
+    send = AsyncMock(return_value=101)
+    monkeypatch.setattr("kronos.telegram_delivery.ready_sender", lambda: 55)
+    monkeypatch.setattr("kronos.telegram_delivery.send_chunk", send)
+    finished = await agent.resume_abandoned_turns()
     assert finished == 1
-    assert delivered and delivered[0][0] == "chat-1"
+    assert (await store.delivery_status(turn_id))["state"] == "pending"
+    await store.deliver_pending()
+    assert send.await_count == 1 and send.call_args.args[0].chat_id == 77
+    assert (await store.delivery_status(turn_id))["state"] == "delivered"
     async with store._open_db() as db:
         cursor = await db.execute("SELECT status FROM active_turns WHERE turn_id = ?", (turn_id,))
         (status,) = await cursor.fetchone()
@@ -203,16 +208,15 @@ async def test_report_mode_keeps_the_old_behaviour(store):
 
 
 @pytest.mark.asyncio
-async def test_delivery_failure_still_completes_the_turn(store, monkeypatch):
-    await _interrupted_turn(store)
+async def test_delivery_failure_keeps_a_durable_retry_after_completion(store, monkeypatch):
+    turn_id = await _interrupted_turn(store, thread_id="77", destination=RecoveryDestination(77, 55))
     agent = _agent_with_scripted_model(monkeypatch, store, [AIMessage(content="Ответ.")])
-
-    async def broken_deliver(thread_id, text):
-        raise RuntimeError("telegram down")
-
-    finished = await agent.resume_abandoned_turns(deliver=broken_deliver)
-
-    assert finished == 1  # the answer exists and is journalled; only delivery failed
+    monkeypatch.setattr("kronos.telegram_delivery.ready_sender", lambda: 55)
+    monkeypatch.setattr("kronos.telegram_delivery.send_chunk", AsyncMock(side_effect=RuntimeError("telegram down")))
+    assert await agent.resume_abandoned_turns() == 1
+    await store.deliver_pending()
+    assert (await agent.get_turn_outcome(turn_id)).status == "completed"
+    assert (await store.delivery_status(turn_id))["state"] == "pending"
 
 
 def test_policy_exposes_resume_mode(tmp_path, monkeypatch):

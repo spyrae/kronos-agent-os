@@ -32,6 +32,7 @@ from kronos.agents.task import create_task_agent
 from kronos.agents.telegram_channels import create_telegram_channels_agent
 from kronos.agents.topic_research.graph import create_topic_research_agent
 from kronos.config import settings
+from kronos.effect_state import DurableStateError
 from kronos.engine import (
     DELEGATION_METADATA_KEY,
     AgentResult,
@@ -145,11 +146,12 @@ def _make_delegation_tool(agent_name: str, description: str, agent_fn: Callable)
         ctx = delegation_ctx()
         hooks: dict[str, Any] = {}
         active_token = None
-        if ctx and ctx.get("request_tool_approval") and _accepts_approval_hooks(agent_fn):
-            hooks = {
-                "needs_tool_approval": ctx.get("needs_tool_approval"),
-                "request_tool_approval": ctx.get("request_tool_approval"),
-            }
+        if ctx and ctx.get("request_tool_approval"):
+            if _accepts_approval_hooks(agent_fn):
+                hooks = {
+                    "needs_tool_approval": ctx.get("needs_tool_approval"),
+                    "request_tool_approval": ctx.get("request_tool_approval"),
+                }
             active_token = enter_delegation(
                 {
                     "tool_name": ctx.get("tool_name", f"delegate_to_{agent_name}"),
@@ -164,7 +166,7 @@ def _make_delegation_tool(agent_name: str, description: str, agent_fn: Callable)
                 # turn pauses rather than returning half-done text here.
                 raise SubAgentApprovalPause(result.approval_id, result.approval_tool_name or "")
             return result.content
-        except SubAgentApprovalPause:
+        except (SubAgentApprovalPause, DurableStateError):
             raise
         except Exception as e:
             log.error("Agent '%s' failed: %s", agent_name, e)

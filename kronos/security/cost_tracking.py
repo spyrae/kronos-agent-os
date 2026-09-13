@@ -1,6 +1,6 @@
 """Always-on LLM cost tracking.
 
-A single LangChain callback, attached to every model the factory builds,
+A provider-bound LangChain callback, attached to every model the factory builds,
 reads each LLM call's token usage in ``on_llm_end`` and records the cost in
 two places:
 
@@ -18,8 +18,9 @@ estimate captured at start (same ~3.5 chars/token heuristic as the audit log).
 Pricing is per model and env-overridable
 (``KAOS_MODEL_PRICE_<MODEL>_INPUT`` / ``_OUTPUT``, per 1M tokens). Codex runs
 on a ChatGPT OAuth subscription — flat-rate, no per-token API charge — so its
-marginal price defaults to zero. The budget then tracks real API spend
-(DeepSeek), which is the money that actually accrues.
+marginal price defaults to zero only for that adapter, never for an API request
+sharing its model name. Configured/default prices and missing-token heuristics
+remain estimates, not a verified provider invoice or a hard upper bound.
 
 The callback never raises into the LLM call: any accounting failure is logged
 at debug and swallowed, because a metrics glitch must not break a reply.
@@ -31,7 +32,7 @@ import logging
 import math
 import os
 import re
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.callbacks import BaseCallbackHandler
 
@@ -48,18 +49,13 @@ _MODEL_PRICES: dict[str, tuple[float, float]] = {
     "deepseek-reasoner": (0.55, 2.19),
     "gpt-4.1-mini": (0.40, 1.60),
     "gpt-4.1": (2.00, 8.00),
-    # Codex CLI uses ChatGPT OAuth (subscription, not per-token API billing),
-    # so its marginal cost is zero. Override via env if billed per token.
-    "gpt-5.6-terra": (0.0, 0.0),
-    "gpt-5.5": (0.0, 0.0),
-    "gpt-5": (0.0, 0.0),
 }
 
-# Unknown, API-billed model — a conservative non-zero estimate so an
-# unpriced provider still counts against the budget rather than reading free.
+# Unknown API models use a non-zero estimate, not a conservative upper bound.
 _DEFAULT_PRICE = (0.50, 1.50)
 
 _CHARS_PER_TOKEN = 3.5  # matches kronos.audit._estimate_tokens
+BillingKind = Literal["api", "subscription"]
 
 
 def _to_float(value: Any, default: float) -> float:
@@ -71,10 +67,12 @@ def _to_float(value: Any, default: float) -> float:
         return default
 
 
-def _price_for(model: str) -> tuple[float, float]:
+def _price_for(model: str, *, billing: BillingKind = "api") -> tuple[float, float]:
     """Resolve (input, output) per-1M price for a model, env-overridable."""
     key = (model or "").strip().lower()
-    base = _MODEL_PRICES.get(key, _DEFAULT_PRICE)
+    if billing not in {"api", "subscription"}:
+        raise ValueError("unknown model billing kind")
+    base = (0.0, 0.0) if billing == "subscription" else _MODEL_PRICES.get(key, _DEFAULT_PRICE)
     env_key = re.sub(r"[^A-Z0-9]+", "_", key.upper()).strip("_")
     if not env_key:
         return base
@@ -83,10 +81,28 @@ def _price_for(model: str) -> tuple[float, float]:
     return in_price, out_price
 
 
-def estimate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+def estimate_cost_usd(model: str, input_tokens: int, output_tokens: int, *, billing: BillingKind = "api") -> float:
     """USD cost for a call given its model and token counts."""
-    in_price, out_price = _price_for(model)
+    in_price, out_price = _price_for(model, billing=billing)
     return (input_tokens * in_price + output_tokens * out_price) / 1_000_000
+
+
+def estimate_audio_cost_usd(model: str, duration_seconds: float) -> float:
+    """Estimate Whisper cost from audio seconds, not generated text tokens.
+
+    Groq's published turbo rate is $0.04/hour with a 10-second billing minimum
+    (https://console.groq.com/docs/speech-to-text, checked 2026-09-08). This is
+    a price snapshot, not an invoice or a bound on unknown provider outcomes.
+    """
+    if model != "whisper-large-v3-turbo":
+        raise ValueError("No audio price configured for this model")
+    if (
+        type(duration_seconds) not in (int, float)
+        or not math.isfinite(duration_seconds)
+        or duration_seconds <= 0
+    ):
+        raise ValueError("Audio duration must be finite and positive")
+    return max(10, duration_seconds) / 3600 * 0.04
 
 
 def _content_text(content: Any) -> str:
@@ -160,9 +176,11 @@ def record_llm_cost(
     (falls back to ``settings.agent_name``), the session tally only fires when
     a ``session_id`` is present. Both writes are best-effort.
     """
+    if isinstance(cost_usd, bool) or not math.isfinite(cost_usd) or cost_usd < 0:
+        raise ValueError("cost must be finite and non-negative")
     context = get_tool_audit_context()
     agent = context.get("agent") or settings.agent_name
-    session_id = context.get("session_id", "")
+    session_id = context.get("session_id") or context.get("thread_id", "")
 
     try:
         from kronos.swarm_store import get_swarm
@@ -190,8 +208,10 @@ class CostTrackingCallbackHandler(BaseCallbackHandler):
 
     raise_error = False  # a metrics failure must never abort an LLM call
 
-    def __init__(self) -> None:
+    def __init__(self, *, model: str = "", billing: BillingKind = "api") -> None:
         super().__init__()
+        self._model = model
+        self._billing = billing
         # run_id -> input char count, kept only for the Codex estimate fallback.
         self._pending_input_chars: dict[str, int] = {}
 
@@ -225,13 +245,14 @@ class CostTrackingCallbackHandler(BaseCallbackHandler):
     def on_llm_end(self, response: Any, *, run_id: Any = None, **kwargs: Any) -> None:
         try:
             model, input_tokens, output_tokens = _extract_usage(response)
+            model = model or self._model
             if input_tokens == 0 and output_tokens == 0:
                 # Provider reported no usage (Codex CLI). Estimate from lengths.
                 input_chars = self._pending_input_chars.get(str(run_id), 0)
                 output_chars = _response_text_len(response)
                 input_tokens = math.ceil(input_chars / _CHARS_PER_TOKEN)
                 output_tokens = math.ceil(output_chars / _CHARS_PER_TOKEN)
-            cost = estimate_cost_usd(model, input_tokens, output_tokens)
+            cost = estimate_cost_usd(model, input_tokens, output_tokens, billing=self._billing)
             record_llm_cost(model, input_tokens, output_tokens, cost)
         except Exception as e:  # pragma: no cover - defensive
             log.debug("Cost tracking failed: %s", e)
@@ -247,9 +268,11 @@ class CostTrackingCallbackHandler(BaseCallbackHandler):
 _handler: CostTrackingCallbackHandler | None = None
 
 
-def get_cost_callbacks() -> list[BaseCallbackHandler]:
-    """The always-on cost callback (cached singleton), for model construction."""
+def get_cost_callbacks(*, model: str = "", billing: BillingKind = "api") -> list[BaseCallbackHandler]:
+    """Bind known provider billing; keep the legacy unbound helper for callers."""
     global _handler
+    if model or billing != "api":
+        return [CostTrackingCallbackHandler(model=model, billing=billing)]
     if _handler is None:
         _handler = CostTrackingCallbackHandler()
     return [_handler]

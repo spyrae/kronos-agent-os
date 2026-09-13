@@ -1214,7 +1214,7 @@ class SwarmStore:
         day: str = "",
     ) -> None:
         """Add one LLM call's cost to the shared per-day, per-agent ledger."""
-        bucket = day or time.strftime("%Y-%m-%d")
+        bucket = day or time.strftime("%Y-%m-%d", time.gmtime())
         self._db.write(
             """
             INSERT INTO swarm_costs
@@ -1232,7 +1232,7 @@ class SwarmStore:
 
     def daily_cost(self, day: str = "") -> dict:
         """Swarm-wide cost totals for a day (default: today), summed over agents."""
-        bucket = day or time.strftime("%Y-%m-%d")
+        bucket = day or time.strftime("%Y-%m-%d", time.gmtime())
         row = self._db.read_one(
             """
             SELECT COALESCE(SUM(cost_usd), 0) AS cost_usd,
@@ -1253,7 +1253,7 @@ class SwarmStore:
 
     def per_agent_daily_cost(self, day: str = "") -> dict[str, float]:
         """Per-agent cost for a day → {agent: cost_usd}. For status/debug."""
-        bucket = day or time.strftime("%Y-%m-%d")
+        bucket = day or time.strftime("%Y-%m-%d", time.gmtime())
         rows = self._db.read(
             "SELECT agent, cost_usd FROM swarm_costs WHERE day = ? ORDER BY cost_usd DESC",
             (bucket,),

@@ -24,7 +24,7 @@ import signal
 import sys
 from pathlib import Path
 
-THREAD_ID = "kill-test"
+THREAD_ID = "77001"
 QUESTION = "отправь отчёт и подтверди"
 TOOL_CALL_ID = "call-1"
 
@@ -61,12 +61,16 @@ def _sender(marker: Path):
     return tool
 
 
-async def _crash(workdir: Path) -> None:
+async def _crash(
+    workdir: Path, *, before_result: bool = False, before_dispatch: bool = False, before_cache: bool = False
+) -> None:
     from kronos.engine import execute_tool, side_effect_key
     from kronos.session import SessionStore
 
     store = SessionStore(str(workdir / "session.db"), agent_name="killtest")
-    turn_id = await store.begin_turn(THREAD_ID, QUESTION)
+    from kronos.turn_delivery import RecoveryDestination
+
+    turn_id = await store.begin_turn(THREAD_ID, QUESTION, recovery_destination=RecoveryDestination(77001, 55))
 
     from langchain_core.messages import AIMessage
 
@@ -79,15 +83,33 @@ async def _crash(workdir: Path) -> None:
 
     # Perform the real side effect and record it, exactly as react_loop would.
     tool = _sender(workdir / "sent.log")
+
+    def kill_with_marker():
+        (workdir / "crashed.txt").write_text(
+            f"{turn_id}\n{side_effect_key(tool, call['args'], turn_id)}\n", encoding="utf-8"
+        )
+        os.kill(os.getpid(), signal.SIGKILL)
+
+    if before_dispatch:
+        kill_with_marker()
+
+    async def finish_effect(key, token, name, result):
+        if before_result:
+            (workdir / "crashed.txt").write_text(f"{turn_id}\n{key}\n", encoding="utf-8")
+            os.kill(os.getpid(), signal.SIGKILL)
+        await store.finish_external_effect(key=key, token=token, turn_id=turn_id, tool=name, result=result)
+
     message = await execute_tool(
         tool,
         call,
-        get_external_effect=store.get_external_effect,
-        record_external_effect=lambda key, name, result: store.record_external_effect(
-            key=key, turn_id=turn_id, tool=name, result=result
+        begin_external_effect=lambda key, name, args, call_id, dedupe_by_key: store.begin_external_effect(
+            key=key, turn_id=turn_id, tool=name, args=args, tool_call_id=call_id, dedupe_by_key=dedupe_by_key
         ),
+        finish_external_effect=finish_effect,
         turn_id=turn_id,
     )
+    if before_cache:
+        kill_with_marker()
     await store.save_tool_result(turn_id=turn_id, tool_call_id=TOOL_CALL_ID, content=str(message.content))
 
     (workdir / "crashed.txt").write_text(
@@ -115,6 +137,17 @@ async def _resume(workdir: Path) -> int:
             return self
 
         async def ainvoke(self, messages, *args, **kwargs):
+            from langchain_core.messages import ToolMessage
+
+            pending = set()
+            for message in messages:
+                if isinstance(message, ToolMessage):
+                    assert message.tool_call_id in pending, "orphan tool result on real restart"
+                    pending.remove(message.tool_call_id)
+                else:
+                    assert not pending, "incomplete batch reached model on real restart"
+                    pending = {call["id"] for call in getattr(message, "tool_calls", [])}
+            assert not pending, "unanswered tool call reached model on real restart"
             return AIMessage(content="Отчёт отправлен, подтверждаю.")
 
         def invoke(self, messages, *args, **kwargs):
@@ -131,27 +164,89 @@ async def _resume(workdir: Path) -> int:
     )
     agent._get_system_prompt = lambda: "system"
 
+    from kronos import telegram_delivery
+
     delivered: list[str] = []
 
-    async def deliver(thread_id: str, text: str) -> None:
-        delivered.append(text)
+    async def deliver(chunk) -> int:
+        delivered.append(chunk.text)
         with open(workdir / "delivered.log", "a", encoding="utf-8") as handle:
-            handle.write(f"{thread_id}\t{text}\n")
+            handle.write(f"{chunk.chat_id}\t{chunk.text}\n")
+        return 100 + len(delivered)
 
-    finished = await agent.resume_abandoned_turns(deliver=deliver)
+    telegram_delivery.ready_sender = lambda: 55
+    telegram_delivery.send_chunk = deliver
+    finished = await agent.resume_abandoned_turns()
+    await store.deliver_pending()
     print(f"finished={finished} delivered={len(delivered)}")
     return finished
+
+
+async def _hold(workdir: Path, *, resume: bool) -> None:
+    """Keep a real executor alive with its event loop intentionally blocked."""
+    import time
+
+    from kronos.engine import AgentResult
+    from kronos.graph import KronosAgent
+    from kronos.session import SessionStore
+
+    store = SessionStore(str(workdir / "session.db"), agent_name="killtest")
+    agent = object.__new__(KronosAgent)
+    agent._session_store = store
+    agent._memory_enabled = False
+    agent._durable_recovery_checked = True
+
+    async def blocked_loop(**kwargs):
+        turn = (await store.resumable_turns())[0]
+        (workdir / "holding.txt").write_text(turn["turn_id"], encoding="utf-8")
+        time.sleep(120)
+        return AgentResult(content="unreachable", messages=[])
+
+    agent._run_model_loop = blocked_loop
+    from kronos.turn_delivery import RecoveryDestination
+
+    destination = RecoveryDestination(77001, 55)
+    if resume:
+        turn_id = await store.begin_turn(THREAD_ID, QUESTION, recovery_destination=destination)
+        await agent.resume_interrupted_turn(turn_id)
+    else:
+        await agent.ainvoke_outcome(QUESTION, THREAD_ID, recovery_destination=destination)
+
+
+async def _report(workdir: Path) -> int:
+    from kronos.session import SessionStore
+
+    count = await SessionStore(str(workdir / "session.db")).recover_abandoned_turns()
+    print(f"recovered={count}")
+    return 0
+
+
+async def _owned_crash(workdir: Path, *, mode: str) -> None:
+    from kronos.turn_ownership import own_conversation
+
+    async with own_conversation(str(workdir / "session.db"), THREAD_ID):
+        await _crash(
+            workdir,
+            before_result=mode == "crash-before-result",
+            before_dispatch=mode == "crash-before-dispatch",
+            before_cache=mode == "crash-before-cache",
+        )
 
 
 def main() -> int:
     mode, workdir = sys.argv[1], Path(sys.argv[2])
     _configure(workdir)
 
-    if mode == "crash":
-        asyncio.run(_crash(workdir))
+    if mode in {"crash", "crash-before-result", "crash-before-dispatch", "crash-before-cache"}:
+        asyncio.run(_owned_crash(workdir, mode=mode))
         return 0  # unreachable: the process is killed above
     if mode == "resume":
         return 0 if asyncio.run(_resume(workdir)) else 1
+    if mode in {"hold-live", "hold-resume"}:
+        asyncio.run(_hold(workdir, resume=mode == "hold-resume"))
+        return 0
+    if mode == "report":
+        return asyncio.run(_report(workdir))
     print(f"unknown mode: {mode}", file=sys.stderr)
     return 2
 

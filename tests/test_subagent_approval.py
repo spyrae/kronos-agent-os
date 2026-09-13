@@ -148,7 +148,7 @@ def _fake_agent(delegation_tool: StructuredTool):
 
 
 @pytest.mark.asyncio
-async def test_resume_reruns_delegation_with_exemption():
+async def test_resume_reruns_delegation_with_exemption(tmp_path):
     executed: list = []
     delegation_tool = _server_ops_delegation(
         [
@@ -158,6 +158,11 @@ async def test_resume_reruns_delegation_with_exemption():
         executed,
     )
     agent = _fake_agent(delegation_tool)
+    from kronos.session import SessionStore
+
+    agent._session_store = SessionStore(str(tmp_path / "effects.db"))
+    turn_id = await agent._session_store.begin_turn("thread", "restart")
+    agent._session_store.save_tool_result = AsyncMock(wraps=agent._session_store.save_tool_result)
 
     async def exemption(tool, args):
         # Exempt exactly the approved restart_service(host=web1); anything else
@@ -167,7 +172,7 @@ async def test_resume_reruns_delegation_with_exemption():
     resumed = await agent.__class__._resume_delegated_approval(
         agent,
         approved=True,
-        turn_id="turn_1",
+        turn_id=turn_id,
         delegation={
             "tool_name": "delegate_to_server_ops",
             "tool_call_id": "call_deleg",

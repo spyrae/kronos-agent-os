@@ -9,6 +9,7 @@ from langchain_core.tools import BaseTool
 
 from kronos.agents.topic_research.prompts import DISCOVER_PROMPT
 from kronos.agents.topic_research.state import TopicResearchState
+from kronos.execution_control import check_execution
 from kronos.llm import ModelTier, get_model
 
 log = logging.getLogger("kronos.agents.topic_research.discover")
@@ -33,6 +34,7 @@ async def _audited_tool_call(tool: BaseTool, args: dict, on_tool_event=None):
             },
         )
     started = time.perf_counter()
+    check_execution()
     try:
         result = await tool.ainvoke(args)
         if on_tool_event:

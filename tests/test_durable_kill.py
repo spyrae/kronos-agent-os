@@ -18,6 +18,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -114,3 +115,94 @@ def test_a_second_resume_finds_nothing_to_do(workdir):
     assert "finished=1" in first.stdout
     assert "finished=0" in second.stdout
     assert len((workdir / "sent.log").read_text(encoding="utf-8").splitlines()) == 1
+
+
+@pytest.mark.parametrize("mode,expected_attempts", [("hold-live", 1), ("hold-resume", 2)])
+def test_live_executor_blocks_other_processes_until_sigkill(workdir, mode, expected_attempts):
+    """A stalled event loop is not abandonment; SIGKILL really releases ownership."""
+    import sqlite3
+
+    env = {**os.environ, "PYTHONPATH": str(REPO_ROOT), "KAOS_ENV_FILE": "/dev/null"}
+    process = subprocess.Popen(
+        [sys.executable, "-m", HELPER, mode, str(workdir)],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        ready = workdir / "holding.txt"
+        deadline = time.monotonic() + 15
+        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert ready.exists(), "executor never reached its live turn"
+        turn_id = ready.read_text()
+        resume = _run("resume", workdir)
+        assert "finished=0" in resume.stdout, resume.stderr[-2000:]
+        report = _run("report", workdir)
+        assert "recovered=0" in report.stdout, report.stderr[-2000:]
+        assert process.poll() is None, "recovery must not kill the live executor"
+        with sqlite3.connect(workdir / "session.db") as db:
+            state, attempts = db.execute(
+                "SELECT status, attempts FROM active_turns WHERE turn_id = ?", (turn_id,)
+            ).fetchone()
+        assert state == ("running" if mode == "hold-live" else "resuming")
+        assert attempts == expected_attempts - 1
+    finally:
+        if process.poll() is None:
+            process.kill()
+        _, stderr = process.communicate(timeout=15)
+    assert process.returncode == -signal.SIGKILL, stderr[-2000:]
+    resumed = _run("resume", workdir)
+    assert "finished=1" in resumed.stdout, resumed.stderr[-2000:]
+    with sqlite3.connect(workdir / "session.db") as db:
+        assert db.execute("SELECT status, attempts FROM active_turns WHERE turn_id = ?", (turn_id,)).fetchone() == (
+            "done",
+            expected_attempts,
+        )
+
+
+def test_kill_after_dispatch_before_result_commit_refuses_blind_resume(workdir):
+    """The dangerous gap: real file mutation happened, result commit did not."""
+    import sqlite3
+
+    crashed = _run("crash-before-result", workdir)
+    assert crashed.returncode == -signal.SIGKILL, crashed.stderr[-2000:]
+    turn_id = (workdir / "crashed.txt").read_text().splitlines()[0]
+    for attempt in range(2):
+        resumed = _run("resume", workdir)
+        expected_notices = 1 if attempt == 0 else 0
+        assert f"finished=0 delivered={expected_notices}" in resumed.stdout, resumed.stderr[-2000:]
+    assert len((workdir / "sent.log").read_text().splitlines()) == 1
+    with sqlite3.connect(workdir / "session.db") as db:
+        assert db.execute("SELECT COUNT(*) FROM external_effects").fetchone()[0] == 0
+        assert db.execute("SELECT status FROM effect_intents").fetchone()[0] == "pending"
+        status, reason = db.execute("SELECT status, error FROM active_turns WHERE turn_id = ?", (turn_id,)).fetchone()
+    assert status == "failed"
+    assert "reconciliation required" in reason
+
+    notice = (workdir / "delivered.log").read_text()
+    assert "Восстановление не завершено" in notice
+    assert "Отчёт отправлен, подтверждаю" not in notice
+
+
+@pytest.mark.parametrize("mode", ["crash-before-dispatch", "crash-before-cache"])
+def test_restart_finishes_original_batch_before_calling_model(workdir, mode):
+    import sqlite3
+
+    crashed = _run(mode, workdir)
+    assert crashed.returncode == -signal.SIGKILL, crashed.stderr[-2000:]
+    turn_id = (workdir / "crashed.txt").read_text().splitlines()[0]
+    if mode == "crash-before-dispatch":
+        assert not (workdir / "sent.log").exists()
+    else:
+        assert len((workdir / "sent.log").read_text().splitlines()) == 1
+    with sqlite3.connect(workdir / "session.db") as db:
+        assert db.execute("SELECT COUNT(*) FROM tool_results").fetchone()[0] == 0
+    resumed = _run("resume", workdir)
+    assert resumed.returncode == 0, resumed.stderr[-2000:]
+    assert "finished=1 delivered=1" in resumed.stdout
+    assert len((workdir / "sent.log").read_text().splitlines()) == 1
+    with sqlite3.connect(workdir / "session.db") as db:
+        assert db.execute("SELECT status FROM active_turns WHERE turn_id = ?", (turn_id,)).fetchone()[0] == "done"

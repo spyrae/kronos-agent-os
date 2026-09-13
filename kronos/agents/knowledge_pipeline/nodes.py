@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from kronos.agents.knowledge_pipeline.queue import KnowledgeQueue, validate_task_schema
+from kronos.execution_control import check_execution
 
 _WIKI_LINK_RE = re.compile(r"\[\[([^\]\n]{2,120})\]\]")
 _SENTENCE_RE = re.compile(r"(?<=[.!?。！？])\s+|\n+")
@@ -119,6 +120,7 @@ def sync_claims_to_memory(
         task["memory"] = {"status": "skipped", "reason": "no claims"}
         return queue.mark_phase(task, "memory", "skipped", task["memory"])
 
+    check_execution()
     try:
         from kronos.memory.store import add_memories
 
@@ -155,6 +157,7 @@ def run_pipeline(
         current = queue.load_task(str(task["task_id"]))
 
     for node in (process_claims, connect_claims, verify_task):
+        check_execution()
         current = node(queue, current)
         queue.save_task(current)
         current = queue.load_task(str(current["task_id"]))

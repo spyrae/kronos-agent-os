@@ -135,5 +135,6 @@ def test_cancel_stops_it_once(capsys):
     plan_id = _plan()
 
     assert main(["plans", "cancel", str(plan_id)]) == 0
+    assert "cancellation requested" in capsys.readouterr().out
     assert plans.get_plan(plan_id)["state"] == plans.PLAN_CANCELLED
     assert main(["plans", "cancel", str(plan_id)]) == 1

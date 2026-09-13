@@ -13,6 +13,23 @@ interface Turn {
   error: string | null;
 }
 
+interface TurnActionResult {
+  ok: boolean;
+  answer?: string;
+  thread_id?: string;
+  status?: string;
+  delivery?: DeliveryStatus;
+}
+
+interface DeliveryStatus {
+  requested: boolean;
+  state: string;
+  pending: number;
+  delivered: number;
+  needs_review: number;
+  obsolete: number;
+}
+
 interface JournalEntry {
   seq: number;
   status: string;
@@ -25,6 +42,8 @@ interface JournalEntry {
 }
 
 interface TurnDetail extends Turn {
+  final_content: string | null;
+  delivery?: DeliveryStatus;
   journal: JournalEntry[];
   tool_results: { tool_call_id: string; content: string }[];
   effects: { idempotency_key: string; tool: string; result: string; created_at: string }[];
@@ -100,19 +119,26 @@ export default function TurnsPage() {
     setBusy(turnId);
     setNotice('');
     try {
-      const result = await api<{ ok: boolean; answer?: string; thread_id?: string }>(
+      const result = await api<TurnActionResult>(
         `/api/turns/${turnId}/${action}`,
         { method: 'POST', body: JSON.stringify({}) }
       );
       setNotice(
         action === 'resume'
-          ? `Turn finished: ${(result.answer ?? '').slice(0, 140)}`
+          ? `Turn ${result.status ?? 'updated'}; delivery ${result.delivery?.state ?? 'unknown'}: ${(result.answer ?? '').slice(0, 140)}`
           : `Forked into thread ${result.thread_id}`
       );
       load();
       if (selected?.turn_id === turnId) open(turnId);
-    } catch {
-      setNotice(`${action} failed — see the agent log`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : '';
+      if (action === 'resume' && message.startsWith('409:')) {
+        setNotice('Resume refused: conversation is busy or the turn is no longer resumable.');
+      } else if (action === 'resume' && message.startsWith('503:')) {
+        setNotice('Live agent unavailable. Resume was not started.');
+      } else {
+        setNotice(`${action} failed — inspect the turn before retrying`);
+      }
     } finally {
       setBusy('');
     }
@@ -243,6 +269,21 @@ export default function TurnsPage() {
             {selected.started_at}
           </p>
           <p style={{ color: '#ccc', fontSize: '0.82rem', marginBottom: '1rem' }}>{selected.input_message}</p>
+
+          <SectionHeader title="Recovery delivery" />
+          {selected.delivery ? (
+            <p style={{ color: '#ccc', fontSize: '0.78rem', marginBottom: '0.6rem' }}>
+              {selected.delivery.state} · pending {selected.delivery.pending} · accepted {selected.delivery.delivered}
+              {' '}· needs review {selected.delivery.needs_review} · obsolete {selected.delivery.obsolete}
+            </p>
+          ) : (
+            <p style={{ color: '#ccc', fontSize: '0.78rem' }}>Delivery metadata unavailable — acceptance is not confirmed.</p>
+          )}
+          <p style={{ color: '#888', fontSize: '0.72rem', marginBottom: '1rem' }}>
+            Execution and delivery are separate. Delivered means accepted by Telegram, not read.
+            Missing/invalid destinations are never guessed; review-required results stay queued for operator review.
+          </p>
+          {selected.final_content && <p style={{ whiteSpace: 'pre-wrap', color: '#ccc', fontSize: '0.8rem' }}>{selected.final_content}</p>}
 
           <SectionHeader title="Journal" />
           {selected.journal.length ? (

@@ -106,6 +106,7 @@ class TestAinvokeContract:
             "extra_system_context",
             "on_tool_event",
             "force_tier",
+            "recovery_destination",
         }
         assert sig.parameters["source_kind"].default == "user"
         assert sig.parameters["persist_user_turn"].default is True

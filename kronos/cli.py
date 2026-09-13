@@ -1206,7 +1206,9 @@ def run_dashboard_command() -> int:
     print(f"Starting KAOS dashboard on http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
     print("Press Ctrl+C to stop.")
     try:
-        asyncio.run(run_dashboard())
+        if asyncio.run(run_dashboard()) is False:
+            print("Dashboard did not start: no authentication password is available.")
+            return 1
     except KeyboardInterrupt:
         print("\nDashboard stopped.")
     return 0
@@ -1366,7 +1368,8 @@ def run_turns_show(turn_id: str) -> int:
     """Show one turn: journal, memoized results, recorded effects."""
     import asyncio as _asyncio
 
-    detail = _asyncio.run(_session_store().get_turn_detail(turn_id))
+    store = _session_store()
+    detail = _asyncio.run(store.get_turn_detail(turn_id))
     if not detail:
         print(f"Turn not found: {turn_id}")
         return 1
@@ -1374,6 +1377,18 @@ def run_turns_show(turn_id: str) -> int:
     print(f"turn {detail['turn_id']}  [{detail['status']}]  thread={detail['thread_id']}")
     print(f"  started: {detail.get('started_at')}   completed: {detail.get('completed_at') or '—'}")
     print(f"  attempts: {detail.get('attempts', 0)}")
+    delivery = _asyncio.run(store.delivery_status(turn_id))
+    print(
+        f"  recovery delivery: {delivery['state']}; pending={delivery['pending']}; needs_review={delivery['needs_review']}"
+    )
+    print("  Delivery acknowledges Telegram acceptance, not that the user read it.")
+    if detail.get("final_content"):
+        print(f"  result: {detail['final_content']}")
+    protocol = detail.get("effect_protocol", 0)
+    print(
+        f"  effect protocol: {protocol}"
+        + (" — legacy; missing intent is not proof of no effect" if not protocol else "")
+    )
     if detail.get("error"):
         print(f"  error: {detail['error']}")
     print(f"  input: {str(detail.get('input_message') or '')[:200]}")
@@ -1391,9 +1406,9 @@ def run_turns_show(turn_id: str) -> int:
         for row in detail["tool_results"]:
             print(f"    {row['tool_call_id']}: {str(row['content'])[:80]}")
     if detail["effects"]:
-        print("\n  recorded external effects (will not repeat on resume):")
+        print("\n  external effects (pending requires reconciliation, not retry):")
         for row in detail["effects"]:
-            print(f"    {row['tool']}: {str(row['result'])[:60]}")
+            print(f"    {row['tool']} [{row.get('status', 'recorded')}]: {str(row['result'])[:60]}")
     return 0
 
 
@@ -1420,6 +1435,8 @@ def run_turns_resume(turn_id: str) -> int:
 
     async def _resume() -> int:
         from kronos.graph import KronosAgent
+        from kronos.tools.manager import managed_mcp_tools
+        from kronos.turn_ownership import TurnBusyError
 
         store = _session_store()
         detail = await store.get_turn_detail(turn_id)
@@ -1430,17 +1447,18 @@ def run_turns_resume(turn_id: str) -> int:
             print(f"Turn {turn_id} is '{detail['status']}' — only in-flight turns can be resumed.")
             return 1
 
-        agent = KronosAgent(session_store=store)
-        answer = await agent.resume_interrupted_turn(
-            {
-                "turn_id": turn_id,
-                "thread_id": detail["thread_id"],
-                "input_message": detail.get("input_message", ""),
-                "attempts": detail.get("attempts", 0),
-            }
-        )
+        async with managed_mcp_tools() as tools:
+            agent = KronosAgent(tools=tools or None, session_store=store)
+            try:
+                answer = await agent.resume_interrupted_turn(turn_id)
+            except TurnBusyError:
+                print("Conversation has a live executor — resume was not started.")
+                return 1
+        delivery = await store.delivery_status(turn_id)
+        print(f"Recovery delivery: {delivery['state']}; accepted means transport receipt, not human read.")
         if not answer:
-            print("Resume produced no answer — see the log; the turn was marked failed.")
+            outcome = await agent.get_turn_outcome(turn_id)
+            print(f"Resume did not complete — outcome={outcome.status}; inspect the turn before retrying.")
             return 1
         print(answer)
         return 0
@@ -1543,6 +1561,7 @@ def _plan_row(plan: dict) -> dict:
             if s["state"] == plans.STEP_WAITING
         ],
         "summary": plan["summary"],
+        "delivery": plans.delivery_status(plan),
     }
 
 
@@ -1588,8 +1607,17 @@ def run_plans_show(plan_id: int, as_json: bool) -> int:
         return 0
 
     print(f"#{plan['id']} [{plan['state']}] {plan['goal']}")
+    if plans.stop_reason(plan):
+        pending = sum(not step["stop_reconciled"] for step in steps)
+        review = sum(step["state"] == plans.STEP_REVIEW for step in steps)
+        print(f"Stop requested: {pending} step(s) awaiting cleanup, {review} requiring review. No rollback.")
     if plan["summary"]:
         print(f"\n{plan['summary']}\n")
+    delivery = plans.delivery_status(plan)
+    print(
+        f"Delivery: summary={delivery['summary']}, pending={delivery['pending']}, "
+        f"needs_review={delivery['needs_review']}. Delivered means accepted by Telegram, not read."
+    )
     for step in steps:
         label = step["title"] or f"step {step['seq']}"
         line = f"  #{step['id']} {label}: {step['state']}"
@@ -1631,10 +1659,16 @@ def run_plans_resume(plan_id: int, step_id: int) -> int:
         print(f"Plan #{plan_id} has no waiting steps.")
         return 1
 
+    released = 0
     for step in waiting:
-        plans.release_step(step["id"])
+        if not plans.release_step(step["id"]):
+            continue
+        released += 1
         label = step["title"] or f"step {step['seq']}"
         print(f"Released step #{step['id']} ({label})")
+    if not released:
+        print("No steps released: execution is unresolved or the plan expired.")
+        return 1
     print("The next poller cycle picks them up.")
     return 0
 
@@ -1645,7 +1679,7 @@ def run_plans_cancel(plan_id: int) -> int:
     if not plans.cancel_plan(plan_id, settings.agent_name):
         print(f"No active plan #{plan_id} for {settings.agent_name}")
         return 1
-    print(f"Plan #{plan_id} cancelled.")
+    print(f"Plan #{plan_id}: cancellation requested. In-flight work may finish; effects are not rolled back.")
     return 0
 
 

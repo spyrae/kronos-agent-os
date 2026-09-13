@@ -131,3 +131,24 @@ def test_cancelling_returns_the_closed_plan_and_then_404s(client):
 
     assert client.delete(f"/api/plans/{plan_id}").json()["state"] == plans.PLAN_CANCELLED
     assert client.delete(f"/api/plans/{plan_id}").status_code == 404
+
+
+def test_resume_does_not_report_releasing_a_linked_waiting_step(client):
+    plan_id = _plan()
+    step_id = plans.add_step(plan_id, 'ongoing')
+    assert plans.claim_step(step_id)
+    plans.link_turn(step_id, 'live-turn')
+    plans._db().write("UPDATE plan_steps SET state='waiting' WHERE id=?", (step_id,))
+    assert client.post(f'/api/plans/{plan_id}/resume').status_code == 409
+    assert plans.get_step(step_id)['state'] == plans.STEP_WAITING
+
+
+def test_interrupted_step_exposes_its_durable_turn_identity(client):
+    plan_id = _plan()
+    step_id = plans.add_step(plan_id, 'ongoing')
+    assert plans.claim_step(step_id)
+    plans.link_turn(step_id, 'stopped-turn')
+    plans.update_linked_step(step_id, 'stopped-turn', state=plans.STEP_INTERRUPTED)
+    step = client.get(f'/api/plans/{plan_id}').json()['steps'][0]
+    assert step['state'] == 'interrupted'
+    assert step['turn_id'] == 'stopped-turn'

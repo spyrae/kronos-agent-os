@@ -195,7 +195,7 @@ def test_status_of_a_missing_plan_is_an_error():
 def test_cancelling_stops_the_plan_and_is_not_repeatable():
     plan_id = _start()
 
-    assert "остановлен" in plan_cancel.invoke({"plan_id": plan_id, "reason": "передумал"})
+    assert "Запрошена остановка" in plan_cancel.invoke({"plan_id": plan_id, "reason": "передумал"})
     assert plans.get_plan(plan_id)["state"] == plans.PLAN_CANCELLED
     assert plan_cancel.invoke({"plan_id": plan_id}).startswith("[ERROR]")
 

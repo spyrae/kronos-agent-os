@@ -10,6 +10,27 @@ from kronos.config import settings
 
 
 @pytest.fixture
+def isolated_demo(monkeypatch):
+    """A CLI normally owns its process; keep its mutations inside this test."""
+    from kronos import db, swarm_store
+    from kronos.security import egress
+
+    for field in (
+        "db_dir",
+        "swarm_db_path",
+        "enable_dynamic_tools",
+        "enable_mcp_gateway_management",
+        "enable_dynamic_mcp_servers",
+        "enable_server_ops",
+        "require_dynamic_tool_sandbox",
+    ):
+        monkeypatch.setattr(settings, field, getattr(settings, field))
+    monkeypatch.setattr(db, "_instances", {})
+    monkeypatch.setattr(swarm_store, "_singleton", None)
+    monkeypatch.setattr(egress, "_forced_allowlist", egress._forced_allowlist)
+
+
+@pytest.fixture
 def swarm_db(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "swarm_db_path", str(tmp_path / "swarm.db"))
     monkeypatch.setattr(settings, "db_dir", str(tmp_path))
@@ -100,7 +121,7 @@ def test_an_unknown_period_fails_with_a_message(swarm_db, capsys, monkeypatch):
 # --- demo ---------------------------------------------------------------------
 
 
-def test_the_swarm_demo_runs_offline(capsys, monkeypatch):
+def test_the_swarm_demo_runs_offline(capsys, monkeypatch, isolated_demo):
     """No Telegram, no keys, no network — and it must show real coordination."""
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
 
@@ -114,7 +135,7 @@ def test_the_swarm_demo_runs_offline(capsys, monkeypatch):
     assert "Отчёт роя" in out
 
 
-def test_the_demo_leaves_the_live_registry_alone(capsys):
+def test_the_demo_leaves_the_live_registry_alone(capsys, isolated_demo):
     from kronos.group_router import AGENT_PROFILES
 
     before = {name: dict(prof) for name, prof in AGENT_PROFILES.items()}

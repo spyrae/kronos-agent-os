@@ -26,6 +26,8 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 
 from kronos.config import settings
+from kronos.execution_control import check_execution, guard_model
+from kronos.security.model_budget import BudgetedModel, ModelBudgetError, admit_model_call
 from kronos.security.pii import mask_pii, mask_pii_object
 
 log = logging.getLogger("kronos.llm")
@@ -147,10 +149,12 @@ class FallbackChatModel:
         chain: list[str],
         label: str,
         tools: list | None = None,
+        tool_options: dict[str, Any] | None = None,
     ):
         self._chain = chain
         self._label = label
         self._tools = list(tools or [])
+        self._tool_options = dict(tool_options or {})
         self._primary_config = resolve_provider_config(chain[0]) if chain else None
 
     @property
@@ -169,8 +173,8 @@ class FallbackChatModel:
     def max_tokens(self) -> int | None:
         return self._primary_config.max_tokens if self._primary_config else None
 
-    def bind_tools(self, tools: list) -> FallbackChatModel:
-        return FallbackChatModel(self._chain, self._label, tools=tools)
+    def bind_tools(self, tools: list, **kwargs: Any) -> FallbackChatModel:
+        return FallbackChatModel(self._chain, self._label, tools=tools, tool_options=kwargs)
 
     def _configured_providers(self) -> list[str]:
         return [provider for provider in self._chain if _has_key(provider)]
@@ -182,8 +186,8 @@ class FallbackChatModel:
 
     def _prepare_model(self, provider: str) -> BaseChatModel | None:
         model = _state.get_or_create(provider)
-        if model and self._tools:
-            return model.bind_tools(self._tools)
+        if model and (self._tools or self._tool_options):
+            return model.bind_tools(self._tools, **self._tool_options)
         return model
 
     async def ainvoke(self, messages: list[BaseMessage], *args: Any, **kwargs: Any):
@@ -200,6 +204,12 @@ class FallbackChatModel:
 
         last_error: Exception | None = None
         for index, provider in enumerate(providers):
+            check_execution()
+            if admit_model_call() and self._label != "lite":
+                model = get_model(ModelTier.LITE)
+                if self._tools or self._tool_options:
+                    model = model.bind_tools(self._tools, **self._tool_options)
+                return await getattr(model, method_name)(messages, *args, **kwargs)
             model = self._prepare_model(provider)
             if not model:
                 continue
@@ -243,6 +253,12 @@ class FallbackChatModel:
 
         last_error: Exception | None = None
         for index, provider in enumerate(providers):
+            check_execution()
+            if admit_model_call() and self._label != "lite":
+                model = get_model(ModelTier.LITE)
+                if self._tools or self._tool_options:
+                    model = model.bind_tools(self._tools, **self._tool_options)
+                return getattr(model, method_name)(messages, *args, **kwargs)
             model = self._prepare_model(provider)
             if not model:
                 continue
@@ -398,6 +414,7 @@ _PRESETS: dict[str, dict[str, object]] = {
 
 def get_model(tier: ModelTier = ModelTier.STANDARD) -> BaseChatModel:
     """Get the first available chat model for the given tier."""
+    tier = ModelTier(tier)
     chain = provider_chain(tier)
     return _get_model_from_chain(chain, tier.value)
 
@@ -410,19 +427,27 @@ def get_orchestrator_model() -> BaseChatModel:
     return _get_model_from_chain(_parse_chain(raw), "orchestrator")
 
 
-def _get_model_from_chain(chain: list[str], label: str) -> BaseChatModel:
+def _get_model_from_chain(chain: list[str], label: str, *, budgeted: bool = True) -> BaseChatModel:
     """Get a fallback-capable chat model from an explicit provider chain.
 
-    This is the single place every tier resolves through, so cassette record and
-    replay hook in here — including the single-provider shortcut, which returns a
-    raw provider model rather than a FallbackChatModel.
+    Every tier resolves here. Normal callers receive budget admission around
+    cassette recording and either a single provider or an explicit fallback
+    chain. The private unbudgeted branch constructs models but never dispatches
+    requests; the caller's admission wrapper owns that boundary.
     """
     from kronos import cassettes
 
     if cassettes.replaying():
         # Replay needs neither keys nor providers: that is what makes eval runs
         # work in CI with no secrets configured.
-        return cassettes.replay_model(label=label)  # type: ignore[return-value]
+        return guard_model(cassettes.replay_model(label=label))  # type: ignore[return-value]
+
+    if budgeted:
+        return BudgetedModel(
+            _get_model_from_chain(chain, label, budgeted=False),
+            label=label,
+            lite_factory=lambda: _get_model_from_chain(provider_chain(ModelTier.LITE), "lite", budgeted=False),
+        )  # type: ignore[return-value]
 
     configured = [provider for provider in chain if _has_key(provider)]
     if not configured:
@@ -431,8 +456,8 @@ def _get_model_from_chain(chain: list[str], label: str) -> BaseChatModel:
     if len(configured) == 1:
         model = _state.get_or_create(configured[0])
         if model:
-            return cassettes.wrap_model(model, label=label)
-    return cassettes.wrap_model(FallbackChatModel(configured, label), label=label)  # type: ignore[return-value]
+            return guard_model(cassettes.wrap_model(model, label=label))
+    return guard_model(cassettes.wrap_model(FallbackChatModel(configured, label), label=label))  # type: ignore[return-value]
 
 
 def get_fallback_model() -> BaseChatModel:
@@ -440,7 +465,7 @@ def get_fallback_model() -> BaseChatModel:
     from kronos import cassettes
 
     if cassettes.replaying():
-        return cassettes.replay_model(label="fallback")  # type: ignore[return-value]
+        return guard_model(cassettes.replay_model(label="fallback"))  # type: ignore[return-value]
 
     seen: set[str] = set()
     for tier in (ModelTier.LITE, ModelTier.STANDARD):
@@ -454,7 +479,11 @@ def get_fallback_model() -> BaseChatModel:
                 continue
             model = _state.get_or_create(provider)
             if model:
-                return cassettes.wrap_model(model, label="fallback")
+                return BudgetedModel(
+                    guard_model(cassettes.wrap_model(model, label="fallback")),
+                    label="lite" if tier == ModelTier.LITE else "fallback",
+                    lite_factory=lambda: _get_model_from_chain(provider_chain(ModelTier.LITE), "lite", budgeted=False),
+                )  # type: ignore[return-value]
 
     raise RuntimeError("No fallback LLM providers configured")
 
@@ -599,6 +628,8 @@ def _status_code_from_error(error: BaseException) -> int | None:
 
 def is_retriable_llm_error(error: BaseException) -> bool:
     """Return True for provider failures that are safe to retry elsewhere."""
+    if isinstance(error, ModelBudgetError):
+        return False
     if isinstance(error, (TimeoutError, ConnectionError)):
         return True
 
@@ -656,7 +687,7 @@ def _has_key(provider: str) -> bool:
 
 def _create_model(config: ProviderConfig) -> BaseChatModel | None:
     try:
-        callbacks = _runtime_callbacks()
+        callbacks = _runtime_callbacks(config)
         if config.adapter in {"openai", "openai-compatible", "openai_compatible"}:
             from langchain_openai import ChatOpenAI
 
@@ -703,12 +734,13 @@ def _create_model(config: ProviderConfig) -> BaseChatModel | None:
     return None
 
 
-def _runtime_callbacks() -> list[BaseCallbackHandler]:
+def _runtime_callbacks(config: ProviderConfig) -> list[BaseCallbackHandler]:
     """Callbacks attached to every model: always-on cost tracking, then the
     optional Langfuse observability handler when its keys are configured."""
     from kronos.security.cost_tracking import get_cost_callbacks
 
-    return get_cost_callbacks() + _observability_callbacks()
+    billing = "subscription" if config.adapter in {"codex-cli", "codex_cli"} else "api"
+    return get_cost_callbacks(model=config.model, billing=billing) + _observability_callbacks()
 
 
 def _observability_callbacks() -> list[BaseCallbackHandler]:

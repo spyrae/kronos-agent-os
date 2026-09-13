@@ -143,7 +143,10 @@ def test_get_orchestrator_model_uses_separate_chain(monkeypatch):
 
     model = get_orchestrator_model()
 
-    assert isinstance(model, FakeCodex)
+    from kronos.security.model_budget import BudgetedModel
+
+    assert isinstance(model, BudgetedModel)
+    assert isinstance(model._model, FakeCodex)
     assert calls[0]["model_name"] == "gpt-5.5"
     assert calls[0]["command"] == "codex"
     reset_provider_state()
@@ -167,7 +170,10 @@ def test_get_model_uses_openai_compatible_adapter(monkeypatch):
 
     model = get_model(ModelTier.STANDARD)
 
-    assert isinstance(model, FakeChatOpenAI)
+    from kronos.security.model_budget import BudgetedModel
+
+    assert isinstance(model, BudgetedModel)
+    assert isinstance(model._model, FakeChatOpenAI)
     assert len(calls) == 1
     kwargs = dict(calls[0])
     # The always-on cost-tracking callback is attached to every model.

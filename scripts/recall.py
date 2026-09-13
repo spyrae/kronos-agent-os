@@ -25,7 +25,6 @@ import os
 import re
 import sqlite3
 import sys
-import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -91,30 +90,22 @@ def setup_logging(*, enable_file: bool = True) -> None:
 
 
 def ask_deepseek(prompt: str, timeout: int = 60) -> str:
-    """Call DeepSeek chat completions API. Stdlib only (urllib)."""
+    """Load runtime budget support only when model summarization is requested."""
     if not DEEPSEEK_API_KEY:
         raise RuntimeError("DEEPSEEK_API_KEY is not set")
 
-    payload = json.dumps(
-        {
-            "model": DEEPSEEK_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 4000,
-        }
-    ).encode("utf-8")
+    if str(_APP_DIR) not in sys.path:
+        sys.path.insert(0, str(_APP_DIR))
+    from kronos.security.direct_model import ask_script_model
 
-    req = urllib.request.Request(
-        f"{DEEPSEEK_BASE_URL}/chat/completions",
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        },
+    return ask_script_model(
+        prompt,
+        base_url=DEEPSEEK_BASE_URL,
+        api_key=DEEPSEEK_API_KEY,
+        model=DEEPSEEK_MODEL,
+        max_tokens=4000,
+        timeout=timeout,
     )
-
-    resp = urllib.request.urlopen(req, timeout=timeout)
-    data = json.loads(resp.read())
-    return data["choices"][0]["message"]["content"]
 
 
 # --- Database ---

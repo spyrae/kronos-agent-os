@@ -68,6 +68,7 @@ def create_app(scheduler=None, agent=None) -> FastAPI:
         docs_url="/api/docs",
         redoc_url=None,
     )
+    app.state.agent = agent
 
     # CORS: the UI is served same-origin by this app; cross-origin is only
     # needed for local dev (vite on another localhost port). Never wildcard —
@@ -150,13 +151,14 @@ async def serve_until_cancelled(server: uvicorn.Server) -> None:
         raise
 
 
-async def run_dashboard(scheduler=None, agent=None) -> None:
+async def run_dashboard(scheduler=None, agent=None) -> bool:
     """Start dashboard server.
 
-    Returns without starting when there is no password to check against —
+    Returns False without starting when there is no password to check against —
     which happens only if the generated one could not be persisted. Serving an
-    unauthenticated dashboard is not an acceptable fallback. The agent keeps
-    running: the dashboard is an accessory to it, never a reason to take it down.
+    unauthenticated dashboard is not an acceptable fallback. The application
+    supervisor keeps other services running for this explicit disabled state.
+    Returns True when an enabled server has finished serving.
     """
     if not DASHBOARD_PASSWORD:
         log.error(
@@ -164,7 +166,7 @@ async def run_dashboard(scheduler=None, agent=None) -> None:
             "Set DASHBOARD_PASSWORD to enable it.",
             DASHBOARD_PASSWORD_PATH,
         )
-        return
+        return False
 
     app = create_app(scheduler=scheduler, agent=agent)
     config = uvicorn.Config(
@@ -184,3 +186,4 @@ async def run_dashboard(scheduler=None, agent=None) -> None:
             DASHBOARD_PASSWORD_PATH,
         )
     await serve_until_cancelled(server)
+    return True

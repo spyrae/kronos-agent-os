@@ -59,13 +59,14 @@ def test_pricing_known_default_codex_and_env(monkeypatch):
     from kronos.security.cost_tracking import _price_for, estimate_cost_usd
 
     assert _price_for("deepseek-chat") == (0.27, 1.10)
-    assert _price_for("gpt-5.5") == (0.0, 0.0)  # Codex OAuth = zero marginal
+    assert _price_for("gpt-5.5", billing="subscription") == (0.0, 0.0)
+    assert _price_for("gpt-5.5") == (0.50, 1.50)  # A model name does not prove API billing is free.
     assert _price_for("totally-unknown-model") == (0.50, 1.50)  # default
 
     # 1M input + 1M output at the DeepSeek rate.
     assert estimate_cost_usd("deepseek-chat", 1_000_000, 1_000_000) == pytest.approx(1.37)
     # A zero-priced model never accrues, whatever the token count.
-    assert estimate_cost_usd("gpt-5.5", 5_000_000, 5_000_000) == 0.0
+    assert estimate_cost_usd("gpt-5.5", 5_000_000, 5_000_000, billing="subscription") == 0.0
 
     monkeypatch.setenv("KAOS_MODEL_PRICE_DEEPSEEK_CHAT_INPUT", "1.00")
     assert _price_for("deepseek-chat")[0] == 1.00

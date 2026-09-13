@@ -8,12 +8,17 @@ All providers use OpenAI-compatible API format.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from dataclasses import dataclass
 from enum import Enum
 
 import httpx
+
+from kronos.effect_state import DurableStateError
+from kronos.security.direct_model import chat_response_text, record_direct_response
+from kronos.security.model_budget import ModelBudgetError, admit_model_call
 
 log = logging.getLogger("aso.llm")
 
@@ -93,6 +98,8 @@ async def ask(
             log.info("LLM OK via %s (%s): %d chars", provider.name, use_model, len(result))
             return result
 
+        except (ModelBudgetError, DurableStateError):
+            raise
         except Exception as e:
             error_msg = f"{provider.name}: {e}"
             errors.append(error_msg)
@@ -112,6 +119,20 @@ async def _call_openai_compatible(
     timeout: float,
 ) -> str:
     """Call any OpenAI-compatible chat completions endpoint."""
+    if admit_model_call():
+        from langchain_core.messages import convert_to_messages
+
+        from kronos.llm import ModelTier, get_model
+
+        response = await asyncio.wait_for(
+            get_model(ModelTier.LITE).ainvoke(
+                convert_to_messages(messages), temperature=temperature, max_tokens=max_tokens
+            ),
+            timeout=timeout,
+        )
+        if not isinstance(response.content, str) or not response.content.strip():
+            raise RuntimeError("Lite model returned no text")
+        return response.content.strip()
     url = f"{base_url}/chat/completions"
 
     payload = {
@@ -132,9 +153,8 @@ async def _call_openai_compatible(
         )
         resp.raise_for_status()
         data = resp.json()
-
-    choices = data.get("choices", [])
-    if not choices:
-        raise RuntimeError(f"Empty choices from {model}: {data}")
-
-    return choices[0]["message"]["content"].strip()
+        text = chat_response_text(data).strip()
+        record_direct_response(model=model, response=data, input_content=messages, output_content=text)
+    if not text:
+        raise RuntimeError(f"Empty text response from {model}")
+    return text

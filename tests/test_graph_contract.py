@@ -16,8 +16,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-pytestmark = pytest.mark.integration
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -27,6 +25,14 @@ from langchain_core.messages import (
 
 from kronos.graph import KronosAgent
 from kronos.session import SessionStore
+from tests.test_cost_tracking import cost_env  # noqa: F401
+from tests.test_model_budget import models  # noqa: F401
+
+
+@pytest.fixture(autouse=True)
+def local_model_providers(request):
+    """Exercise the real factory/guardian with isolated fake providers, no API."""
+    request.getfixturevalue("models")
 
 
 class _StubResult:

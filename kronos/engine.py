@@ -26,12 +26,16 @@ from langchain_core.tools import BaseTool
 from kronos import cassettes
 from kronos.cassettes import CassetteMissError
 from kronos.config import settings
+from kronos.effect_state import DurableStateError, EffectClaim, EffectUncertainError
+from kronos.execution_control import check_execution
 from kronos.security.loop_detector import LoopDetector, LoopLevel, get_nudge_message
+from kronos.security.model_budget import ModelBudgetError
 from kronos.security.sanitize import wrap_untrusted
 from kronos.security.untrusted import (
     handle_injection,
     tool_output_is_untrusted,
 )
+from kronos.tool_history import unanswered_tool_calls
 from kronos.tools.error_handler import classify_tool_error
 
 log = logging.getLogger("kronos.engine")
@@ -42,10 +46,13 @@ ToolEventCallback = Callable[[str, dict[str, Any]], None]
 MessageDeltaCallback = Callable[[list[BaseMessage]], Any]
 ToolCacheGetCallback = Callable[[str], Any]
 ToolCacheSaveCallback = Callable[[str, str], Any]
+ToolRecoveryCallback = Callable[[dict], Any]
 ToolApprovalPredicate = Callable[[BaseTool, dict], Any]
 ToolApprovalRequestCallback = Callable[[BaseTool, dict], Any]
 EffectGetCallback = Callable[[str], Any]
 EffectRecordCallback = Callable[[str, str, str], Any]
+EffectBeginCallback = Callable[[str, str, dict, str, bool], Any]
+EffectFinishCallback = Callable[[str, str, str, str], Any]
 
 
 class SubAgentApprovalPause(Exception):  # noqa: N818 - control-flow signal, not an error
@@ -200,6 +207,7 @@ class AgentResult:
     waiting_approval: bool = False
     approval_id: str | None = None
     approval_tool_name: str | None = None
+    failure_reason: str = ""
 
 
 def _approval_lists() -> tuple[set[str], tuple[str, ...], tuple[str, ...]]:
@@ -383,6 +391,8 @@ async def execute_tool(
     *,
     get_external_effect: EffectGetCallback | None = None,
     record_external_effect: EffectRecordCallback | None = None,
+    begin_external_effect: EffectBeginCallback | None = None,
+    finish_external_effect: EffectFinishCallback | None = None,
     turn_id: str = "",
 ) -> ToolMessage:
     """Execute a single tool call, returning a ToolMessage.
@@ -390,6 +400,7 @@ async def execute_tool(
     Handles both sync and async tools. On error, calls error_handler
     to produce an actionable message for the LLM.
     """
+    check_execution()
     tool_call_id = tool_call.get("id", "")
     args = tool_call.get("args", {})
     untrusted = tool_output_is_untrusted(tool)
@@ -402,7 +413,7 @@ async def execute_tool(
             content = wrap_untrusted(content, label=f"tool:{tool.name}")
         return _build_tool_message(content, replayed["raw_content"], tool_call_id)
 
-    if cassettes.replaying() and untrusted:
+    if cassettes.replaying() and (untrusted or tool_has_side_effect(tool)):
         # Untrusted output means the tool reaches outside the process. Replaying a
         # turn by actually hitting the network would make the run non-deterministic
         # and possibly costly, so a missing cassette is a hard error. Local tools
@@ -413,27 +424,58 @@ async def execute_tool(
         )
 
     effect_key = ""
-    if tool_has_side_effect(tool) and (get_external_effect or record_external_effect):
+    effect_claim = None
+    if tool_has_side_effect(tool):
+        # Delegated loops inherit the same effect scope even if their custom
+        # function signature does not accept persistence kwargs.
+        ctx = delegation_ctx() or {}
+        begin_external_effect = begin_external_effect or ctx.get("begin_external_effect")
+        finish_external_effect = finish_external_effect or ctx.get("finish_external_effect")
+        turn_id = turn_id or ctx.get("turn_id", "")
+        if not begin_external_effect or not finish_external_effect or not turn_id:
+            raise DurableStateError("side-effecting tool requires a durable intent ledger")
         effect_key = side_effect_key(tool, args, turn_id)
-        if get_external_effect:
-            try:
-                previous = await _maybe_await(get_external_effect(effect_key))
-            except Exception as e:
-                log.warning("Effect lookup failed for %s: %s", tool.name, e)
-                previous = None
-            if previous is not None:
-                # This effect already happened. Re-running the turn must not send
-                # the message, charge the card or restart the service twice.
-                log.info("Skipping repeated side effect: %s", tool.name)
-                return _build_tool_message(str(previous), str(previous), tool_call_id)
+        try:
+            metadata = getattr(tool, "metadata", None) or {}
+            natural_key = metadata.get(IDEMPOTENCY_KEY_METADATA) or getattr(tool, IDEMPOTENCY_KEY_METADATA, None)
+            effect_claim = await _maybe_await(
+                begin_external_effect(
+                    effect_key,
+                    tool.name,
+                    args,
+                    tool_call_id,
+                    callable(natural_key),
+                )
+            )
+        except DurableStateError:
+            raise
+        except Exception as error:
+            raise DurableStateError("effect intent could not be reserved") from error
+        if not isinstance(effect_claim, EffectClaim):
+            raise DurableStateError("invalid effect reservation")
+        if effect_claim.result is not None:
+            raw_content = effect_claim.result
+            content = raw_content
+            if untrusted:
+                content, _ = _handle_injection_in_untrusted(tool, content)
+                content = wrap_untrusted(content, label=f"tool:{tool.name}")
+            return _build_tool_message(content, raw_content, tool_call_id)
+        if not effect_claim.token:
+            raise DurableStateError("effect reservation has no owner token")
+
+    async def dispatch() -> Any:
+        # This runs inside wait_for's task, not before that task is scheduled.
+        check_execution()
+        return await tool.ainvoke(args)
 
     try:
         if hasattr(tool, "ainvoke"):
             result = await asyncio.wait_for(
-                tool.ainvoke(args),
+                dispatch(),
                 timeout=TOOL_TIMEOUT_SECONDS,
             )
         else:
+            check_execution()
             result = tool.invoke(args)
 
         content, raw_content = await _tool_model_output(tool, result)
@@ -447,28 +489,44 @@ async def execute_tool(
             recorded_content = content
             content = wrap_untrusted(content, label=f"tool:{tool.name}")
 
+    except DurableStateError:
+        # A nested failure must stop the parent, not become plausible tool text.
+        raise
     except SubAgentApprovalPause:
         # A delegated sub-agent needs approval — propagate so react_loop pauses
         # the whole turn rather than recording this as a tool error/result.
         raise
-    except TimeoutError:
+    except TimeoutError as error:
+        if effect_claim is not None:
+            raise EffectUncertainError("tool timed out after dispatch; outcome requires review") from error
         content = f"[ERROR] Tool '{tool.name}' timed out after {TOOL_TIMEOUT_SECONDS}s"
         raw_content = content
         recorded_content, is_error = content, True
         log.error("Tool timeout: %s", tool.name)
     except Exception as e:
+        if effect_claim is not None:
+            raise EffectUncertainError("tool raised after dispatch; outcome requires review") from e
         content = error_handler(e)
         raw_content = content
         recorded_content, is_error = content, True
         log.warning("Tool error %s: %s", tool.name, str(e)[:200])
 
-    if effect_key and record_external_effect and not is_error:
-        # Only successful effects are recorded: a failed send did not happen, so a
-        # retry should be allowed to try again.
+    if effect_claim is not None:
+        # A tool can return an error string instead of raising. Do not cache it
+        # as a successful external operation or grant permission to replay it.
+        if recorded_content.lstrip().startswith("[ERROR]"):
+            raise EffectUncertainError("tool returned an error after dispatch; inspect the effect")
         try:
-            await _maybe_await(record_external_effect(effect_key, tool.name, recorded_content))
-        except Exception as e:
-            log.warning("Could not record side effect for %s: %s", tool.name, e)
+            await _maybe_await(
+                finish_external_effect(
+                    effect_key,
+                    effect_claim.token,
+                    tool.name,
+                    recorded_content,
+                )
+            )
+        except Exception as error:
+            raise EffectUncertainError("effect result commit failed; automatic replay forbidden") from error
 
     if cassettes.recording():
         # Record the pre-wrap content: the untrusted framing is re-applied on
@@ -507,7 +565,21 @@ def tool_has_side_effect(tool: BaseTool) -> bool:
     declared = metadata.get(SIDE_EFFECT_METADATA_KEY)
     if declared is None:
         declared = getattr(tool, SIDE_EFFECT_METADATA_KEY, None)
-    return bool(declared)
+    if declared is not None:
+        return bool(declared)
+    if metadata.get("needs_approval") or getattr(tool, "needs_approval", None):
+        return True
+    # Legacy built-ins predate effect metadata. Disabling approval prompts must
+    # not disable durable protection for an expense, send or service mutation.
+    names, actions, read_only = _approval_lists()
+    from kronos.security.mcp_tools import normalized_tool_name
+
+    name = normalized_tool_name(tool.name)
+    if name in names or re.search(r"(?:^|_)api_(post|put|patch|delete)(?:_|$)", name):
+        return True
+    if name.startswith(read_only):
+        return False
+    return name.startswith(actions) or any(marker in name for marker in DEFAULT_APPROVAL_NAME_MARKERS)
 
 
 def tool_delegates(tool: BaseTool) -> bool:
@@ -526,6 +598,21 @@ def tool_runs_in_parallel(tool: BaseTool) -> bool:
     return not tool_has_side_effect(tool) and not tool_delegates(tool)
 
 
+def _tool_has_replay_contract(tool: BaseTool) -> bool:
+    """Only classified tools can restart without a child-level execution journal."""
+    if tool_delegates(tool):
+        return False
+    metadata = getattr(tool, "metadata", None) or {}
+    if metadata.get(SIDE_EFFECT_METADATA_KEY) is not None or getattr(tool, SIDE_EFFECT_METADATA_KEY, None) is not None:
+        return True
+    if tool_has_side_effect(tool):
+        return True
+    from kronos.security.mcp_tools import normalized_tool_name
+
+    _, _, read_only = _approval_lists()
+    return normalized_tool_name(tool.name).startswith(read_only)
+
+
 def side_effect_key(tool: BaseTool, args: dict, turn_id: str = "") -> str:
     """Idempotency key for one side-effecting call.
 
@@ -542,10 +629,11 @@ def side_effect_key(tool: BaseTool, args: dict, turn_id: str = "") -> str:
     if callable(custom):
         try:
             declared = custom(args)
-            if declared:
-                return f"{tool.name}:{declared}"
+            if not declared:
+                raise ValueError("empty idempotency key")
+            return f"{tool.name}:{declared}"
         except Exception as e:
-            log.warning("idempotency_key callable failed for %s: %s", tool.name, e)
+            raise DurableStateError("idempotency key function failed") from e
 
     from kronos.cassettes.store import tool_key
 
@@ -689,7 +777,11 @@ async def react_loop(
     request_tool_approval: ToolApprovalRequestCallback | None = None,
     get_external_effect: EffectGetCallback | None = None,
     record_external_effect: EffectRecordCallback | None = None,
+    begin_external_effect: EffectBeginCallback | None = None,
+    finish_external_effect: EffectFinishCallback | None = None,
     turn_id: str = "",
+    resume_pending_tools: bool = False,
+    recover_tool_result: ToolRecoveryCallback | None = None,
 ) -> AgentResult:
     """Run the ReAct loop: LLM → tool_calls → execute → LLM → ...
 
@@ -700,10 +792,20 @@ async def react_loop(
         system_prompt: Optional system prompt prepended to messages.
         max_turns: Max LLM calls before forced stop.
         error_handler: Callback for tool execution errors.
+        resume_pending_tools: Finish only the journal's incomplete final batch
+            before the next model call, using original call ids and arguments.
+            Caller must own the durable turn and check unresolved intents.
 
     Returns:
         AgentResult with full message history and final text content.
     """
+    ctx = delegation_ctx() or {}
+    begin_external_effect = begin_external_effect or ctx.get("begin_external_effect")
+    finish_external_effect = finish_external_effect or ctx.get("finish_external_effect")
+    needs_tool_approval = needs_tool_approval or ctx.get("needs_tool_approval")
+    request_tool_approval = request_tool_approval or ctx.get("request_tool_approval")
+    turn_id = turn_id or ctx.get("turn_id", "")
+
     # Build tool lookup
     tool_map: dict[str, BaseTool] = {t.name: t for t in tools}
 
@@ -718,6 +820,14 @@ async def react_loop(
     if system_prompt:
         call_messages = [SystemMessage(content=system_prompt)] + call_messages
 
+    pending_calls = unanswered_tool_calls(messages)
+    if pending_calls and not resume_pending_tools:
+        raise DurableStateError("unfinished tool batch requires explicit durable resume")
+    if pending_calls and not (turn_id and on_message_delta and get_cached_tool_result and save_tool_result):
+        raise DurableStateError("tool batch resume requires durable journal and cache callbacks")
+    if pending_calls and max_turns < 1:
+        raise DurableStateError("tool batch resume requires a positive model call budget")
+    pending_response = AIMessage(content="", tool_calls=pending_calls) if pending_calls else None
     total_tool_calls = 0
 
     def emit_tool_event(event: str, payload: dict[str, Any]) -> None:
@@ -739,7 +849,7 @@ async def react_loop(
         try:
             await maybe_await(on_message_delta(delta))
         except Exception as e:
-            log.warning("Message journal callback failed (non-fatal): %s", e)
+            raise DurableStateError("message journal write failed") from e
 
     async def read_cached_tool_result(tool_call_id: str) -> str | None:
         if not get_cached_tool_result or not tool_call_id:
@@ -748,8 +858,7 @@ async def react_loop(
             cached = await maybe_await(get_cached_tool_result(tool_call_id))
             return str(cached) if cached is not None else None
         except Exception as e:
-            log.warning("Tool result cache read failed (non-fatal): %s", e)
-            return None
+            raise DurableStateError("tool result cache read failed") from e
 
     async def write_tool_result(tool_call_id: str, content: str) -> None:
         if not save_tool_result or not tool_call_id:
@@ -757,7 +866,7 @@ async def react_loop(
         try:
             await maybe_await(save_tool_result(tool_call_id, content))
         except Exception as e:
-            log.warning("Tool result cache write failed (non-fatal): %s", e)
+            raise DurableStateError("tool result cache write failed") from e
 
     async def requires_approval(tool: BaseTool, tool_call: dict) -> bool:
         if not settings.tool_approvals_enabled:
@@ -786,26 +895,48 @@ async def react_loop(
     loop_detector = LoopDetector()
     last_nudge_level = LoopLevel.OK
 
-    for turn in range(max_turns):
-        # Call LLM
-        try:
-            response: AIMessage = await bound_model.ainvoke(call_messages)
-        except Exception as e:
-            log.error("LLM call failed (turn %d): %s", turn, e)
-            error_msg = AIMessage(content="Произошла ошибка при обработке. Попробуй ещё раз.")
-            messages.append(error_msg)
-            await emit_message_delta([error_msg])
-            return AgentResult(
-                messages=messages,
-                content=error_msg.content,
-                tool_calls_count=total_tool_calls,
-            )
+    # Restoring a journalled batch is not another model call. It must not
+    # consume the only model turn available to summarize the recovered result.
+    for turn in range(max_turns + int(bool(pending_response) and max_turns > 0)):
+        check_execution()
+        replaying_batch = pending_response is not None
+        if pending_response is not None:
+            response = pending_response
+            pending_response = None
+        else:
+            try:
+                response: AIMessage = await bound_model.ainvoke(call_messages)
+            except DurableStateError:
+                raise
+            except ModelBudgetError as error:
+                error_msg = AIMessage(content=f"Вызов модели остановлен бюджетным контролем: {error}")
+                messages.append(error_msg)
+                await emit_message_delta([error_msg])
+                return AgentResult(
+                    messages=messages,
+                    content=error_msg.content,
+                    tool_calls_count=total_tool_calls,
+                    failure_reason="budget_blocked",
+                )
+            except Exception as e:
+                log.error("LLM call failed (turn %d): %s", turn, e)
+                error_msg = AIMessage(content="Произошла ошибка при обработке. Попробуй ещё раз.")
+                messages.append(error_msg)
+                await emit_message_delta([error_msg])
+                return AgentResult(
+                    messages=messages,
+                    content=error_msg.content,
+                    tool_calls_count=total_tool_calls,
+                    failure_reason="model_error",
+                )
 
-        messages.append(response)
-        call_messages.append(response)
-        await emit_message_delta([response])
+            unanswered_tool_calls([*call_messages, response])
+            messages.append(response)
+            call_messages.append(response)
+            await emit_message_delta([response])
 
         # No tool calls → done
+        check_execution()
         if not getattr(response, "tool_calls", None):
             content = response.content if isinstance(response.content, str) else str(response.content)
             return AgentResult(
@@ -817,20 +948,25 @@ async def react_loop(
         # Run the independent calls of this message together, then walk the
         # calls in order as before. The sequential pass below is unchanged; it
         # just finds some results already computed.
-        precomputed = await _run_parallel_calls(
-            response.tool_calls,
-            tool_map=tool_map,
-            error_handler=error_handler,
-            requires_approval=requires_approval,
-            read_cached_tool_result=read_cached_tool_result,
-            get_external_effect=get_external_effect,
-            record_external_effect=record_external_effect,
-            turn_id=turn_id,
+        precomputed = (
+            {}
+            if replaying_batch
+            else await _run_parallel_calls(
+                response.tool_calls,
+                tool_map=tool_map,
+                error_handler=error_handler,
+                requires_approval=requires_approval,
+                read_cached_tool_result=read_cached_tool_result,
+                get_external_effect=get_external_effect,
+                record_external_effect=record_external_effect,
+                turn_id=turn_id,
+            )
         )
 
         # Execute tool calls
         tool_messages = []
         for tc in response.tool_calls:
+            check_execution()
             total_tool_calls += 1
             tool_name = tc.get("name", "")
             tool_call_id = tc.get("id", "")
@@ -846,7 +982,29 @@ async def react_loop(
             )
             tool_started = time.perf_counter()
 
-            if tool is None:
+            cached_content = await read_cached_tool_result(tool_call_id)
+            if cached_content is not None and tool is None:
+                cached_content = wrap_untrusted(cached_content, label=f"tool:{tool_name}")
+            if cached_content is None and replaying_batch:
+                try:
+                    recovered = await maybe_await(recover_tool_result(tc)) if recover_tool_result else None
+                    if recovered is None and tool is not None and tool_has_side_effect(tool) and get_external_effect:
+                        key = side_effect_key(tool, tc.get("args", {}), turn_id)
+                        recovered = await maybe_await(get_external_effect(key))
+                except DurableStateError:
+                    raise
+                except Exception as error:
+                    raise DurableStateError("effect result recovery failed") from error
+                if recovered is not None:
+                    cached_content = str(recovered)
+                    if tool is None or tool_output_is_untrusted(tool):
+                        if tool is not None:
+                            cached_content, _ = _handle_injection_in_untrusted(tool, cached_content)
+                        cached_content = wrap_untrusted(cached_content, label=f"tool:{tool_name}")
+                    await write_tool_result(tool_call_id, cached_content)
+            if replaying_batch and cached_content is None and tool is not None and not _tool_has_replay_contract(tool):
+                raise EffectUncertainError("tool lacks a safe replay contract; child execution review required")
+            if tool is None and cached_content is None:
                 log.warning("Unknown tool called: '%s'", tool_name)
                 tm = ToolMessage(
                     content=f"[ERROR] Unknown tool: '{tool_name}'. Available: {list(tool_map.keys())}",
@@ -871,7 +1029,6 @@ async def react_loop(
                     },
                 )
             else:
-                cached_content = await read_cached_tool_result(tool_call_id)
                 if cached_content is not None:
                     tm = ToolMessage(content=cached_content, tool_call_id=tool_call_id)
                     log.info("Tool result cache hit: %s (%s)", tool_name, tool_call_id)
@@ -927,10 +1084,13 @@ async def react_loop(
                         # Publish approval hooks + this call's context so a
                         # delegation tool can hand the same approval channel to
                         # its sub-agent (it reads this synchronously at entry).
-                        _delegation_ctx.set(
+                        delegation_token = _delegation_ctx.set(
                             {
                                 "request_tool_approval": request_tool_approval,
                                 "needs_tool_approval": needs_tool_approval,
+                                "begin_external_effect": begin_external_effect,
+                                "finish_external_effect": finish_external_effect,
+                                "turn_id": turn_id,
                                 "tool_name": tool_name,
                                 "tool_call_id": tool_call_id,
                                 "request": (tc.get("args") or {}).get("request", ""),
@@ -947,6 +1107,8 @@ async def react_loop(
                                     error_handler,
                                     get_external_effect=get_external_effect,
                                     record_external_effect=record_external_effect,
+                                    begin_external_effect=begin_external_effect,
+                                    finish_external_effect=finish_external_effect,
                                     turn_id=turn_id,
                                 )
                         except SubAgentApprovalPause as pause:
@@ -985,6 +1147,8 @@ async def react_loop(
                                 approval_id=pause.approval_id,
                                 approval_tool_name=pause.tool_name,
                             )
+                        finally:
+                            _delegation_ctx.reset(delegation_token)
                         await write_tool_result(tool_call_id, str(tm.content))
                         log.info("Tool result: %s → %s", tool_name, str(tm.content)[:200])
                 raw_content = tool_message_raw_content(tm)
@@ -1013,6 +1177,7 @@ async def react_loop(
         call_messages.extend(tool_messages)
         await emit_message_delta(tool_messages)
 
+        check_execution()
         # Loop backstop: nudge on WARNING/CRITICAL (once per escalation) so the
         # next turn changes course; abort on CIRCUIT_BREAKER with a partial
         # result instead of burning turns/budget on a stuck loop.
@@ -1026,6 +1191,7 @@ async def react_loop(
                 messages=messages,
                 content=final.content,
                 tool_calls_count=total_tool_calls,
+                failure_reason="loop_circuit_breaker",
             )
         if level in (LoopLevel.WARNING, LoopLevel.CRITICAL) and level != last_nudge_level:
             nudge = SystemMessage(content=get_nudge_message(level, desc))
@@ -1044,6 +1210,7 @@ async def react_loop(
         messages=messages,
         content=final.content,
         tool_calls_count=total_tool_calls,
+        failure_reason="iteration_limit",
     )
 
 

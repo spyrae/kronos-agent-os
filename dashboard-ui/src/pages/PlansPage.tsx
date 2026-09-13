@@ -16,6 +16,10 @@ interface Step {
   title: string;
   prompt: string;
   state: string;
+  turn_id: string;
+  last_turn_id: string;
+  repark_requested: boolean;
+  stop_reconciled: boolean;
   depends_on: number[];
   waiting_for: string;
   wake_at: number;
@@ -31,6 +35,7 @@ interface Plan {
   goal: string;
   state: string;
   summary: string;
+  delivery: { summary: string; pending: number; delivered: number; needs_review: number };
   created_at: number;
   updated_at: number;
   expires_at: number;
@@ -38,6 +43,9 @@ interface Plan {
   done_count: number;
   failed_count: number;
   waiting_count: number;
+  stop_reason: string;
+  stop_pending_count: number;
+  review_count: number;
   steps?: Step[];
 }
 
@@ -49,6 +57,18 @@ const STATE_COLOR: Record<string, string> = {
   pending: '#94a3b8',
   waiting: '#f59e0b',
   running: '#22d3ee',
+  interrupted: '#f59e0b',
+  awaiting_approval: '#f59e0b',
+  needs_review: '#ef4444',
+};
+
+const DELIVERY_LABEL: Record<string, string> = {
+  pending: 'Summary saved · waiting for Telegram delivery',
+  delivered: 'Summary accepted by Telegram (not a read receipt)',
+  needs_review: 'Delivery requires review · no confirmed receipt',
+  legacy_unknown: 'Legacy summary · delivery was not tracked',
+  not_requested: 'No notification destination',
+  not_generated: 'Summary not generated yet',
 };
 
 const card: React.CSSProperties = {
@@ -83,12 +103,13 @@ export default function PlansPage() {
 
   useEffect(() => { load(); }, [showAll]);
 
-  const act = async (fn: () => Promise<unknown>) => {
+  const act = async (fn: () => Promise<unknown>, all = showAll) => {
     setBusy(true);
     setError('');
     try {
       await fn();
-      await load();
+      if (all) setShowAll(true);
+      await load(all);
     } catch (e) {
       setError(e instanceof Error ? e.message.replace(/^\d+:\s*/, '') : String(e));
     } finally {
@@ -139,6 +160,25 @@ export default function PlansPage() {
                   {' · touched '}{when(plan.updated_at)}
                   {plan.state === 'active' && plan.expires_at ? ` · expires ${when(plan.expires_at)}` : ''}
                 </div>
+                {plan.stop_reason && (
+                  <div style={{ marginTop: '0.5rem', color: '#f59e0b', fontSize: '0.78rem' }}>
+                    {plan.stop_pending_count > 0
+                      ? `Stop requested · ${plan.stop_pending_count} step(s) awaiting safe cleanup.`
+                      : 'Execution stopped.'}
+                    {' Already dispatched operations are not rolled back.'}
+                    {plan.review_count > 0 && ` ${plan.review_count} step(s) require review.`}
+                    <button style={{ ...ghost, marginLeft: '0.5rem' }} onClick={() => load()}>
+                      Refresh status
+                    </button>
+                  </div>
+                )}
+                {plan.delivery && (plan.state !== 'active' || plan.delivery.pending > 0 || plan.delivery.needs_review > 0) && (
+                  <div style={{ color: plan.delivery.needs_review ? '#fca5a5' : '#94a3b8', fontSize: '0.75rem', marginTop: '0.4rem' }}>
+                    {DELIVERY_LABEL[plan.delivery.summary] || 'Delivery status unavailable'}
+                    {plan.delivery.pending > 0 && ` · ${plan.delivery.pending} notification(s) queued`}
+                    {plan.delivery.needs_review > 0 && ` · ${plan.delivery.needs_review} notification(s) need review`}
+                  </div>
+                )}
                 {plan.summary && (
                   <div style={{ marginTop: '0.6rem', fontSize: '0.82rem', color: '#bbb', whiteSpace: 'pre-wrap' }}>
                     {plan.summary}
@@ -149,7 +189,7 @@ export default function PlansPage() {
                 <button style={ghost} onClick={() => setOpen(open === plan.id ? null : plan.id)}>
                   {open === plan.id ? 'Hide steps' : 'Steps'}
                 </button>
-                {plan.waiting_count > 0 && (
+                {plan.state === 'active' && plan.waiting_count > 0 && (
                   <button
                     style={{ ...ghost, color: '#f59e0b' }}
                     disabled={busy}
@@ -160,7 +200,7 @@ export default function PlansPage() {
                   <button
                     style={{ ...ghost, color: '#ef4444' }}
                     disabled={busy}
-                    onClick={() => { if (confirm(`Stop plan #${plan.id}?`)) act(() => api(`/api/plans/${plan.id}`, { method: 'DELETE' })); }}
+                    onClick={() => { if (confirm(`Stop plan #${plan.id}? In-flight operations may finish and are not rolled back.`)) act(() => api(`/api/plans/${plan.id}`, { method: 'DELETE' }), true); }}
                   >Stop</button>
                 )}
               </div>
@@ -194,7 +234,31 @@ export default function PlansPage() {
                         → {step.result}
                       </div>
                     )}
-                    {step.state === 'waiting' && (
+                    {step.repark_requested && (
+                      <div style={{ color: '#f59e0b', fontSize: '0.72rem' }}>
+                        Will wait after the current turn finishes.
+                      </div>
+                    )}
+                    {(step.turn_id || step.last_turn_id) && (
+                      <div style={{ color: '#777', fontSize: '0.72rem', overflowWrap: 'anywhere' }}>
+                        {step.turn_id ? 'Turn' : 'Last turn'}: {step.turn_id || step.last_turn_id}
+                      </div>
+                    )}
+                    {step.state === 'interrupted' && step.turn_id && plan.state === 'active' && (
+                      <button
+                        style={{ ...ghost, marginTop: '0.35rem', fontSize: '0.7rem' }}
+                        disabled={busy}
+                        onClick={() => act(async () => {
+                          const result = await api<{ status: string }>(
+                            `/api/turns/${encodeURIComponent(step.turn_id)}/resume`, { method: 'POST' },
+                          );
+                          if (!['completed', 'waiting_approval'].includes(result.status)) {
+                            throw new Error(`Turn did not complete: ${result.status}`);
+                          }
+                        })}
+                      >Continue the same turn</button>
+                    )}
+                    {step.state === 'waiting' && !step.turn_id && plan.state === 'active' && (
                       <button
                         style={{ ...ghost, marginTop: '0.35rem', fontSize: '0.7rem' }}
                         disabled={busy}

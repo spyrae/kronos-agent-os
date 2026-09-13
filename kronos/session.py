@@ -4,6 +4,7 @@ Replaces LangGraph's AsyncSqliteSaver checkpointer.
 Stores messages as JSON in SQLite, keyed by thread_id.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -11,6 +12,7 @@ import sqlite3
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 
 import aiosqlite
 from langchain_core.messages import (
@@ -20,6 +22,17 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+
+from kronos.effect_state import DurableStateError, EffectClaim, EffectUncertainError
+from kronos.migrations.v001_turn_outcome import migrate as migrate_turn_outcome
+from kronos.migrations.v003_effect_intents import migrate as migrate_effect_intents
+from kronos.migrations.v004_effect_protocol import migrate as migrate_effect_protocol
+from kronos.migrations.v005_plan_execution import migrate_turns as migrate_caller_key
+from kronos.migrations.v008_turn_delivery import migrate as migrate_delivery
+from kronos.outcomes import InvocationOutcome, InvocationStatus
+from kronos.tool_history import trim_completed_history, unanswered_tool_calls
+from kronos.turn_delivery import RecoveryDestination, queue_approval, queue_result, suppress_approval
+from kronos.turn_ownership import TurnBusyError, TurnOwnership, own_conversation
 
 log = logging.getLogger("kronos.session")
 
@@ -109,6 +122,28 @@ def _deserialize_message(data: dict) -> BaseMessage:
         return HumanMessage(content=content)
 
 
+def _deserialize_journal_message(raw: str) -> BaseMessage:
+    """Decode execution evidence strictly; never silently skip a corrupt delta."""
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict) or data.get("type") not in {
+            "AIMessage",
+            "HumanMessage",
+            "SystemMessage",
+            "ToolMessage",
+        }:
+            raise ValueError("invalid journal message type")
+        if not isinstance(data.get("content"), (str, list)):
+            raise ValueError("invalid journal content")
+        if data["type"] == "AIMessage" and not isinstance(data.get("tool_calls", []), list):
+            raise ValueError("invalid journal tool calls")
+        if data["type"] == "ToolMessage" and not (isinstance(data.get("tool_call_id"), str) and data["tool_call_id"]):
+            raise ValueError("invalid journal tool result id")
+        return _deserialize_message(data)
+    except (ValueError, KeyError, TypeError) as error:
+        raise DurableStateError("invalid durable journal message; review required") from error
+
+
 class SessionStore:
     """Async SQLite-based session store for conversation history."""
 
@@ -121,8 +156,22 @@ class SessionStore:
     async def _open_db(self):
         """Open a connection with WAL mode and generous busy timeout."""
         async with aiosqlite.connect(self.db_path, timeout=30) as db:
-            await db.execute("PRAGMA journal_mode=WAL")
             await db.execute("PRAGMA busy_timeout=30000")
+            deadline = asyncio.get_running_loop().time() + 30
+            while True:
+                try:
+                    async with db.execute("PRAGMA journal_mode") as cursor:
+                        mode = await cursor.fetchone()
+                    if mode[0].lower() != "wal":
+                        await db.execute("PRAGMA journal_mode=WAL")
+                    break
+                except sqlite3.OperationalError as error:
+                    # Concurrent first connections can both try the WAL mode
+                    # transition, which may fail immediately despite timeout.
+                    code = getattr(error, "sqlite_errorcode", 0) & 0xFF
+                    if code != sqlite3.SQLITE_BUSY or asyncio.get_running_loop().time() >= deadline:
+                        raise
+                    await asyncio.sleep(0.05)
             await db.execute("PRAGMA wal_autocheckpoint=100")
             yield db
 
@@ -239,23 +288,56 @@ class SessionStore:
                     ON external_effects(turn_id, created_at)
             """)
             await db.commit()
+            await migrate_turn_outcome(db)
+            await migrate_effect_intents(db)
+            await migrate_effect_protocol(db)
+            await migrate_caller_key(db)
+            await migrate_delivery(db)
             self._initialized = True
 
-    async def begin_turn(self, thread_id: str, input_message: str) -> str:
-        """Open a durable turn record and return its id."""
+    async def begin_turn(
+        self,
+        thread_id: str,
+        input_message: str,
+        *,
+        caller_key: str = "",
+        recovery_destination: RecoveryDestination | None = None,
+    ) -> str:
+        """Open a turn, recording the caller's immutable correlation atomically."""
+        if recovery_destination is not None:
+            recovery_destination.assert_thread(thread_id)
         turn_id = str(uuid.uuid4())
         async with self._open_db() as db:
             await self._ensure_table(db)
             await db.execute(
                 """
                 INSERT INTO active_turns
-                    (turn_id, thread_id, status, input_message)
-                VALUES (?, ?, 'running', ?)
+                    (turn_id, thread_id, status, input_message, effect_protocol, caller_key, recovery_destination)
+                VALUES (?, ?, 'running', ?, 1, ?, ?)
                 """,
-                (turn_id, thread_id, input_message),
+                (
+                    turn_id,
+                    thread_id,
+                    input_message,
+                    caller_key,
+                    recovery_destination.encode() if recovery_destination else "",
+                ),
             )
             await db.commit()
         return turn_id
+
+    async def get_turn_for_caller(self, caller_key: str) -> dict | None:
+        """Read identity only, so corrupt journal content cannot hide a claim."""
+        if not caller_key:
+            return None
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                "SELECT turn_id, thread_id, status, caller_key FROM active_turns WHERE caller_key = ?",
+                (caller_key,),
+            )
+            row = await cursor.fetchone()
+        return dict(zip(("turn_id", "thread_id", "status", "caller_key"), row, strict=True)) if row else None
 
     async def append_turn_messages(
         self,
@@ -308,6 +390,23 @@ class SessionStore:
             row = await cursor.fetchone()
         return str(row[0]) if row else None
 
+    async def get_recorded_call_effect(self, turn_id: str, tool_call: dict) -> str | None:
+        """Read a proven effect result using the frozen call identity, not a new key."""
+        args_json = json.dumps(tool_call["args"], sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                """SELECT e.result FROM effect_intents i
+                   JOIN external_effects e ON e.idempotency_key = i.idempotency_key
+                   WHERE i.turn_id = ? AND i.tool_call_id = ? AND i.tool = ?
+                     AND i.args_json = ? AND i.status = 'recorded'""",
+                (turn_id, tool_call["id"], tool_call["name"], args_json),
+            )
+            rows = await cursor.fetchall()
+        if len(rows) > 1:
+            raise EffectUncertainError("multiple effects for one tool call; reconcile before continuing")
+        return str(rows[0][0]) if rows else None
+
     async def save_tool_result(
         self,
         *,
@@ -356,13 +455,113 @@ class SessionStore:
         keys = ("turn_id", "thread_id", "status", "input_message", "attempts", "started_at", "completed_at", "error")
         return [dict(zip(keys, row, strict=False)) for row in rows]
 
+    async def recovery_destination(self, turn_id: str) -> RecoveryDestination | None:
+        """Read verified provenance; missing legacy routes never become guesses."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            async with db.execute(
+                "SELECT thread_id, recovery_destination FROM active_turns WHERE turn_id = ?", (turn_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+        if not row or not row[1]:
+            return None
+        destination = RecoveryDestination.decode(row[1])
+        destination.assert_thread(row[0])
+        return destination
+
+    async def delivery_status(self, turn_id: str) -> dict:
+        """Separate execution from transport acceptance, without exposing payloads."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute("BEGIN")
+            async with db.execute(
+                "SELECT delivery_requested, delivery_issue FROM active_turns WHERE turn_id = ?", (turn_id,)
+            ) as cursor:
+                turn = await cursor.fetchone()
+            async with db.execute(
+                "SELECT event_key, state, obsolete FROM delivery_outbox WHERE stream_key = ?",
+                (f"turn:{turn_id}",),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        counts = {key: 0 for key in ("pending", "delivered", "needs_review", "obsolete")}
+        state = "awaiting_result" if turn and turn[0] else "not_requested"
+        for key, delivery, obsolete in rows:
+            counts["obsolete" if obsolete else delivery] += 1
+            if key == f"turn:{turn_id}:result" and not obsolete:
+                state = delivery
+        return {"requested": bool(turn and turn[0]), "state": (turn[1] if turn else "turn_missing") or state, **counts}
+
+    async def deliver_pending(self) -> int:
+        """Drain this producer DB independently of model execution and webhooks."""
+        from kronos.db import SafeDB
+        from kronos.delivery import drain
+        from kronos.telegram_delivery import ready_sender, send_chunk
+
+        await self.expire_recovery_approvals()
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+        queue = SafeDB(Path(self.db_path))
+        try:
+            return await drain(queue, sender_id=ready_sender(), send=send_chunk)
+        finally:
+            queue.close()
+
+    async def expire_recovery_approvals(self, limit: int = 4) -> int:
+        """Reconcile expired recovery gates only after excluding a live owner."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            async with db.execute(
+                """SELECT p.approval_id, p.turn_id, p.thread_id, p.requested_at
+                   FROM pending_approvals p JOIN active_turns t ON t.turn_id = p.turn_id
+                   WHERE p.status = 'pending' AND t.delivery_requested = 1
+                   ORDER BY p.requested_at LIMIT ?""",
+                (limit,),
+            ) as cursor:
+                candidates = await cursor.fetchall()
+        expired = 0
+        for approval_id, turn_id, thread_id, requested in candidates:
+            if not _approval_is_stale(requested):
+                continue
+            try:
+                async with own_conversation(self.db_path, thread_id, wait=False):
+                    async with self._open_db() as db:
+                        await db.execute("BEGIN IMMEDIATE")
+                        async with db.execute(
+                            "SELECT requested_at FROM pending_approvals WHERE approval_id = ? AND status = 'pending'",
+                            (approval_id,),
+                        ) as cursor:
+                            row = await cursor.fetchone()
+                        if row and _approval_is_stale(row[0]):
+                            await self._expire_pending_approval(db, turn_id, approval_id)
+                            expired += 1
+                        await db.commit()
+            except TurnBusyError:
+                continue
+        return expired
+
+    @staticmethod
+    async def _expire_pending_approval(db, turn_id: str, approval_id: str) -> None:
+        await db.execute(
+            "UPDATE pending_approvals SET status = 'expired' WHERE approval_id = ? AND status = 'pending'",
+            (approval_id,),
+        )
+        await suppress_approval(db, turn_id, approval_id)
+        cursor = await db.execute(
+            """UPDATE active_turns SET status = 'failed', error = 'approval_expired', completed_at = CURRENT_TIMESTAMP
+               WHERE turn_id = ? AND status IN ('running', 'resuming', 'waiting_approval')""",
+            (turn_id,),
+        )
+        if cursor.rowcount:
+            await queue_result(db, turn_id, None, failed=True)
+
     async def get_turn_detail(self, turn_id: str) -> dict | None:
         """One turn with its journal, memoized tool results and effects."""
         async with self._open_db() as db:
             await self._ensure_table(db)
             cursor = await db.execute(
                 """
-                SELECT turn_id, thread_id, status, input_message, attempts, started_at, completed_at, error
+                SELECT turn_id, thread_id, status, input_message, attempts, started_at, completed_at, error, effect_protocol, caller_key,
+                       final_content, delivery_requested, delivery_issue
                 FROM active_turns WHERE turn_id = ?
                 """,
                 (turn_id,),
@@ -379,6 +578,11 @@ class SessionStore:
                 "started_at",
                 "completed_at",
                 "error",
+                "effect_protocol",
+                "caller_key",
+                "final_content",
+                "delivery_requested",
+                "delivery_issue",
             )
             turn = dict(zip(keys, row, strict=False))
 
@@ -459,6 +663,8 @@ class SessionStore:
     async def prune_turn_history(self, *, older_than_days: int = 30) -> dict:
         """Delete finished turns and whatever still hangs off them.
 
+        Caller-owned identities are retained: deleting one could turn a lost
+        reverse link into false proof that its external work never started.
         Only finished turns: a running or resuming turn is live state, and an
         unfinished turn older than the window is a bug to look at, not garbage to
         sweep.
@@ -475,8 +681,11 @@ class SessionStore:
             cursor = await db.execute(
                 """
                 SELECT turn_id FROM active_turns
-                WHERE status NOT IN ('running', 'resuming')
+                WHERE status NOT IN ('running', 'resuming', 'waiting_approval')
+                  AND caller_key = '' AND delivery_requested = 0
                   AND COALESCE(completed_at, started_at) < datetime('now', ?)
+                  AND NOT EXISTS (SELECT 1 FROM effect_intents i
+                      WHERE i.turn_id = active_turns.turn_id AND i.status = 'pending')
                 """,
                 (cutoff,),
             )
@@ -488,6 +697,7 @@ class SessionStore:
             journal = await db.execute(f"DELETE FROM turn_journal WHERE turn_id IN ({placeholders})", turn_ids)
             results = await db.execute(f"DELETE FROM tool_results WHERE turn_id IN ({placeholders})", turn_ids)
             effects = await db.execute(f"DELETE FROM external_effects WHERE turn_id IN ({placeholders})", turn_ids)
+            await db.execute(f"DELETE FROM effect_intents WHERE turn_id IN ({placeholders})", turn_ids)
             turns = await db.execute(f"DELETE FROM active_turns WHERE turn_id IN ({placeholders})", turn_ids)
             await db.commit()
 
@@ -500,108 +710,218 @@ class SessionStore:
         log.info("Turn retention: pruned %s", pruned)
         return pruned
 
-    async def claim_turns_for_resume(self, *, max_attempts: int = 2) -> list[dict]:
-        """Claim interrupted turns for re-execution, newest-first per thread.
+    async def resumable_turns(self) -> list[dict]:
+        """List unowned candidates; plan recovery must reconcile its claim first."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                """SELECT turn_id, thread_id FROM active_turns
+                   WHERE status IN ('running', 'resuming') AND caller_key = ''
+                     AND thread_id NOT LIKE 'plan:%' ORDER BY rowid ASC"""
+            )
+            return [{"turn_id": row[0], "thread_id": row[1]} for row in await cursor.fetchall()]
 
-        Returns rows the caller should finish. Three outcomes are decided here,
-        under one transaction, so two processes cannot both claim a turn:
+    async def claim_turn_for_resume(
+        self, turn_id: str, *, ownership: TurnOwnership, max_attempts: int = 2, notify: bool = False
+    ) -> dict | None:
+        """Claim one abandoned turn while its conversation stays exclusively held.
 
-        * a turn whose thread already saw a newer turn is marked ``superseded`` —
-          the user asked again, and answering the stale question would be noise;
-        * a turn that has already burned its attempts is failed, so a crash loop
-          cannot resurrect itself forever;
-        * anything else flips to ``resuming`` and is handed back.
+        Both running and resuming rows can be left by a crash. The kernel lock,
+        not a timestamp or status flag, proves no cooperating executor is live.
+        Caller must keep ownership through the entire continuation.
         """
-        claimed: list[dict] = []
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be positive")
+        claimed = None
         async with self._open_db() as db:
             await self._ensure_table(db)
             await db.execute("BEGIN IMMEDIATE")
             try:
                 cursor = await db.execute(
-                    """
-                    SELECT turn_id, thread_id, input_message, attempts, rowid
-                    FROM active_turns
-                    WHERE status = 'running'
-                    ORDER BY rowid ASC
-                    """
+                    """SELECT thread_id, input_message, attempts, rowid
+                       FROM active_turns WHERE turn_id = ? AND status IN ('running', 'resuming')""",
+                    (turn_id,),
                 )
-                rows = await cursor.fetchall()
-
-                for turn_id, thread_id, input_message, attempts, row_id in rows:
-                    # Ordering by rowid, not started_at: CURRENT_TIMESTAMP has
-                    # second resolution, so two turns in the same second would
-                    # both look "not newer" and a stale one would be resumed.
-                    newer = await db.execute(
-                        """
-                        SELECT 1 FROM active_turns
-                        WHERE thread_id = ? AND rowid > ?
-                        LIMIT 1
-                        """,
-                        (thread_id, row_id),
+                row = await cursor.fetchone()
+                if not row:
+                    await db.rollback()
+                    return None
+                thread_id, input_message, attempts, row_id = row
+                ownership.assert_held(self.db_path, thread_id)
+                cursor = await db.execute(
+                    "SELECT 1 FROM pending_approvals WHERE turn_id = ? AND status = 'pending' LIMIT 1",
+                    (turn_id,),
+                )
+                if await cursor.fetchone():
+                    await db.rollback()
+                    return None
+                if notify:
+                    await db.execute("UPDATE active_turns SET delivery_requested = 1 WHERE turn_id = ?", (turn_id,))
+                newer = await db.execute(
+                    "SELECT 1 FROM active_turns WHERE thread_id = ? AND rowid > ? LIMIT 1",
+                    (thread_id, row_id),
+                )
+                if await newer.fetchone():
+                    await db.execute(
+                        """UPDATE active_turns SET status = 'superseded', completed_at = CURRENT_TIMESTAMP,
+                               error = 'superseded by a newer turn in this thread' WHERE turn_id = ?""",
+                        (turn_id,),
                     )
-                    if await newer.fetchone():
-                        await db.execute(
-                            """
-                            UPDATE active_turns
-                            SET status = 'superseded', completed_at = CURRENT_TIMESTAMP,
-                                error = 'superseded by a newer turn in this thread'
-                            WHERE turn_id = ?
-                            """,
-                            (turn_id,),
-                        )
-                        continue
-
-                    if int(attempts or 0) >= max_attempts:
-                        await db.execute(
-                            """
-                            UPDATE active_turns
-                            SET status = 'failed', completed_at = CURRENT_TIMESTAMP,
-                                error = 'gave up after ' || ? || ' resume attempt(s)'
-                            WHERE turn_id = ?
-                            """,
-                            (int(attempts or 0), turn_id),
-                        )
-                        continue
-
+                elif int(attempts or 0) >= max_attempts:
+                    await db.execute(
+                        """UPDATE active_turns SET status = 'failed', completed_at = CURRENT_TIMESTAMP,
+                               error = 'gave up after ' || ? || ' resume attempt(s)' WHERE turn_id = ?""",
+                        (int(attempts or 0), turn_id),
+                    )
+                else:
                     await db.execute(
                         "UPDATE active_turns SET status = 'resuming', attempts = attempts + 1 WHERE turn_id = ?",
                         (turn_id,),
                     )
-                    claimed.append(
-                        {
-                            "turn_id": str(turn_id),
-                            "thread_id": str(thread_id),
-                            "input_message": str(input_message or ""),
-                            "attempts": int(attempts or 0) + 1,
-                        }
-                    )
+                    claimed = {
+                        "turn_id": turn_id,
+                        "thread_id": thread_id,
+                        "input_message": str(input_message or ""),
+                        "attempts": int(attempts or 0) + 1,
+                    }
+                if claimed is None:
+                    await queue_result(db, turn_id, None, failed=True)
                 await db.commit()
-            except Exception:
+            except BaseException:
+                await db.rollback()
+                raise
+        if claimed:
+            self._record_durable_metric("durable_turns_resumed", 1)
+        return claimed
+
+    async def begin_external_effect(
+        self,
+        *,
+        key: str,
+        turn_id: str,
+        tool: str,
+        args: dict | None = None,
+        tool_call_id: str = "",
+        dedupe_by_key: bool = False,
+    ) -> EffectClaim:
+        """Claim an effect before dispatch, or reuse an already recorded result.
+
+        Pending intents never expire into permission to retry. Even different
+        arguments must not bypass an unresolved effect in the same turn.
+        """
+        if not key or not turn_id or not tool:
+            raise DurableStateError("effect intent requires key, turn and tool")
+        token = str(uuid.uuid4())
+        args_json = json.dumps(args or {}, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        fingerprint = hashlib.sha256(args_json.encode()).hexdigest()
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    """SELECT e.result, i.tool_call_id, i.dedupe_by_key FROM external_effects e
+                       LEFT JOIN effect_intents i ON i.idempotency_key = e.idempotency_key
+                       WHERE e.idempotency_key = ?""",
+                    (key,),
+                )
+                recorded = await cursor.fetchone()
+                if recorded:
+                    # Different model call ids may mean two intended identical
+                    # purchases, not a retry. Never silently count them as one.
+                    if not recorded[2] and recorded[1] and tool_call_id and recorded[1] != tool_call_id:
+                        raise EffectUncertainError("identical operation under a new call id; intent review required")
+                    await db.commit()
+                    return EffectClaim(result=str(recorded[0]))
+                cursor = await db.execute(
+                    "SELECT status, effect_protocol FROM active_turns WHERE turn_id = ?", (turn_id,)
+                )
+                turn = await cursor.fetchone()
+                if not turn or turn[0] not in {"running", "resuming"}:
+                    raise DurableStateError("external effect requires an active durable turn")
+                if turn[1] != 1:
+                    raise EffectUncertainError("legacy turn lacks intent-protocol proof; reconcile before dispatch")
+                cursor = await db.execute(
+                    """SELECT 1 FROM effect_intents
+                       WHERE idempotency_key = ? OR (status = 'pending'
+                           AND (turn_id = ? OR (tool = ? AND args_fingerprint = ?))) LIMIT 1""",
+                    (key, turn_id, tool, fingerprint),
+                )
+                if await cursor.fetchone():
+                    raise EffectUncertainError("unresolved external effect; inspect before resuming")
+                await db.execute(
+                    """INSERT INTO effect_intents
+                           (idempotency_key, turn_id, tool, tool_call_id, dedupe_by_key, args_json, args_fingerprint, claim_token, status)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
+                    (key, turn_id, tool, tool_call_id, int(dedupe_by_key), args_json, fingerprint, token),
+                )
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
+        return EffectClaim(token=token)
+
+    async def finish_external_effect(
+        self,
+        *,
+        key: str,
+        token: str,
+        turn_id: str,
+        tool: str,
+        result: str,
+    ) -> None:
+        """Publish an effect result only for the owner of the pending intent."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    """UPDATE effect_intents SET status = 'recorded', completed_at = CURRENT_TIMESTAMP
+                       WHERE idempotency_key = ? AND claim_token = ? AND turn_id = ? AND tool = ?
+                         AND status = 'pending'""",
+                    (key, token, turn_id, tool),
+                )
+                if cursor.rowcount != 1:
+                    raise DurableStateError("effect claim lost; result was not published")
+                await db.execute(
+                    """INSERT INTO external_effects (idempotency_key, turn_id, tool, result)
+                       VALUES (?, ?, ?, ?)""",
+                    (key, turn_id, tool, result),
+                )
+                await db.commit()
+            except BaseException:
                 await db.rollback()
                 raise
 
-        if claimed:
-            log.warning("Claimed %d interrupted turn(s) for resume", len(claimed))
-            self._record_durable_metric("durable_turns_resumed", len(claimed))
-        return claimed
+    async def assert_turn_effects_settled(self, turn_id: str) -> None:
+        """Reject automatic continuation when an earlier dispatch is unresolved."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await self._assert_effects_settled(db, turn_id)
+
+    async def _assert_effects_settled(self, db: aiosqlite.Connection, turn_id: str) -> None:
+        cursor = await db.execute(
+            "SELECT 1 FROM effect_intents WHERE turn_id = ? AND status = 'pending' LIMIT 1",
+            (turn_id,),
+        )
+        if await cursor.fetchone():
+            raise EffectUncertainError("turn contains an unresolved external effect; review required")
 
     async def get_external_effect(self, key: str) -> str | None:
-        """Return the recorded result of a side-effecting call, if it already ran.
-
-        This is what makes re-running a turn safe: a message that was already
-        sent must not be sent twice just because the process died before the
-        journal recorded the answer.
-        """
-        if not key:
-            return None
+        """Read a completed result; never mistake an unfinished intent for absent."""
         async with self._open_db() as db:
             await self._ensure_table(db)
             cursor = await db.execute(
-                "SELECT result FROM external_effects WHERE idempotency_key = ?",
+                """SELECT e.result, i.status FROM (SELECT ? AS key) k
+                   LEFT JOIN external_effects e ON e.idempotency_key = k.key
+                   LEFT JOIN effect_intents i ON i.idempotency_key = k.key""",
                 (key,),
             )
-            row = await cursor.fetchone()
-        return str(row[0]) if row else None
+            result, intent_status = await cursor.fetchone()
+        if result is not None:
+            return str(result)
+        if intent_status is not None:
+            raise EffectUncertainError("external effect has no recorded result")
+        return None
 
     async def record_external_effect(self, *, key: str, turn_id: str, tool: str, result: str) -> bool:
         """Record that a side effect happened. Returns False if it already was.
@@ -617,27 +937,39 @@ class SessionStore:
                 """
                 INSERT OR IGNORE INTO external_effects
                     (idempotency_key, turn_id, tool, result)
-                VALUES (?, ?, ?, ?)
+                SELECT ?, ?, ?, ? WHERE NOT EXISTS (
+                    SELECT 1 FROM effect_intents WHERE idempotency_key = ?
+                )
                 """,
-                (key, turn_id, tool, result),
+                (key, turn_id, tool, result, key),
             )
             await db.commit()
             return bool(cursor.rowcount)
 
     async def list_external_effects(self, turn_id: str) -> list[dict]:
-        """Effects recorded for one turn (dashboard / debugging)."""
+        """Recorded results and unresolved intents; pending is not proof of failure."""
         async with self._open_db() as db:
             await self._ensure_table(db)
             cursor = await db.execute(
-                """
-                SELECT idempotency_key, tool, result, created_at
-                FROM external_effects WHERE turn_id = ? ORDER BY created_at
-                """,
-                (turn_id,),
+                """SELECT e.idempotency_key, e.tool, e.result, e.created_at, 'recorded', '{}'
+                   FROM external_effects e WHERE e.turn_id = ?
+                   UNION ALL
+                   SELECT i.idempotency_key, i.tool, '', i.created_at, i.status, i.args_json
+                   FROM effect_intents i WHERE i.turn_id = ? AND i.status = 'pending'
+                   ORDER BY 4""",
+                (turn_id, turn_id),
             )
             rows = await cursor.fetchall()
         return [
-            {"idempotency_key": row[0], "tool": row[1], "result": row[2], "created_at": str(row[3])} for row in rows
+            {
+                "idempotency_key": row[0],
+                "tool": row[1],
+                "result": row[2],
+                "created_at": str(row[3]),
+                "status": row[4],
+                "args": _safe_json(row[5]),
+            }
+            for row in rows
         ]
 
     def _pending_approval_from_row(self, row) -> dict | None:
@@ -695,6 +1027,11 @@ class SessionStore:
 
         async with self._open_db() as db:
             await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute("SELECT thread_id, status FROM active_turns WHERE turn_id = ?", (turn_id,)) as cursor:
+                turn = await cursor.fetchone()
+            if not turn or turn[0] != thread_id or turn[1] not in {"running", "resuming", "waiting_approval"}:
+                raise DurableStateError("approval does not belong to an active turn")
             cursor = await db.execute(
                 """
                 SELECT approval_id FROM pending_approvals
@@ -708,6 +1045,7 @@ class SessionStore:
                     "UPDATE active_turns SET status = 'waiting_approval' WHERE turn_id = ?",
                     (turn_id,),
                 )
+                await queue_approval(db, turn_id, str(row[0]))
                 await db.commit()
                 return str(row[0])
 
@@ -733,6 +1071,7 @@ class SessionStore:
                 "UPDATE active_turns SET status = 'waiting_approval' WHERE turn_id = ?",
                 (turn_id,),
             )
+            await queue_approval(db, turn_id, str(inserted[0]) if inserted else approval_id)
             await db.commit()
 
         return str(inserted[0]) if inserted else approval_id
@@ -794,7 +1133,8 @@ class SessionStore:
                     p.decided_by,
                     p.decision,
                     t.input_message,
-                    p.delegation_json
+                    p.delegation_json,
+                    t.status
                 FROM pending_approvals p
                 JOIN active_turns t ON t.turn_id = p.turn_id
                 WHERE p.approval_id = ? AND p.status = 'pending'
@@ -803,6 +1143,11 @@ class SessionStore:
             )
             row = await cursor.fetchone()
             if not row:
+                await db.rollback()
+                return None
+
+            if row[13] not in {"running", "resuming", "waiting_approval"}:
+                await self._expire_pending_approval(db, str(row[1]), approval_id)
                 await db.commit()
                 return None
 
@@ -810,10 +1155,7 @@ class SessionStore:
             # older than the TTL must not fire a (possibly mutating) tool long
             # after the prompt was shown, in a context that no longer holds.
             if _approval_is_stale(row[7]):
-                await db.execute(
-                    "UPDATE pending_approvals SET status = 'expired' WHERE approval_id = ? AND status = 'pending'",
-                    (approval_id,),
-                )
+                await self._expire_pending_approval(db, str(row[1]), approval_id)
                 await db.commit()
                 return None
 
@@ -832,6 +1174,7 @@ class SessionStore:
                 "UPDATE active_turns SET status = 'running' WHERE turn_id = ?",
                 (row[1],),
             )
+            await suppress_approval(db, row[1], approval_id)
             await db.commit()
 
         claimed = self._pending_approval_from_row(row)
@@ -848,12 +1191,12 @@ class SessionStore:
         async with self._open_db() as db:
             await self._ensure_table(db)
             cursor = await db.execute(
-                "SELECT input_message FROM active_turns WHERE turn_id = ?",
-                (turn_id,),
+                "SELECT input_message FROM active_turns WHERE turn_id = ? AND thread_id = ?",
+                (turn_id, thread_id),
             )
             turn_row = await cursor.fetchone()
             if not turn_row:
-                return messages
+                raise DurableStateError("durable turn missing or thread does not match")
 
             messages.append(HumanMessage(content=str(turn_row[0])))
             journal_cursor = await db.execute(
@@ -867,16 +1210,23 @@ class SessionStore:
             journal_rows = await journal_cursor.fetchall()
 
         for (raw_message,) in journal_rows:
-            try:
-                messages.append(_deserialize_message(json.loads(raw_message)))
-            except (json.JSONDecodeError, KeyError, TypeError) as e:
-                log.warning("Skipping malformed journal message for turn %s: %s", turn_id, e)
+            messages.append(_deserialize_journal_message(raw_message))
+        unanswered_tool_calls(messages)
         return messages
 
     async def finish_turn(self, turn_id: str) -> None:
         """Mark a turn done and remove its ephemeral journal/cache rows."""
         async with self._open_db() as db:
             await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute("SELECT status FROM active_turns WHERE turn_id = ?", (turn_id,)) as cursor:
+                row = await cursor.fetchone()
+            if row and row[0] == "waiting_approval":
+                raise DurableStateError("cannot finish an approval-waiting turn")
+            if not row or row[0] not in {"running", "resuming"}:
+                await db.rollback()
+                return
+            await self._assert_effects_settled(db, turn_id)
             await db.execute(
                 """
                 UPDATE active_turns
@@ -885,6 +1235,7 @@ class SessionStore:
                 """,
                 (turn_id,),
             )
+            await queue_result(db, turn_id, None)
             await db.execute("DELETE FROM turn_journal WHERE turn_id = ?", (turn_id,))
             await db.execute("DELETE FROM tool_results WHERE turn_id = ?", (turn_id,))
             await db.commit()
@@ -895,9 +1246,15 @@ class SessionStore:
         thread_id: str,
         messages: list[BaseMessage],
         turn_id: str,
+        content: str | None = None,
+        failure_reason: str = "",
     ) -> None:
-        """Atomically save session history and close a durable turn."""
-        trimmed = messages[-MAX_HISTORY:] if len(messages) > MAX_HISTORY else messages
+        """Atomically save history, exact response and terminal execution state.
+
+        Omitted content stays unknown, rather than borrowing another turn's
+        answer from shared or compacted history.
+        """
+        trimmed = trim_completed_history(messages, MAX_HISTORY)
         data = json.dumps(
             [_serialize_message(m) for m in trimmed],
             ensure_ascii=False,
@@ -905,6 +1262,23 @@ class SessionStore:
 
         async with self._open_db() as db:
             await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute(
+                "SELECT thread_id, status, final_content, error FROM active_turns WHERE turn_id = ?", (turn_id,)
+            ) as cursor:
+                existing = await cursor.fetchone()
+            if not existing or existing[0] != thread_id:
+                raise DurableStateError("finalization does not match its durable turn")
+            if existing[1] not in {"running", "resuming"}:
+                if (
+                    existing[1] == ("failed" if failure_reason else "done")
+                    and existing[2] == content
+                    and (existing[3] or "") == failure_reason
+                ):
+                    await db.rollback()
+                    return
+                raise DurableStateError("cannot replace a terminal or approval-waiting result")
+            await self._assert_effects_settled(db, turn_id)
             await db.execute(
                 """INSERT INTO sessions (thread_id, messages, updated_at)
                    VALUES (?, ?, CURRENT_TIMESTAMP)
@@ -916,54 +1290,207 @@ class SessionStore:
             await db.execute(
                 """
                 UPDATE active_turns
-                SET status = 'done', completed_at = CURRENT_TIMESTAMP, error = NULL
+                SET status = ?, completed_at = CURRENT_TIMESTAMP, error = ?,
+                    final_content = ?
                 WHERE turn_id = ?
                 """,
-                (turn_id,),
+                ("failed" if failure_reason else "done", failure_reason or None, content, turn_id),
             )
+            await queue_result(db, turn_id, content, failed=bool(failure_reason))
             await db.execute("DELETE FROM turn_journal WHERE turn_id = ?", (turn_id,))
             await db.execute("DELETE FROM tool_results WHERE turn_id = ?", (turn_id,))
             await db.commit()
 
         self._index_to_swarm_fts(thread_id, trimmed)
 
+    async def get_turn_outcome(self, turn_id: str) -> InvocationOutcome:
+        """Read a consistent execution/approval snapshot without running tools."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            async with db.execute(
+                """
+                SELECT t.thread_id, t.status, t.final_content, t.error,
+                       p.approval_id, p.status, p.requested_at
+                FROM active_turns t
+                LEFT JOIN pending_approvals p ON p.turn_id = t.turn_id
+                WHERE t.turn_id = ?
+                """,
+                (turn_id,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        if not rows:
+            return InvocationOutcome("unknown", turn_id=turn_id, reason="turn_missing")
+
+        thread_id, state, content, error = rows[0][:4]
+        approvals = [row[4:] for row in rows if row[4] is not None]
+        pending = [row for row in approvals if row[1] == "pending"]
+        decisions = {row[1] for row in approvals}
+        status: InvocationStatus = "unknown"
+        reason = error or ""
+        approval_id = None
+        if state in {"running", "resuming"}:
+            # Approve/Reject is not completion: the continuation may be live.
+            status = "running"
+        elif state == "waiting_approval":
+            if len(pending) == 1:
+                approval_id = pending[0][0]
+                status = "expired" if _approval_is_stale(pending[0][2]) else "waiting_approval"
+            elif "expired" in decisions:
+                status = "expired"
+            else:
+                reason = "approval_state_inconsistent"
+        elif state == "failed":
+            status = "expired" if error == "approval_expired" else "failed"
+        elif state in {"recovered", "superseded"}:
+            status = "interrupted"
+        elif state == "done":
+            if pending:
+                reason = "completed_with_pending_approval"
+            elif "rejected" in decisions:
+                status = "rejected"
+            elif "expired" in decisions:
+                status = "expired"
+            elif content is not None:
+                status = "completed"
+            else:
+                reason = "terminal_content_missing"
+        return InvocationOutcome(
+            status,
+            content or "",
+            thread_id,
+            turn_id,
+            approval_id,
+            reason,
+        )
+
+    async def stop_plan_turn(self, turn_id: str, *, thread_id: str, reason: str, ownership: TurnOwnership) -> dict:
+        """Close stop-related approvals only after the executor has released ownership.
+
+        Journals, caches and effects are retained. Already completed work keeps
+        its outcome; a stop is not a rollback of an external request.
+        """
+        if reason not in {"plan_cancelled", "plan_expired"}:
+            raise ValueError("invalid plan stop reason")
+        ownership.assert_held(self.db_path, thread_id)
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    "SELECT status, error, final_content, effect_protocol FROM active_turns WHERE turn_id = ? AND thread_id = ?",
+                    (turn_id, thread_id),
+                )
+                row = await cursor.fetchone()
+                if row is None:
+                    await db.rollback()
+                    return {"review": True, "content": "Turn identity missing; review required."}
+                previous, error, content, protocol = row
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM effect_intents WHERE turn_id = ? AND status = 'pending'", (turn_id,)
+                )
+                unresolved = (await cursor.fetchone())[0]
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM pending_approvals WHERE turn_id = ? AND status = 'pending'",
+                    (turn_id,),
+                )
+                pending_approvals = (await cursor.fetchone())[0]
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM pending_approvals WHERE turn_id = ? AND status IN ('rejected', 'expired')",
+                    (turn_id,),
+                )
+                refusals = (await cursor.fetchone())[0]
+                expected_stop = error in {"plan_cancelled", "plan_expired"}
+                review = bool(
+                    unresolved
+                    or protocol != 1
+                    or previous not in {"running", "resuming", "waiting_approval", "done", "failed"}
+                    or (previous == "failed" and not expected_stop)
+                    or (previous == "done" and (not content or pending_approvals))
+                )
+                decision = "expired" if reason == "plan_expired" else "rejected"
+                await db.execute(
+                    """UPDATE pending_approvals SET status = ?, decision = ?, decided_by = 'plan_lifecycle',
+                           decided_at = CURRENT_TIMESTAMP WHERE turn_id = ? AND status = 'pending'""",
+                    (decision, decision, turn_id),
+                )
+                await db.execute(
+                    """UPDATE active_turns SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP
+                       WHERE turn_id = ? AND status IN ('running', 'resuming', 'waiting_approval')""",
+                    (reason, turn_id),
+                )
+                if review:
+                    # Preserve uncertainty across a crash before the plan DB
+                    # acknowledges cleanup, even after pending approvals close.
+                    await db.execute(
+                        "UPDATE active_turns SET status = 'failed', error = ? WHERE turn_id = ? AND thread_id = ?",
+                        (error if error and not expected_stop else "plan_stop_requires_review", turn_id, thread_id),
+                    )
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
+        return {
+            "review": review,
+            "completed": previous == "done" and not review and not refusals,
+            "content": content or "",
+            "pending_effects": int(unresolved),
+        }
+
     async def fail_turn(self, turn_id: str, error: str) -> None:
         """Mark a turn failed after a handled exception."""
         async with self._open_db() as db:
             await self._ensure_table(db)
-            await db.execute(
+            await db.execute("BEGIN IMMEDIATE")
+            changed = await db.execute(
                 """
                 UPDATE active_turns
                 SET status = 'failed',
                     completed_at = CURRENT_TIMESTAMP,
                     error = ?
-                WHERE turn_id = ?
+                WHERE turn_id = ? AND status IN ('running', 'resuming', 'waiting_approval')
                 """,
                 (error[:1000], turn_id),
             )
+            if changed.rowcount:
+                await queue_result(db, turn_id, None, failed=True)
             await db.commit()
 
     async def recover_abandoned_turns(self) -> int:
-        """Recover running turns left behind by a crashed/restarted process.
+        """Report interrupted turns without touching any live conversation."""
+        recovered = 0
+        for turn in await self.resumable_turns():
+            try:
+                async with own_conversation(self.db_path, turn["thread_id"], wait=False) as ownership:
+                    try:
+                        recovered += await self._report_abandoned_turn(turn["turn_id"], ownership)
+                    except DurableStateError:
+                        await self.fail_turn(turn["turn_id"], "invalid durable journal; review required")
+                        log.error("Turn %s requires journal review; history was not overwritten", turn["turn_id"])
+            except TurnBusyError:
+                continue
+        if recovered:
+            log.warning("Recovered %d abandoned durable turn(s)", recovered)
+            self._record_durable_metric("durable_turns_recovered", recovered)
+        return recovered
 
-        MVP behavior is recover-and-report: append the input, journaled
-        assistant/tool deltas, and an interruption notice to the persisted
-        session. It does not resume tool execution.
-        """
-        recovered_sessions: list[tuple[str, list[BaseMessage]]] = []
+    async def _report_abandoned_turn(self, turn_id: str, ownership: TurnOwnership) -> int:
         async with self._open_db() as db:
             await self._ensure_table(db)
-            cursor = await db.execute(
-                """
-                SELECT turn_id, thread_id, input_message
-                FROM active_turns
-                WHERE status = 'running'
-                ORDER BY started_at ASC
-                """
-            )
-            active_rows = await cursor.fetchall()
-
-            for turn_id, thread_id, input_message in active_rows:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    """SELECT thread_id, input_message FROM active_turns t
+                       WHERE turn_id = ? AND status IN ('running', 'resuming')
+                         AND NOT EXISTS (SELECT 1 FROM pending_approvals p
+                             WHERE p.turn_id = t.turn_id AND p.status = 'pending')""",
+                    (turn_id,),
+                )
+                row = await cursor.fetchone()
+                if not row:
+                    await db.rollback()
+                    return 0
+                thread_id, input_message = row
+                ownership.assert_held(self.db_path, thread_id)
                 session_cursor = await db.execute(
                     "SELECT messages FROM sessions WHERE thread_id = ?",
                     (thread_id,),
@@ -973,7 +1500,7 @@ class SessionStore:
                 if session_row:
                     try:
                         data = json.loads(session_row[0])
-                        messages = [_deserialize_message(d) for d in data]
+                        messages = trim_completed_history([_deserialize_message(d) for d in data], MAX_HISTORY)
                     except (json.JSONDecodeError, KeyError, TypeError) as e:
                         log.warning("Skipping malformed session %s during turn recovery: %s", thread_id, e)
                         messages = []
@@ -990,10 +1517,27 @@ class SessionStore:
                 )
                 journal_rows = await journal_cursor.fetchall()
                 for (raw_message,) in journal_rows:
-                    try:
-                        messages.append(_deserialize_message(json.loads(raw_message)))
-                    except (json.JSONDecodeError, KeyError, TypeError) as e:
-                        log.warning("Skipping malformed journal message for turn %s: %s", turn_id, e)
+                    messages.append(_deserialize_journal_message(raw_message))
+
+                for call in unanswered_tool_calls(messages):
+                    cursor = await db.execute(
+                        """SELECT content FROM tool_results WHERE turn_id = ? AND tool_call_id = ?
+                           AND NOT EXISTS (SELECT 1 FROM effect_intents WHERE turn_id = ? AND status = 'pending')""",
+                        (turn_id, call["id"], turn_id),
+                    )
+                    cached = await cursor.fetchone()
+                    # Close the provider protocol, not the business operation.
+                    # Keep the original journal/cache untouched for reconciliation.
+                    content = (
+                        str(cached[0])
+                        if cached
+                        else (
+                            "[INTERRUPTED: NO VERIFIED RESULT] The prior execution stopped. "
+                            "This is not evidence that the action succeeded or failed. "
+                            "Do not repeat the action without reconciling its actual outcome."
+                        )
+                    )
+                    messages.append(ToolMessage(content=content, tool_call_id=call["id"]))
 
                 messages.append(
                     AIMessage(
@@ -1004,7 +1548,7 @@ class SessionStore:
                         ),
                     )
                 )
-                trimmed = messages[-MAX_HISTORY:] if len(messages) > MAX_HISTORY else messages
+                trimmed = trim_completed_history(messages, MAX_HISTORY)
                 data = json.dumps([_serialize_message(m) for m in trimmed], ensure_ascii=False)
                 await db.execute(
                     """INSERT INTO sessions (thread_id, messages, updated_at)
@@ -1024,18 +1568,13 @@ class SessionStore:
                     """,
                     (turn_id,),
                 )
-                recovered_sessions.append((thread_id, trimmed))
-
-            await db.commit()
-
-        for thread_id, messages in recovered_sessions:
-            self._index_to_swarm_fts(thread_id, messages)
-
-        recovered = len(recovered_sessions)
-        if recovered:
-            log.warning("Recovered %d abandoned durable turn(s)", recovered)
-            self._record_durable_metric("durable_turns_recovered", recovered)
-        return recovered
+                await queue_result(db, turn_id, None, failed=True)
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
+        self._index_to_swarm_fts(thread_id, trimmed)
+        return 1
 
     def _record_durable_metric(self, metric: str, delta: int) -> None:
         """Record durable-turn metrics in swarm_metrics when available."""
@@ -1061,7 +1600,7 @@ class SessionStore:
 
         try:
             data = json.loads(row[0])
-            return [_deserialize_message(d) for d in data]
+            return trim_completed_history([_deserialize_message(d) for d in data], MAX_HISTORY)
         except (json.JSONDecodeError, KeyError) as e:
             log.error("Failed to deserialize session %s: %s", thread_id, e)
             return []
@@ -1069,7 +1608,7 @@ class SessionStore:
     async def save(self, thread_id: str, messages: list[BaseMessage]) -> None:
         """Save conversation history, keeping only the last MAX_HISTORY messages."""
         # Trim to max history (keep most recent)
-        trimmed = messages[-MAX_HISTORY:] if len(messages) > MAX_HISTORY else messages
+        trimmed = trim_completed_history(messages, MAX_HISTORY)
 
         data = json.dumps(
             [_serialize_message(m) for m in trimmed],
