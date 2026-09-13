@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.request
 
 from kronos.config import settings
@@ -99,6 +100,82 @@ TOPIC_JB_TRAVEL_INSIGHTS = _resolve_topic_id(
     TOPIC_DIGEST,
 )
 
+# Telegram refusals that retrying will not fix: the destination itself is unusable
+# — a closed or deleted forum topic, lost write rights, a bot that was removed.
+# Matched case-insensitively against a Bot API error description, or a Telethon
+# error's class name and text (Telethon has no dedicated class for TOPIC_CLOSED).
+# Transient failures such as flood waits and timeouts are deliberately absent.
+_PERMANENT_DELIVERY_MARKERS: tuple[tuple[str, str], ...] = (
+    ("TOPIC_CLOSED", "TOPIC_CLOSED"),
+    ("TopicDeletedError", "TOPIC_DELETED"),
+    ("TOPIC_DELETED", "TOPIC_DELETED"),
+    ("message thread not found", "TOPIC_NOT_FOUND"),
+    ("ChatWriteForbiddenError", "CHAT_WRITE_FORBIDDEN"),
+    ("CHAT_WRITE_FORBIDDEN", "CHAT_WRITE_FORBIDDEN"),
+    ("not enough rights", "CHAT_WRITE_FORBIDDEN"),
+    ("UserBannedInChannelError", "BANNED_IN_CHAT"),
+    ("ChannelPrivateError", "CHAT_NOT_ACCESSIBLE"),
+    ("bot was kicked", "BOT_REMOVED"),
+    ("bot is not a member", "BOT_REMOVED"),
+    ("chat not found", "CHAT_NOT_FOUND"),
+)
+
+# One loud report per broken destination per window. The health check alone
+# retries every 15 minutes; logging every refusal buried the cause under hundreds
+# of identical lines while nothing reached a person.
+UNDELIVERED_REPORT_INTERVAL_SECONDS = 6 * 3600
+_undelivered_reports: dict[tuple[str, str], tuple[float, int]] = {}
+
+
+def describe_destination(chat_id: object, topic_id: object) -> str:
+    """Name a Telegram destination for logs and alerts."""
+    return f"chat {chat_id} topic {topic_id}" if topic_id else f"chat {chat_id} (General)"
+
+
+def permanent_delivery_reason(error: object) -> str | None:
+    """Return a short reason for a refusal retrying cannot fix, or None for a transient one."""
+    haystack = f"{type(error).__name__} {error}" if isinstance(error, BaseException) else str(error)
+    lowered = haystack.lower()
+    for marker, reason in _PERMANENT_DELIVERY_MARKERS:
+        if marker.lower() in lowered:
+            return reason
+    return None
+
+
+def report_undelivered(destination: str, reason: str, text: str, *, now: float | None = None) -> bool:
+    """Make a permanent delivery failure visible once per window instead of once per message.
+
+    Logs one ERROR naming the destination and the reason, and pushes the same over
+    NTFY with the start of the undelivered text — the one channel that does not go
+    through Telegram. Repeats inside the window are only counted; the count travels
+    with the next report. Returns True when a report was made.
+    """
+    current = time.monotonic() if now is None else now
+    key = (destination, reason)
+    previous = _undelivered_reports.get(key)
+    if previous is not None and current - previous[0] < UNDELIVERED_REPORT_INTERVAL_SECONDS:
+        _undelivered_reports[key] = (previous[0], previous[1] + 1)
+        log.debug("Telegram still refuses %s: %s (repeat %d)", destination, reason, previous[1] + 1)
+        return False
+
+    suppressed = previous[1] if previous is not None else 0
+    _undelivered_reports[key] = (current, 0)
+    repeats = f"; {suppressed} more refused since the last report" if suppressed else ""
+    log.error(
+        "Telegram refuses delivery to %s: %s — messages sent there are lost until it is fixed%s",
+        destination,
+        reason,
+        repeats,
+    )
+    excerpt = text if len(text) <= 500 else text[:500] + "…"
+    send_ntfy(
+        f"Telegram refuses delivery to {destination}: {reason}{repeats}.\n\nUndelivered:\n{excerpt}",
+        title=f"Kronos Agent OS: Telegram {reason}",
+        priority="high",
+        tags="warning",
+    )
+    return True
+
 
 def send_webhook(
     text: str,
@@ -129,6 +206,10 @@ def send_webhook(
         )
         resp = urllib.request.urlopen(req, timeout=15)
         return resp.status == 200
+    except urllib.request.HTTPError as e:
+        # The bridge answers a refused delivery with the reason; keep it in the log.
+        log.error("Webhook send failed: %s — %s", e, e.read().decode("utf-8", "replace")[:200])
+        return False
     except Exception as e:
         log.error("Webhook send failed: %s", e)
         return False
@@ -259,7 +340,12 @@ def _send_message(url: str, body: dict) -> bool:
             except Exception as e2:
                 log.error("Bot API send failed (plain fallback): %s", e2)
                 return False
-        log.error("Bot API send failed: %s — %s", e, err_body[:200])
+        reason = permanent_delivery_reason(err_body)
+        if reason:
+            destination = describe_destination(body.get("chat_id"), body.get("message_thread_id"))
+            report_undelivered(destination, reason, str(body.get("text", "")))
+        else:
+            log.error("Bot API send failed: %s — %s", e, err_body[:200])
         return False
     except Exception as e:
         log.error("Bot API send failed: %s", e)
@@ -302,6 +388,12 @@ def send_bot_api(
     topic_id: int | None = None,
 ) -> bool:
     """Send message via Telegram Bot API directly (for topic support)."""
+    if chat_id is None and not topic_id and TOPIC_GENERAL:
+        # A notification that names no destination belongs in the general
+        # notifications topic. Without a thread id Telegram files it under the
+        # group's built-in General topic, which a forum can close — and then every
+        # untargeted report is refused.
+        topic_id = TOPIC_GENERAL
     # Sanitize Markdown -> HTML BEFORE the webhook fallback so the local
     # Telethon bridge also receives Telegram-ready content. Otherwise pulse
     # text reaches Telegram with raw "**bold**" markers.

@@ -83,23 +83,36 @@ send_notification() {
   local tags="$3"
   local text="$4"
 
+  local status
+
+  # Both deliveries used to go to /dev/null, answer included: a Telegram topic
+  # refusing every alert and an NTFY server rejecting the token looked exactly
+  # like success. Report a refused delivery to this unit's journal instead.
+
   # Send to Telegram bridge webhook.
   if [ -n "$WEBHOOK_SECRET" ]; then
     json=$(python3 -c "import json,sys; print(json.dumps({'text': sys.argv[1]}))" "$text" 2>/dev/null)
-    curl -s -X POST "$WEBHOOK_URL" \
+    status=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$WEBHOOK_URL" \
       -H "Content-Type: application/json" \
       -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
-      -d "$json" > /dev/null 2>&1
+      -d "$json" 2>/dev/null)
+    if [ "$status" != "200" ]; then
+      echo "WARN: Telegram webhook did not deliver \"$title\" (HTTP ${status:-000})" >&2
+    fi
   fi
 
   # Send to NTFY (phone push notification).
   if [ -n "$NTFY_TOKEN" ]; then
-    curl -s -d "$text" \
+    status=$(curl -s -o /dev/null -w '%{http_code}' -d "$text" \
       -H "Title: $title" \
       -H "Priority: $priority" \
       -H "Tags: $tags" \
       -H "Authorization: Bearer $NTFY_TOKEN" \
-      "$NTFY_URL/$NTFY_TOPIC" > /dev/null 2>&1
+      "$NTFY_URL/$NTFY_TOPIC" 2>/dev/null)
+    case "$status" in
+      2??) ;;
+      *) echo "WARN: NTFY did not accept \"$title\" (HTTP ${status:-000})" >&2 ;;
+    esac
   fi
 }
 

@@ -60,6 +60,14 @@ case "$*" in
     fi
     exit 22
     ;;
+  *127.0.0.1:8788/webhook*)
+    printf '%s' "${FAKE_WEBHOOK_CODE:-200}"
+    exit 0
+    ;;
+  *'%{http_code}'*)
+    printf '%s' "${FAKE_NTFY_CODE:-200}"
+    exit 0
+    ;;
   *)
     exit 0
     ;;
@@ -168,4 +176,38 @@ def test_health_check_misconfigured_unit_is_visible_warning_with_alert(tmp_path:
     log = _curl_log(tmp_path)
     assert log.count("127.0.0.1:8788/health") == 1
     assert "Priority: low" in log
+    assert "https://ntfy.invalid/kaos-test" in log
+
+
+def _alerting_env(**overrides: str) -> dict[str, str]:
+    # An inactive unit next to a healthy bridge is a FAIL, which sends the alert.
+    env = {
+        "FAKE_SERVICE_ACTIVE": "inactive",
+        "FAKE_UNIT_LOAD_STATE": "loaded",
+        "WEBHOOK_SECRET": "s3cret",
+        "NTFY_TOKEN": "test-token",
+        "NTFY_URL": "https://ntfy.invalid",
+        "NTFY_TOPIC": "kaos-test",
+    }
+    env.update(overrides)
+    return env
+
+
+def test_health_check_reports_refused_deliveries_instead_of_discarding_them(tmp_path: Path) -> None:
+    """A closed Telegram topic and a rejected NTFY token both looked like success."""
+    result = _run_health(tmp_path, "--alert", extra_env=_alerting_env(FAKE_WEBHOOK_CODE="502", FAKE_NTFY_CODE="401"))
+
+    assert result.returncode == 1
+    assert 'WARN: Telegram webhook did not deliver "Kronos Agent OS Health Alert" (HTTP 502)' in result.stderr
+    assert 'WARN: NTFY did not accept "Kronos Agent OS Health Alert" (HTTP 401)' in result.stderr
+
+
+def test_health_check_stays_quiet_when_both_deliveries_are_accepted(tmp_path: Path) -> None:
+    result = _run_health(tmp_path, "--alert", extra_env=_alerting_env())
+
+    assert result.returncode == 1
+    assert "did not deliver" not in result.stderr
+    assert "did not accept" not in result.stderr
+    log = _curl_log(tmp_path)
+    assert "127.0.0.1:8788/webhook" in log
     assert "https://ntfy.invalid/kaos-test" in log

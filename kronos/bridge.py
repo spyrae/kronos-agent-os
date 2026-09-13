@@ -757,6 +757,11 @@ async def _handle_webhook(request: web.Request) -> web.Response:
     topic_id = body.get("topic_id")
     if topic_id:
         topic_id = int(topic_id)
+    elif "chat_id" not in body:
+        # Health checks and alerts post text alone. Without a thread id the message
+        # is filed under the group's built-in General topic, which a forum can
+        # close; the general notifications topic is where an unaddressed one goes.
+        topic_id = _topic_id_from_env_or_setting("TOPIC_GENERAL", settings.telegram_general_topic_id) or None
 
     if not text:
         return web.json_response({"error": "no text"}, status=400)
@@ -766,6 +771,14 @@ async def _handle_webhook(request: web.Request) -> web.Response:
         await _send_to_chat(chat_id, text, parse_mode=parse_mode, topic_id=topic_id)
         return web.json_response({"ok": True})
     except Exception as e:
+        from kronos.cron.notify import describe_destination, permanent_delivery_reason, report_undelivered
+
+        reason = permanent_delivery_reason(e)
+        if reason:
+            # Reported once per window, not once per request: the health check
+            # alone retries every 15 minutes.
+            report_undelivered(describe_destination(chat_id, topic_id), reason, text)
+            return web.json_response({"error": str(e), "reason": reason}, status=502)
         log.error("[Webhook] Send failed: %s", e)
         return web.json_response({"error": str(e)}, status=500)
 
