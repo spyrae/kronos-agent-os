@@ -4,6 +4,7 @@ Runs in the same process as the agent. Provides REST API + WebSocket
 for managing MCP servers, skills, agents, persona, and monitoring.
 """
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -119,6 +120,36 @@ def create_app(scheduler=None, agent=None) -> FastAPI:
     return app
 
 
+# How long a stop waits for in-flight requests before uvicorn cancels them. The
+# graceful path waits for open connections, and without a bound a single hung
+# request would hold the whole agent process until systemd kills it.
+SHUTDOWN_GRACE_SECONDS = 5
+
+
+async def serve_until_cancelled(server: uvicorn.Server) -> None:
+    """Run ``server`` until it exits, stopping it the way uvicorn expects on cancel.
+
+    ``kronos.app`` stops every service by cancelling its task. Cancelling
+    ``server.serve()`` directly unwinds it without running uvicorn's shutdown, so
+    the lifespan task uvicorn started is left pending; when ``asyncio.run`` cancels
+    leftover tasks at loop close, starlette reports a failed lifespan shutdown and
+    uvicorn logs a ``CancelledError`` traceback at ERROR — on every restart, which
+    reads like a regression while diagnosing a deploy.
+
+    So the serving task is shielded from the cancellation, uvicorn is asked to exit
+    through ``should_exit`` and allowed to close connections and finish the
+    lifespan, and only then is the cancellation re-raised: the caller still sees a
+    cancelled task, and a genuine crash inside ``serve()`` still propagates.
+    """
+    serving = asyncio.create_task(server.serve(), name="dashboard-serve")
+    try:
+        await asyncio.shield(serving)
+    except asyncio.CancelledError:
+        server.should_exit = True
+        await serving
+        raise
+
+
 async def run_dashboard(scheduler=None, agent=None) -> None:
     """Start dashboard server.
 
@@ -141,6 +172,7 @@ async def run_dashboard(scheduler=None, agent=None) -> None:
         host=DASHBOARD_HOST,
         port=DASHBOARD_PORT,
         log_level="warning",  # don't duplicate agent logs
+        timeout_graceful_shutdown=SHUTDOWN_GRACE_SECONDS,
     )
     server = uvicorn.Server(config)
     log.info("Dashboard starting on http://%s:%d", DASHBOARD_HOST, DASHBOARD_PORT)
@@ -151,4 +183,4 @@ async def run_dashboard(scheduler=None, agent=None) -> None:
             DASHBOARD_USERNAME,
             DASHBOARD_PASSWORD_PATH,
         )
-    await server.serve()
+    await serve_until_cancelled(server)
