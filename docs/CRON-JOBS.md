@@ -432,6 +432,14 @@ topics can be configured independently:
 
 Finance reports continue to use `TOPIC_FINANCE`.
 
+Notifications that name neither a chat nor a topic — the health check's alerts,
+`personal-observer`, `daily-scope` — go to `TOPIC_GENERAL`. Left at `0` they fall into
+the group's built-in General topic, which Telegram refuses once General is closed. A
+refusal that retrying cannot fix (a closed or deleted topic, lost write rights, a
+removed bot) is reported once per destination every six hours: one ERROR in the
+agent's log naming the destination and the refusals since, and an NTFY push carrying
+the start of the undelivered message.
+
 The Telegram bridge also uses these `TOPIC_*` ids for inbound messages in the
 swarm chat. Each configured destination is an owner-only topic: only the owner
 agent can answer user messages there, peer agents stand down before invoking

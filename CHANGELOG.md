@@ -6,6 +6,22 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Fixed
 
+- **Alerts and daily reports vanished into a closed Telegram topic, silently** —
+  every notification that named neither a chat nor a topic (the health check every
+  15 minutes, `personal-observer`, `daily-scope`, capability-health changes) was
+  posted to the group without a thread id, which Telegram files under the built-in
+  General topic. With General closed, each one was refused with `TOPIC_CLOSED` —
+  well over a hundred times in two days, a disk at 93% among them — and the only
+  trace was an ERROR line per attempt: the health check discarded the webhook's
+  answer, and the push channel's with it. Unaddressed notifications now go to
+  `TOPIC_GENERAL`, the topic already meant for general notifications; an explicitly
+  addressed chat is left as addressed. A refusal that retrying cannot fix — a
+  closed or deleted topic, lost write rights, a removed bot — is reported once per
+  destination every six hours, as a single ERROR naming the destination and the
+  refusals since, and pushed over NTFY with the start of the lost message. The
+  webhook answers such a refusal with 502 and the reason, and the health check
+  writes a refused Telegram or NTFY delivery to its journal instead of discarding it.
+
 - **Every restart logged an ERROR traceback that looked like a regression** — the
   agent stops its services by cancelling their tasks, and cancelling uvicorn's
   `serve()` unwinds it without running uvicorn's own shutdown. The lifespan task it
