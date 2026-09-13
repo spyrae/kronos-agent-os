@@ -6,6 +6,19 @@ All notable changes to Kronos Agent OS are documented here.
 
 ### Fixed
 
+- **Every restart logged an ERROR traceback that looked like a regression** — the
+  agent stops its services by cancelling their tasks, and cancelling uvicorn's
+  `serve()` unwinds it without running uvicorn's own shutdown. The lifespan task it
+  had started was left pending, so when `asyncio.run` cancelled leftover tasks at
+  loop close, starlette reported a failed lifespan shutdown and uvicorn logged a
+  `CancelledError` traceback at ERROR level — once per agent on every stop. The
+  dashboard now shields its serving task from the cancellation, asks uvicorn to exit
+  through `should_exit` so connections close and the lifespan completes, and only
+  then re-raises the cancellation; a genuine crash still propagates for
+  `Restart=on-failure`. Because a graceful exit waits for open connections, the stop
+  is bounded at five seconds — without that bound a single hung request held the
+  process indefinitely.
+
 - **Three agents shared one session database, and the last one to answer won** —
   `.env.lacuna`, `.env.resonant` and `.env.keystone` each carried a copy-pasted
   `DB_PATH=./data/kronos.db`. The legacy-path rewrite only recognised
