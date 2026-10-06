@@ -44,6 +44,7 @@ from kronos.execution_control import ExecutionStoppedError, check_execution, exe
 from kronos.llm import get_model
 from kronos.memory.context_engine import get_context_engine
 from kronos.memory.nodes import retrieve_memories, store_memories_background
+from kronos.memory.scope import data_owner_scope
 from kronos.outcomes import InvocationOutcome
 from kronos.persona import build_system_prompt
 from kronos.router import classify_tier
@@ -446,8 +447,11 @@ class KronosAgent:
         pending = await self._session_store.get_pending_approval(approval_id)
         if not pending:
             return "Этот approval уже обработан или не найден."
+        # The approver decides; the data still belongs to whoever started the turn.
+        owner = await self._session_store.turn_owner(str(pending["turn_id"]))
         async with own_conversation(self._session_store.db_path, str(pending["thread_id"])):
-            return await self._resolve_owned_approval(approval_id, approved, decided_by)
+            with data_owner_scope(owner):
+                return await self._resolve_owned_approval(approval_id, approved, decided_by)
 
     async def _resolve_owned_approval(
         self,
@@ -689,14 +693,16 @@ class KronosAgent:
             session_id=thread_id,
             source_kind="durable_resume",
         )
+        owner = await self._session_store.turn_owner(turn_id)
         try:
-            result = await self._run_guarded_model_loop(
-                thread_id=thread_id,
-                turn_id=turn_id,
-                messages=messages,
-                source_message=str(turn.get("input_message") or ""),
-                react_loop_kwargs=react_loop_kwargs,
-            )
+            with data_owner_scope(owner):
+                result = await self._run_guarded_model_loop(
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    messages=messages,
+                    source_message=str(turn.get("input_message") or ""),
+                    react_loop_kwargs=react_loop_kwargs,
+                )
         except ExecutionStoppedError as error:
             await self._session_store.fail_turn(turn_id, str(error))
             return None
@@ -925,7 +931,7 @@ class KronosAgent:
             source_kind=kwargs.get("source_kind", "user"),
         )
         try:
-            with model_budget_scope(kwargs.get("force_tier")):
+            with model_budget_scope(kwargs.get("force_tier")), data_owner_scope(kwargs.get("user_id", "")):
                 return await self._invoke_execution_scoped(**kwargs)
         finally:
             reset_tool_audit_context(audit_token)
@@ -1057,7 +1063,11 @@ class KronosAgent:
         react_loop_kwargs: dict[str, Any] = {}
         if self._session_store and not is_ephemeral:
             turn_id = await self._session_store.begin_turn(
-                thread_id, message, caller_key=caller_key, recovery_destination=recovery_destination
+                thread_id,
+                message,
+                caller_key=caller_key,
+                recovery_destination=recovery_destination,
+                user_id=user_id,
             )
             if on_turn_started is not None:
                 try:
