@@ -89,13 +89,17 @@ class BundleBuilder:
         self.facts.append({"user_id": user_id, "content": text, "created_at": created_at, "source": source})
         return True
 
-    def add_entity(self, name: str, entity_type: str, properties: dict | None = None) -> None:
+    def add_entity(
+        self, name: str, entity_type: str, properties: dict | None = None, *, user_id: str = ""
+    ) -> None:
         name, entity_type = name.strip(), entity_type.strip()
         if not name or not entity_type:
             return
-        if any(e["name"] == name and e["type"] == entity_type for e in self.entities):
+        if any(
+            e["name"] == name and e["type"] == entity_type and e.get("user_id", "") == user_id for e in self.entities
+        ):
             return
-        self.entities.append({"name": name, "type": entity_type, "properties": properties or {}})
+        self.entities.append({"user_id": user_id, "name": name, "type": entity_type, "properties": properties or {}})
 
     def add_relation(
         self,
@@ -104,12 +108,15 @@ class BundleBuilder:
         target_name: str,
         target_type: str,
         relation_type: str,
+        *,
+        user_id: str = "",
     ) -> None:
         if not (source_name.strip() and target_name.strip() and relation_type.strip()):
             return
-        self.add_entity(source_name, source_type)
-        self.add_entity(target_name, target_type)
+        self.add_entity(source_name, source_type, user_id=user_id)
+        self.add_entity(target_name, target_type, user_id=user_id)
         row = {
+            "user_id": user_id,
             "source": {"name": source_name.strip(), "type": source_type},
             "target": {"name": target_name.strip(), "type": target_type},
             "relation_type": relation_type.strip(),

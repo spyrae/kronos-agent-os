@@ -73,7 +73,8 @@ def _init_memory(db_dir: Path) -> None:
                 type TEXT NOT NULL,
                 properties TEXT DEFAULT '{}',
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                user_id TEXT
             );
             CREATE TABLE IF NOT EXISTS relations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,19 +82,20 @@ def _init_memory(db_dir: Path) -> None:
                 target_id INTEGER NOT NULL,
                 relation_type TEXT NOT NULL,
                 properties TEXT DEFAULT '{}',
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                user_id TEXT
             );
             DELETE FROM relations;
             DELETE FROM entities;
         """)
         kaos = conn.execute(
-            "INSERT INTO entities (name, type, created_at, updated_at) VALUES ('KAOS', 'project', '2026-04-27T09:00:00+00:00', '2026-04-27T09:00:00+00:00')"
+            "INSERT INTO entities (user_id, name, type, created_at, updated_at) VALUES ('demo-user', 'KAOS', 'project', '2026-04-27T09:00:00+00:00', '2026-04-27T09:00:00+00:00')"
         ).lastrowid
         dashboard = conn.execute(
-            "INSERT INTO entities (name, type, created_at, updated_at) VALUES ('Control Room', 'tool', '2026-04-27T09:00:00+00:00', '2026-04-27T09:00:00+00:00')"
+            "INSERT INTO entities (user_id, name, type, created_at, updated_at) VALUES ('demo-user', 'Control Room', 'tool', '2026-04-27T09:00:00+00:00', '2026-04-27T09:00:00+00:00')"
         ).lastrowid
         conn.execute(
-            "INSERT INTO relations (source_id, target_id, relation_type, created_at) VALUES (?, ?, 'uses', '2026-04-27T09:00:00+00:00')",
+            "INSERT INTO relations (user_id, source_id, target_id, relation_type, created_at) VALUES ('demo-user', ?, ?, 'uses', '2026-04-27T09:00:00+00:00')",
             (kaos, dashboard),
         )
 

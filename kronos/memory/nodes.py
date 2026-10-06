@@ -8,7 +8,7 @@ Memory architecture (per Phase 3 + Phase 7 of the swarm refactor):
   * Per-agent Mem0 collection (Qdrant) — personal reflections, agent-style
     context. Isolated per agent to prevent cross-agent contamination.
   * Per-agent FTS5 (``memory_fts.db``) — keyword search over extracted facts.
-  * Per-agent knowledge graph — entity/relation memory.
+  * Per-agent knowledge graph — entity/relation memory, one graph per user.
   * Shared user facts (``swarm.db:shared_user_facts``) — facts extracted
     from USER messages, readable and writable by all agents so the swarm
     has one view of the user. Classification rule is a heuristic in v1:
@@ -69,7 +69,7 @@ def retrieve_memories(state: AgentState) -> AgentState:
     # L3: Knowledge Graph context
     graph_context = ""
     try:
-        graph_context = kg.get_graph_context(last_user_msg, limit=3)
+        graph_context = kg.get_graph_context(last_user_msg, limit=3, user_id=user_id)
     except Exception as e:
         log.debug("Knowledge graph lookup failed: %s", e)
 

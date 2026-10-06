@@ -69,13 +69,20 @@ async def run_sleep_compute() -> None:
     log.info("Sleep-time compute starting...")
 
     # 1. Get recent facts from FTS5
-    recent_facts = _get_recent_facts(days=7)
+    facts_by_user = _get_recent_facts(days=7)
+    recent_facts = [fact for facts in facts_by_user.values() for fact in facts]
     if len(recent_facts) < 5:
         log.info("Only %d recent facts, skipping sleep compute", len(recent_facts))
         return
 
-    # 2. Extract entities and build knowledge graph
-    entities_added, relations_added = await _extract_and_build_graph(recent_facts)
+    # 2. Extract entities and build each user's own knowledge graph. One
+    #    extraction per owner: a shared prompt would let the model link one
+    #    user's facts to another user's entities.
+    entities_added = relations_added = 0
+    for user_id, facts in facts_by_user.items():
+        added = await _extract_and_build_graph(facts, user_id)
+        entities_added += added[0]
+        relations_added += added[1]
 
     # 3. Generate insights
     insights = await _generate_insights(recent_facts)
@@ -107,21 +114,25 @@ async def run_sleep_compute() -> None:
     send_bot_api(summary, topic_id=TOPIC_GENERAL)
 
 
-def _get_recent_facts(days: int = 7) -> list[str]:
-    """Get recent facts from FTS5 index."""
+def _get_recent_facts(days: int = 7) -> dict[str, list[str]]:
+    """Get recent facts from FTS5 index, grouped by the user they belong to."""
     db = fts._get_db()
     cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
     rows = db.read(
-        "SELECT content FROM memory_facts WHERE created_at > ? ORDER BY created_at DESC LIMIT 100",
+        "SELECT user_id, content FROM memory_facts WHERE created_at > ? ORDER BY created_at DESC LIMIT 100",
         (cutoff,),
     )
 
-    return [row["content"] for row in rows]
+    facts_by_user: dict[str, list[str]] = {}
+    for row in rows:
+        if row["user_id"]:
+            facts_by_user.setdefault(row["user_id"], []).append(row["content"])
+    return facts_by_user
 
 
-async def _extract_and_build_graph(facts: list[str]) -> tuple[int, int]:
-    """Extract entities from facts and add to knowledge graph."""
+async def _extract_and_build_graph(facts: list[str], user_id: str) -> tuple[int, int]:
+    """Extract entities from one user's facts and add them to that user's graph."""
     facts_text = "\n".join(f"- {f[:200]}" for f in facts[:50])
 
     prompt = ENTITY_EXTRACTION_PROMPT.format(facts=facts_text)
@@ -154,7 +165,7 @@ async def _extract_and_build_graph(facts: list[str]) -> tuple[int, int]:
         etype = entity.get("type", "concept").strip()
         props = entity.get("properties", {})
         if name:
-            kg.add_entity(name, etype, props)
+            kg.add_entity(name, etype, props, user_id=user_id)
             entities_added += 1
 
     for rel in data.get("relations", []):
@@ -164,7 +175,7 @@ async def _extract_and_build_graph(facts: list[str]) -> tuple[int, int]:
         tgt_type = rel.get("target_type", "concept").strip()
         rtype = rel.get("relation", "related_to").strip()
         if src and tgt:
-            kg.add_relation(src, src_type, tgt, tgt_type, rtype)
+            kg.add_relation(src, src_type, tgt, tgt_type, rtype, user_id=user_id)
             relations_added += 1
 
     log.info("KG updated: +%d entities, +%d relations", entities_added, relations_added)
@@ -177,13 +188,13 @@ async def _generate_insights(recent_facts: list[str]) -> list[str]:
     if stats["entities"] < 3:
         return []
 
-    # Get graph context
-    db = kg._get_db()
-    rows = db.read("SELECT name, type FROM entities ORDER BY updated_at DESC LIMIT 20")
+    # Get graph context. This digest goes to the operator, who may see every
+    # owner's graph; it is never injected into a user's conversation.
+    rows = kg.recent_entities(limit=20)
 
     graph_parts = []
     for row in rows:
-        connections = kg.get_connections(row["name"])
+        connections = kg.get_connections(row["name"], user_id=row["user_id"])
         if connections:
             conns = ", ".join(f"{c['relation']}→{c['entity']}" for c in connections[:3])
             graph_parts.append(f"{row['name']} ({row['type']}): {conns}")

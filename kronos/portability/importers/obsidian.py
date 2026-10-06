@@ -88,7 +88,7 @@ def to_bundle(
         title = note_path.stem
 
         for target in {match.strip() for match in _WIKILINK_RE.findall(raw) if match.strip()}:
-            builder.add_relation(title, "note", target, "note", "links_to")
+            builder.add_relation(title, "note", target, "note", "links_to", user_id=owner)
 
         if str(meta.get("type", "")).strip().lower() == "fact":
             fact = " ".join(body.split())[:_MAX_FACT_CHARS]

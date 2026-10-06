@@ -162,25 +162,41 @@ def _export_graph(root: Path) -> tuple[int, int]:
     """Dump entities and relations, with relations keyed by (name, type)."""
     db_path = Path(settings.db_dir) / "knowledge_graph.db"
 
-    entities = read_rows(db_path, "SELECT name, type, properties FROM entities ORDER BY type, name")
+    # Export reads the file as is: a database not yet migrated has no owner column.
+    owned = "user_id" in {row["name"] for row in read_rows(db_path, "PRAGMA table_info(entities)")}
+    entity_owner = "COALESCE(user_id, '')" if owned else "''"
+    relation_owner = "COALESCE(r.user_id, '')" if owned else "''"
+
+    entities = read_rows(
+        db_path,
+        f"SELECT {entity_owner} AS user_id, name, type, properties FROM entities ORDER BY user_id, type, name",
+    )
     entity_rows = [
-        {"name": row["name"], "type": row["type"], "properties": _json_or_empty(row["properties"])} for row in entities
+        {
+            "user_id": row["user_id"],
+            "name": row["name"],
+            "type": row["type"],
+            "properties": _json_or_empty(row["properties"]),
+        }
+        for row in entities
     ]
 
     relations = read_rows(
         db_path,
-        """
-        SELECT s.name AS source_name, s.type AS source_type,
+        f"""
+        SELECT {relation_owner} AS user_id,
+               s.name AS source_name, s.type AS source_type,
                t.name AS target_name, t.type AS target_type,
                r.relation_type, r.properties
         FROM relations r
         JOIN entities s ON s.id = r.source_id
         JOIN entities t ON t.id = r.target_id
-        ORDER BY s.type, s.name, r.relation_type, t.type, t.name
+        ORDER BY user_id, s.type, s.name, r.relation_type, t.type, t.name
         """,
     )
     relation_rows = [
         {
+            "user_id": row["user_id"],
             "source": {"name": row["source_name"], "type": row["source_type"]},
             "target": {"name": row["target_name"], "type": row["target_type"]},
             "relation_type": row["relation_type"],

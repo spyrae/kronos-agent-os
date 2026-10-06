@@ -158,6 +158,11 @@ def _import_facts(root: Path, report: ImportReport) -> None:
             fts.index_fact(content, user_id)
 
 
+def _bundle_owner(row: dict) -> str:
+    """Owner named by the bundle; ownerless rows land under the agent, like facts do."""
+    return str(row.get("user_id", "")).strip() or settings.agent_name
+
+
 def _import_graph(root: Path, report: ImportReport) -> None:
     """Upsert entities and relations; both stores are already UNIQUE-keyed."""
     entities = _read_jsonl(root / "memory" / "graph.entities.jsonl")
@@ -174,7 +179,7 @@ def _import_graph(root: Path, report: ImportReport) -> None:
             continue
         report.add("graph_entities")
         if not report.dry_run:
-            knowledge_graph.add_entity(name, entity_type, row.get("properties") or {})
+            knowledge_graph.add_entity(name, entity_type, row.get("properties") or {}, user_id=_bundle_owner(row))
 
     for row in relations:
         source, target = row.get("source") or {}, row.get("target") or {}
@@ -191,6 +196,7 @@ def _import_graph(root: Path, report: ImportReport) -> None:
                 str(target.get("type", "concept")),
                 relation_type,
                 row.get("properties") or {},
+                user_id=_bundle_owner(row),
             )
 
 

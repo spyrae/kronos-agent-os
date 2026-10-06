@@ -4,11 +4,16 @@ Stores entities (people, companies, projects, concepts) and
 relationships between them. Built incrementally from conversations.
 
 Schema:
-  entities: id, name, type, properties (JSON), created_at, updated_at
-  relations: id, source_id, target_id, relation_type, properties, created_at
+  entities: id, user_id, name, type, properties (JSON), created_at, updated_at
+  relations: id, user_id, source_id, target_id, relation_type, properties, created_at
 
 Entity types: person, company, project, concept, tool, location, event
 Relation types: knows, works_at, uses, owns, related_to, part_of, created
+
+Every row belongs to one user. Writes require the owner, reads return only the
+owner's rows, and an empty owner matches nothing. Rows created before owner
+scoping keep ``user_id IS NULL``: nobody reads them until an operator assigns
+them (see ``assign_legacy_rows``).
 
 All database access goes through SafeDB for thread-safe write serialization.
 """
@@ -46,7 +51,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             type TEXT NOT NULL,
             properties TEXT DEFAULT '{}',
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            user_id TEXT
         );
 
         CREATE TABLE IF NOT EXISTS relations (
@@ -55,32 +61,61 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             target_id INTEGER NOT NULL REFERENCES entities(id),
             relation_type TEXT NOT NULL,
             properties TEXT DEFAULT '{}',
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            user_id TEXT
         );
-
+    """)
+    _migrate_add_owner(conn)
+    conn.executescript("""
         CREATE INDEX IF NOT EXISTS idx_entity_name ON entities(name);
         CREATE INDEX IF NOT EXISTS idx_entity_type ON entities(type);
+        CREATE INDEX IF NOT EXISTS idx_entity_owner ON entities(user_id, updated_at);
         CREATE INDEX IF NOT EXISTS idx_relation_source ON relations(source_id);
         CREATE INDEX IF NOT EXISTS idx_relation_target ON relations(target_id);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_unique ON entities(name, type);
+        CREATE INDEX IF NOT EXISTS idx_relation_owner ON relations(user_id);
+        -- The same name may exist once per owner; ownerless legacy rows count as one owner.
+        DROP INDEX IF EXISTS idx_entity_unique;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_owner_unique
+            ON entities(COALESCE(user_id, ''), name, type);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_relation_unique
             ON relations(source_id, target_id, relation_type);
     """)
 
 
+def _migrate_add_owner(conn: sqlite3.Connection) -> None:
+    """Add the owner column. Existing rows stay NULL: their owner was never recorded."""
+    for table in ("entities", "relations"):
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if "user_id" not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN user_id TEXT")
+            log.info("Migration: added 'user_id' column to %s", table)
+
+
+def _write_owner(user_id: str) -> str:
+    owner = str(user_id or "").strip()
+    if not owner:
+        raise ValueError("knowledge graph writes require the owning user_id")
+    return owner
+
+
+def _read_owner(user_id: str) -> str:
+    return str(user_id or "").strip()
+
+
 # --- Entity operations ---
 
 
-def add_entity(name: str, entity_type: str, properties: dict | None = None) -> int:
-    """Add or update an entity. Returns entity ID."""
+def add_entity(name: str, entity_type: str, properties: dict | None = None, *, user_id: str) -> int:
+    """Add or update one of the owner's entities. Returns entity ID."""
+    owner = _write_owner(user_id)
     db = _get_db()
     now = datetime.now(UTC).isoformat()
     props = json.dumps(properties or {}, ensure_ascii=False)
 
     def _upsert(conn):
         existing = conn.execute(
-            "SELECT id FROM entities WHERE name = ? AND type = ?",
-            (name, entity_type),
+            "SELECT id FROM entities WHERE user_id = ? AND name = ? AND type = ?",
+            (owner, name, entity_type),
         ).fetchone()
 
         if existing:
@@ -91,26 +126,29 @@ def add_entity(name: str, entity_type: str, properties: dict | None = None) -> i
             return existing["id"]
 
         cursor = conn.execute(
-            "INSERT INTO entities (name, type, properties, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-            (name, entity_type, props, now, now),
+            "INSERT INTO entities (user_id, name, type, properties, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (owner, name, entity_type, props, now, now),
         )
         return cursor.lastrowid
 
     return db.write_tx(_upsert)
 
 
-def get_entity(name: str, entity_type: str | None = None) -> dict | None:
-    """Find entity by name (and optionally type)."""
+def get_entity(name: str, entity_type: str | None = None, *, user_id: str) -> dict | None:
+    """Find one of the owner's entities by name (and optionally type)."""
+    owner = _read_owner(user_id)
+    if not owner:
+        return None
     db = _get_db()
     if entity_type:
         row = db.read_one(
-            "SELECT * FROM entities WHERE name = ? AND type = ?",
-            (name, entity_type),
+            "SELECT * FROM entities WHERE user_id = ? AND name = ? AND type = ?",
+            (owner, name, entity_type),
         )
     else:
         row = db.read_one(
-            "SELECT * FROM entities WHERE name = ? ORDER BY updated_at DESC",
-            (name,),
+            "SELECT * FROM entities WHERE user_id = ? AND name = ? ORDER BY updated_at DESC",
+            (owner, name),
         )
 
     if not row:
@@ -126,18 +164,21 @@ def get_entity(name: str, entity_type: str | None = None) -> dict | None:
     }
 
 
-def search_entities(query: str, entity_type: str | None = None, limit: int = 10) -> list[dict]:
-    """Search entities by name (LIKE match)."""
+def search_entities(query: str, entity_type: str | None = None, limit: int = 10, *, user_id: str) -> list[dict]:
+    """Search the owner's entities by name (LIKE match)."""
+    owner = _read_owner(user_id)
+    if not owner:
+        return []
     db = _get_db()
     if entity_type:
         rows = db.read(
-            "SELECT * FROM entities WHERE name LIKE ? AND type = ? ORDER BY updated_at DESC LIMIT ?",
-            (f"%{query}%", entity_type, limit),
+            "SELECT * FROM entities WHERE user_id = ? AND name LIKE ? AND type = ? ORDER BY updated_at DESC LIMIT ?",
+            (owner, f"%{query}%", entity_type, limit),
         )
     else:
         rows = db.read(
-            "SELECT * FROM entities WHERE name LIKE ? ORDER BY updated_at DESC LIMIT ?",
-            (f"%{query}%", limit),
+            "SELECT * FROM entities WHERE user_id = ? AND name LIKE ? ORDER BY updated_at DESC LIMIT ?",
+            (owner, f"%{query}%", limit),
         )
 
     return [
@@ -161,10 +202,13 @@ def add_relation(
     target_type: str,
     relation_type: str,
     properties: dict | None = None,
+    *,
+    user_id: str,
 ) -> int:
-    """Add a relation between two entities (creates entities if needed)."""
-    source_id = add_entity(source_name, source_type)
-    target_id = add_entity(target_name, target_type)
+    """Add a relation between two of the owner's entities (creates them if needed)."""
+    owner = _write_owner(user_id)
+    source_id = add_entity(source_name, source_type, user_id=owner)
+    target_id = add_entity(target_name, target_type, user_id=owner)
 
     db = _get_db()
     now = datetime.now(UTC).isoformat()
@@ -184,36 +228,40 @@ def add_relation(
             return existing["id"]
 
         cursor = conn.execute(
-            "INSERT INTO relations (source_id, target_id, relation_type, properties, created_at) VALUES (?, ?, ?, ?, ?)",
-            (source_id, target_id, relation_type, props, now),
+            "INSERT INTO relations (user_id, source_id, target_id, relation_type, properties, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (owner, source_id, target_id, relation_type, props, now),
         )
         return cursor.lastrowid
 
     return db.write_tx(_upsert)
 
 
-def get_connections(entity_name: str, depth: int = 1) -> list[dict]:
-    """Get all connections for an entity (1 or 2 hops)."""
-    db = _get_db()
-    entity = get_entity(entity_name)
+def get_connections(entity_name: str, depth: int = 1, *, user_id: str) -> list[dict]:
+    """Get the owner's connections for one of their entities."""
+    owner = _read_owner(user_id)
+    entity = get_entity(entity_name, user_id=owner)
     if not entity:
         return []
+    db = _get_db()
 
     eid = entity["id"]
 
+    # Both the relation and the far entity must belong to the owner, so a
+    # corrupt cross-owner link can never surface another user's entity.
     rows = db.read(
         """
         SELECT e2.name, e2.type, r.relation_type, 'outgoing' as direction
         FROM relations r
         JOIN entities e2 ON e2.id = r.target_id
-        WHERE r.source_id = ?
+        WHERE r.source_id = ? AND r.user_id = ? AND e2.user_id = ?
         UNION ALL
         SELECT e2.name, e2.type, r.relation_type, 'incoming' as direction
         FROM relations r
         JOIN entities e2 ON e2.id = r.source_id
-        WHERE r.target_id = ?
+        WHERE r.target_id = ? AND r.user_id = ? AND e2.user_id = ?
         """,
-        (eid, eid),
+        (eid, owner, owner, eid, owner, owner),
     )
 
     return [
@@ -227,19 +275,19 @@ def get_connections(entity_name: str, depth: int = 1) -> list[dict]:
     ]
 
 
-def get_graph_context(query: str, limit: int = 5) -> str:
-    """Get knowledge graph context relevant to a query.
+def get_graph_context(query: str, limit: int = 5, *, user_id: str) -> str:
+    """Get the owner's knowledge graph context relevant to a query.
 
     Searches entities matching the query and returns their connections
     as a formatted string for LLM context injection.
     """
-    entities = search_entities(query, limit=limit)
+    entities = search_entities(query, limit=limit, user_id=user_id)
     if not entities:
         return ""
 
     parts = []
     for entity in entities:
-        connections = get_connections(entity["name"])
+        connections = get_connections(entity["name"], user_id=user_id)
         if connections:
             conn_text = ", ".join(f"{c['relation']}→{c['entity']}({c['entity_type']})" for c in connections[:5])
             parts.append(f"{entity['name']} ({entity['type']}): {conn_text}")
@@ -247,6 +295,61 @@ def get_graph_context(query: str, limit: int = 5) -> str:
             parts.append(f"{entity['name']} ({entity['type']})")
 
     return "\n".join(parts)
+
+
+def recent_entities(limit: int = 20) -> list[dict]:
+    """Operator view across owners: the most recently updated owned entities."""
+    rows = _get_db().read(
+        "SELECT name, type, user_id FROM entities WHERE user_id IS NOT NULL ORDER BY updated_at DESC LIMIT ?",
+        (limit,),
+    )
+    return [{"name": r["name"], "type": r["type"], "user_id": r["user_id"]} for r in rows]
+
+
+def legacy_row_counts() -> dict[str, int]:
+    """How many rows still have no recorded owner."""
+    db = _get_db()
+    return {
+        "entities": db.read_one("SELECT COUNT(*) AS cnt FROM entities WHERE user_id IS NULL")["cnt"],
+        "relations": db.read_one("SELECT COUNT(*) AS cnt FROM relations WHERE user_id IS NULL")["cnt"],
+    }
+
+
+def assign_legacy_rows(user_id: str) -> dict[str, int]:
+    """Operator decision: hand ownerless rows to ``user_id``.
+
+    Never called by the runtime. An entity the owner already has under the same
+    name and type stays ownerless rather than being merged or deleted, and a
+    relation moves only when both of its entities now belong to the owner.
+    """
+    owner = _write_owner(user_id)
+
+    def _assign(conn):
+        entities = conn.execute(
+            """
+            UPDATE entities SET user_id = ?
+            WHERE user_id IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM entities mine
+                  WHERE mine.user_id = ? AND mine.name = entities.name AND mine.type = entities.type
+              )
+            """,
+            (owner, owner),
+        ).rowcount
+        relations = conn.execute(
+            """
+            UPDATE relations SET user_id = ?
+            WHERE user_id IS NULL
+              AND (SELECT user_id FROM entities WHERE id = relations.source_id) = ?
+              AND (SELECT user_id FROM entities WHERE id = relations.target_id) = ?
+            """,
+            (owner, owner, owner),
+        ).rowcount
+        return {"entities": entities, "relations": relations}
+
+    assigned = _get_db().write_tx(_assign)
+    log.info("Assigned %d legacy entities and %d relations to one owner", assigned["entities"], assigned["relations"])
+    return assigned
 
 
 def get_stats() -> dict:
