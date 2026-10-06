@@ -149,7 +149,12 @@ def collect() -> dict:
         # trialling users.
         active_subscriptions = _count("subscriptions", {"status": "eq.active"})
         trial_subscriptions = _count("subscriptions", {"status": "eq.trial"})
-        active_trials = _count("user_trials", {"status": "eq.active"})
+        # Nothing moves a trial out of "active" when it ends, so the status
+        # alone counted 166 trials on a day when 2 were still running.
+        now = datetime.now(UTC).isoformat()
+        active_trials = _count(
+            "user_trials", {"status": "eq.active", "ends_at": f"gt.{now}"}
+        )
 
         return {
             "total_users": total_users,
