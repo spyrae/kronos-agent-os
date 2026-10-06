@@ -37,6 +37,7 @@ from langchain_core.tools import tool
 
 from kronos.config import settings
 from kronos.health import STATUS_BROKEN, STATUS_OFF, STATUS_OK, HealthCheck
+from kronos.security.effects import mark_read_only
 from kronos.security.public_web import PublicWebBlockedError, PublicWebProxy, validate_public_url
 from kronos.security.untrusted import frame_external, mark_untrusted
 
@@ -547,4 +548,7 @@ def _parse_json_object(raw: str) -> dict | None:
 
 # Both read the outside world, so both are untrusted; neither changes anything,
 # so both may run in the engine's parallel batch.
-ACQUIRE_TOOLS = mark_untrusted([fetch_page, extract_structured], reason="web content")
+# Fetching a public page and extracting fields from it mutate nothing.
+ACQUIRE_TOOLS = mark_read_only(
+    mark_untrusted([fetch_page, extract_structured], reason="web content"), reason="web reads"
+)

@@ -5,6 +5,7 @@ import logging
 from langchain_core.tools import tool
 
 from kronos.config import settings
+from kronos.security.effects import mark_read_only, mark_side_effect
 from kronos.tools.dynamic import TOOLS_DIR, create_tool
 
 log = logging.getLogger("kronos.tools.dynamic_tools")
@@ -52,6 +53,11 @@ def list_dynamic_tools() -> str:
         lines.append(f"  - {name}: {first_line}")
 
     return "\n".join(lines)
+
+
+# Creating a tool writes generated code to disk; listing only reads it.
+mark_side_effect([create_new_tool], reason="dynamic tool creation")
+mark_read_only([list_dynamic_tools], reason="dynamic tool listing")
 
 
 def get_dynamic_management_tools() -> list:

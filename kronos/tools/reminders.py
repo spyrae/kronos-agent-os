@@ -13,7 +13,7 @@ from langchain_core.tools import tool
 from kronos import scheduled_tasks
 from kronos.audit import get_tool_audit_context
 from kronos.config import settings
-from kronos.security.effects import mark_side_effect
+from kronos.security.effects import mark_read_only, mark_side_effect
 
 
 def _recur_name(recur_seconds: int) -> str:
@@ -149,3 +149,4 @@ def cancel_scheduled_task(task_id: int) -> str:
 # Re-running a turn must not repeat these: a duplicate reminder, handoff or MCP
 # mutation is a visible bug, not a harmless retry.
 mark_side_effect([schedule_task, schedule_followup, cancel_scheduled_task], reason="scheduling")
+mark_read_only([list_scheduled_tasks], reason="schedule listing")

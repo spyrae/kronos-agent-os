@@ -18,7 +18,7 @@ from langchain_core.tools import tool
 from kronos import plan_conditions, plans
 from kronos.audit import get_tool_audit_context
 from kronos.config import settings
-from kronos.security.effects import mark_side_effect
+from kronos.security.effects import mark_read_only, mark_side_effect
 
 log = logging.getLogger("kronos.tools.plans")
 
@@ -234,4 +234,6 @@ def plan_cancel(plan_id: int, reason: str = "") -> str:
 # Declaring a plan schedules future model calls and future page fetches, which is
 # an effect outside this turn — durable resume must not replay it and create the
 # plan twice.
-PLAN_TOOLS = mark_side_effect([plan_start, plan_add_step, plan_cancel], reason="plans") + [plan_status]
+PLAN_TOOLS = mark_side_effect([plan_start, plan_add_step, plan_cancel], reason="plans") + mark_read_only(
+    [plan_status], reason="plan status"
+)

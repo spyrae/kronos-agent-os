@@ -22,6 +22,7 @@ from langchain_core.tools import tool
 
 from kronos import repos
 from kronos.audit import redact_secrets
+from kronos.security.effects import mark_read_only
 from kronos.security.untrusted import mark_untrusted
 
 log = logging.getLogger("kronos.tools.repo")
@@ -216,7 +217,10 @@ async def repo_diff(repo: str, ref: str = "", path: str = "") -> str:
 # A repository is text other people wrote. A comment, a README or a commit
 # message is as good a place to hide an instruction as a web page, so the same
 # untrusted framing applies.
-REPO_TOOLS = mark_untrusted(
-    [repo_list, repo_tree, repo_read, repo_search, repo_history, repo_diff],
-    reason="repository contents",
+REPO_TOOLS = mark_read_only(
+    mark_untrusted(
+        [repo_list, repo_tree, repo_read, repo_search, repo_history, repo_diff],
+        reason="repository contents",
+    ),
+    reason="repository reads",
 )

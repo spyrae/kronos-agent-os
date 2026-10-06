@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 from langchain_core.tools import tool
 
 from kronos import accounts
+from kronos.security.effects import mark_read_only
 from kronos.security.untrusted import mark_untrusted
 
 log = logging.getLogger("kronos.tools.accounts")
@@ -270,4 +271,9 @@ def _ago(timestamp: float) -> str:
 # Reading a site as the owner returns the site's content, which is untrusted like
 # any other page. None of these change anything by themselves, so they may run in
 # the engine's parallel batch.
-ACCOUNT_TOOLS = mark_untrusted([list_site_accounts, open_site_session, check_site_action], reason="site sessions")
+# Opening the saved session only reads: the agent cannot log in, and anything
+# that leaves a trace under the owner's name goes through a gated browser action.
+ACCOUNT_TOOLS = mark_read_only(
+    mark_untrusted([list_site_accounts, open_site_session, check_site_action], reason="site sessions"),
+    reason="site session reads",
+)

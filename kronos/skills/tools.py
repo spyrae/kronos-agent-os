@@ -8,6 +8,7 @@ import logging
 
 from langchain_core.tools import tool
 
+from kronos.security.effects import mark_read_only, mark_side_effect
 from kronos.skills.store import SkillStore
 
 log = logging.getLogger("kronos.skills.tools")
@@ -128,3 +129,7 @@ def import_skill_from_source(source: str) -> str:
 # reads as a complete one.
 for _skill_tool in (load_skill, load_skill_reference):
     _skill_tool.metadata = {**(_skill_tool.metadata or {}), "output_max_chars": 0}
+
+# Reading a skill changes nothing; approving or importing one does.
+mark_read_only([load_skill, load_skill_reference], reason="skill reads")
+mark_side_effect([approve_skill, import_skill_from_source], reason="skill store mutation")

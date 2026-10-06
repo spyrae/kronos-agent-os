@@ -286,11 +286,14 @@ def _build_dynamic_tool(name: str, code: str, spec: ToolFunctionSpec) -> BaseToo
     _sandboxed_wrapper.__name__ = spec.name
     _sandboxed_wrapper.__doc__ = spec.description
 
+    # Generated code is not reviewed line by line, so what it changes is
+    # unknown: treated as an effect, never replayed blindly on resume.
     return StructuredTool.from_function(
         coroutine=_sandboxed_wrapper,
         name=name,
         description=spec.description,
         args_schema=spec.args_schema,
+        metadata={"side_effect": True},
     )
 
 
