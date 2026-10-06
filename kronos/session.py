@@ -30,6 +30,7 @@ from kronos.migrations.v004_effect_protocol import migrate as migrate_effect_pro
 from kronos.migrations.v005_plan_execution import migrate_turns as migrate_caller_key
 from kronos.migrations.v008_turn_delivery import migrate as migrate_delivery
 from kronos.migrations.v009_turn_owner import migrate as migrate_turn_owner
+from kronos.migrations.v010_effect_reconciliations import migrate as migrate_effect_reconciliations
 from kronos.outcomes import InvocationOutcome, InvocationStatus
 from kronos.tool_history import trim_completed_history, unanswered_tool_calls
 from kronos.turn_delivery import RecoveryDestination, queue_approval, queue_result, suppress_approval
@@ -295,6 +296,7 @@ class SessionStore:
             await migrate_caller_key(db)
             await migrate_delivery(db)
             await migrate_turn_owner(db)
+            await migrate_effect_reconciliations(db)
             self._initialized = True
 
     async def begin_turn(
@@ -908,6 +910,150 @@ class SessionStore:
             except BaseException:
                 await db.rollback()
                 raise
+
+    async def pending_effects(self) -> list[dict]:
+        """Operator queue: every effect that was dispatched without a recorded outcome."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                """SELECT i.idempotency_key, i.turn_id, t.thread_id, t.status, i.tool, i.args_json, i.created_at
+                   FROM effect_intents i JOIN active_turns t ON t.turn_id = i.turn_id
+                   WHERE i.status = 'pending' ORDER BY i.created_at, i.idempotency_key"""
+            )
+            rows = await cursor.fetchall()
+        return [
+            {
+                "idempotency_key": row[0],
+                "turn_id": row[1],
+                "thread_id": row[2],
+                "turn_status": row[3],
+                "tool": row[4],
+                "args": _safe_json(row[5]),
+                "created_at": str(row[6]),
+            }
+            for row in rows
+        ]
+
+    async def reconcile_effect(
+        self,
+        key: str,
+        *,
+        outcome: str,
+        operator: str,
+        ownership: TurnOwnership,
+        result: str = "",
+        note: str = "",
+    ) -> dict:
+        """Record an operator's verified outcome for an unresolved effect.
+
+        The runtime never decides this: it dispatched the call and lost the
+        answer. ``ownership`` proves no cooperative executor is still running
+        the conversation. The verdict is kept in ``effect_reconciliations``.
+
+        - ``happened``: the stated result becomes the recorded effect, so a
+          later continuation reuses it instead of dispatching again.
+        - ``did_not_happen``: the intent is released; a continuation may
+          dispatch the call again through the normal guards.
+        - ``unknown``: the uncertainty is accepted, the intent is released and
+          a still-active turn is failed rather than continued.
+
+        A turn that already failed stays failed: reconciliation records the
+        truth, it does not replay a turn the user was told had stopped.
+        """
+        if outcome not in {"happened", "did_not_happen", "unknown"}:
+            raise ValueError("outcome must be happened, did_not_happen or unknown")
+        operator = operator.strip()
+        if not operator:
+            raise ValueError("reconciliation requires the operator's name")
+        if outcome == "happened" and not result.strip():
+            raise ValueError("a 'happened' verdict needs the verified result")
+
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    """SELECT i.turn_id, i.tool, i.tool_call_id, i.args_json, i.args_fingerprint, i.created_at,
+                              t.thread_id, t.status
+                       FROM effect_intents i JOIN active_turns t ON t.turn_id = i.turn_id
+                       WHERE i.idempotency_key = ? AND i.status = 'pending'""",
+                    (key,),
+                )
+                intent = await cursor.fetchone()
+                if not intent:
+                    raise DurableStateError("no unresolved effect with this key")
+                turn_id, tool, call_id, args_json, fingerprint, created_at, thread_id, turn_status = intent
+                ownership.assert_held(self.db_path, thread_id)
+
+                stored_result = f"[RECONCILED BY OPERATOR] {result.strip()}" if outcome == "happened" else ""
+                await db.execute(
+                    """INSERT INTO effect_reconciliations
+                           (idempotency_key, turn_id, tool, tool_call_id, args_json, args_fingerprint,
+                            intent_created_at, outcome, result, operator, note)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        key,
+                        turn_id,
+                        tool,
+                        call_id,
+                        args_json,
+                        fingerprint,
+                        created_at,
+                        outcome,
+                        stored_result,
+                        operator,
+                        note,
+                    ),
+                )
+                if outcome == "happened":
+                    await db.execute(
+                        """UPDATE effect_intents SET status = 'recorded', completed_at = CURRENT_TIMESTAMP
+                           WHERE idempotency_key = ? AND status = 'pending'""",
+                        (key,),
+                    )
+                    await db.execute(
+                        "INSERT INTO external_effects (idempotency_key, turn_id, tool, result) VALUES (?, ?, ?, ?)",
+                        (key, turn_id, tool, stored_result),
+                    )
+                else:
+                    # The full intent now lives in effect_reconciliations.
+                    await db.execute(
+                        "DELETE FROM effect_intents WHERE idempotency_key = ? AND status = 'pending'", (key,)
+                    )
+                failed_turn = False
+                if outcome == "unknown" and turn_status in {"running", "resuming", "waiting_approval"}:
+                    await db.execute(
+                        """UPDATE active_turns SET status = 'failed', completed_at = CURRENT_TIMESTAMP, error = ?
+                           WHERE turn_id = ?""",
+                        ("operator accepted an unknown effect outcome; turn not continued", turn_id),
+                    )
+                    await queue_result(db, turn_id, None, failed=True)
+                    failed_turn = True
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
+        return {
+            "idempotency_key": key,
+            "turn_id": turn_id,
+            "thread_id": thread_id,
+            "tool": tool,
+            "outcome": outcome,
+            "turn_status": "failed" if failed_turn else turn_status,
+        }
+
+    async def effect_reconciliations(self, turn_id: str) -> list[dict]:
+        """Operator verdicts recorded for one turn, oldest first."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                """SELECT idempotency_key, tool, outcome, result, operator, note, reconciled_at
+                   FROM effect_reconciliations WHERE turn_id = ? ORDER BY id""",
+                (turn_id,),
+            )
+            rows = await cursor.fetchall()
+        keys = ("idempotency_key", "tool", "outcome", "result", "operator", "note", "reconciled_at")
+        return [dict(zip(keys, row, strict=True)) for row in rows]
 
     async def assert_turn_effects_settled(self, turn_id: str) -> None:
         """Reject automatic continuation when an earlier dispatch is unresolved."""
