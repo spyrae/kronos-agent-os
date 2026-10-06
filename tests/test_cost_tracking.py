@@ -20,6 +20,15 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
 
+def _recorded(session_key: str) -> float:
+    """Recorded spend only; a hold left behind would be an accounting bug."""
+    from kronos.swarm_store import get_swarm as _swarm
+
+    assert _swarm().budget_holds() == {"held": 0.0, "unknown": 0.0}
+    return _swarm().session_cost(session_key, include_holds=False)
+
+
+
 @pytest.fixture
 def cost_env(tmp_path, monkeypatch):
     """Isolated swarm ledger + fresh guardian/handler singletons per test."""
@@ -137,7 +146,6 @@ def test_handler_estimates_when_provider_reports_no_usage(cost_env):
 
 def test_record_llm_cost_updates_swarm_and_session(cost_env):
     from kronos.audit import reset_tool_audit_context, set_tool_audit_context
-    from kronos.security.cost_guardian import get_guardian
     from kronos.security.cost_tracking import record_llm_cost
     from kronos.swarm_store import get_swarm
 
@@ -148,19 +156,18 @@ def test_record_llm_cost_updates_swarm_and_session(cost_env):
         reset_tool_audit_context(token)
 
     assert get_swarm().daily_cost()["cost_usd"] == pytest.approx(0.27)
-    assert get_guardian()._session_costs["12345"] == pytest.approx(0.27)
+    assert _recorded("12345") == pytest.approx(0.27)
 
 
 def test_record_llm_cost_without_session_still_logs_daily(cost_env):
     """No session in context (e.g. cron/digest) → daily ledger still updated."""
-    from kronos.security.cost_guardian import get_guardian
     from kronos.security.cost_tracking import record_llm_cost
     from kronos.swarm_store import get_swarm
 
     record_llm_cost("deepseek-chat", 0, 1_000_000, 1.10)  # no audit context set
 
     assert get_swarm().daily_cost()["cost_usd"] == pytest.approx(1.10)
-    assert get_guardian()._session_costs == {}
+    assert get_swarm().session_keys() == set()
 
 
 # --------------------------------------------------------------------------
@@ -222,7 +229,6 @@ async def test_callback_records_through_model_ainvoke(cost_env):
     from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 
     from kronos.audit import reset_tool_audit_context, set_tool_audit_context
-    from kronos.security.cost_guardian import get_guardian
     from kronos.security.cost_tracking import get_cost_callbacks
     from kronos.swarm_store import get_swarm
 
@@ -242,4 +248,4 @@ async def test_callback_records_through_model_ainvoke(cost_env):
 
     # Cost reached BOTH ledgers → session_id propagated into on_llm_end.
     assert get_swarm().daily_cost()["cost_usd"] > 0
-    assert get_guardian()._session_costs.get("chat-1", 0) > 0
+    assert _recorded("chat-1") > 0

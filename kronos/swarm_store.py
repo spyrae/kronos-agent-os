@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+import uuid
 from dataclasses import dataclass
 
 from kronos.db import get_db
@@ -322,6 +323,30 @@ def _schema(conn) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_memory_requests_intake
             ON memory_requests(to_agent, state, created_at);
+
+        -- Per-day, per-conversation spend. Durable and shared, so the session
+        -- cap survives a restart and cannot be reset by one.
+        CREATE TABLE IF NOT EXISTS session_costs (
+            session_key TEXT NOT NULL,
+            day TEXT NOT NULL,
+            cost_usd REAL NOT NULL DEFAULT 0,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (session_key, day)
+        );
+
+        -- Money promised to a model call that has not reported its cost yet.
+        -- Counted against the limits until the call is recorded; a call whose
+        -- outcome was never learned keeps its hold for the rest of the day.
+        CREATE TABLE IF NOT EXISTS budget_holds (
+            id TEXT PRIMARY KEY,
+            day TEXT NOT NULL,
+            session_key TEXT NOT NULL,
+            agent TEXT NOT NULL,
+            amount_usd REAL NOT NULL,
+            state TEXT NOT NULL DEFAULT 'held' CHECK (state IN ('held', 'unknown')),
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_budget_holds_day ON budget_holds(day, session_key);
 
         -- Per-day, per-agent cost ledger. All six agents write here so the
         -- daily budget is swarm-wide: one agent can't quietly burn the whole
@@ -1242,6 +1267,157 @@ class SwarmStore:
             """,
             (bucket, agent, int(input_tokens), int(output_tokens), float(cost_usd), time.time()),
         )
+
+    @staticmethod
+    def _today() -> str:
+        return time.strftime("%Y-%m-%d", time.gmtime())
+
+    def reserve_budget(
+        self,
+        *,
+        session_key: str,
+        agent: str,
+        estimate_usd: float,
+        daily_limit: float,
+        session_limit: float,
+    ) -> tuple[str, str]:
+        """Atomically admit one model call against recorded spend plus open holds.
+
+        Returns ``(hold_id, "")`` or ``("", reason)``. The check and the hold
+        share one transaction, so concurrent calls in any agent process cannot
+        each see the same remaining budget and all pass.
+        """
+        day = self._today()
+        hold_id = uuid.uuid4().hex
+
+        def _reserve(conn) -> tuple[str, str]:
+            # Holds from past days no longer affect any limit; keep a week as evidence.
+            conn.execute("DELETE FROM budget_holds WHERE day < date(?, '-7 days')", (day,))
+            spent = conn.execute(
+                "SELECT COALESCE(SUM(cost_usd), 0) FROM swarm_costs WHERE day = ?", (day,)
+            ).fetchone()[0]
+            held = conn.execute(
+                "SELECT COALESCE(SUM(amount_usd), 0) FROM budget_holds WHERE day = ?", (day,)
+            ).fetchone()[0]
+            if spent + held + estimate_usd > daily_limit:
+                return "", (
+                    f"Daily cost limit reached: ${spent:.2f} spent + ${held:.2f} in flight / ${daily_limit:.2f}. "
+                    "Reset at midnight UTC."
+                )
+            if session_key:
+                session_spent = conn.execute(
+                    "SELECT COALESCE(SUM(cost_usd), 0) FROM session_costs WHERE session_key = ? AND day = ?",
+                    (session_key, day),
+                ).fetchone()[0]
+                session_held = conn.execute(
+                    "SELECT COALESCE(SUM(amount_usd), 0) FROM budget_holds WHERE session_key = ? AND day = ?",
+                    (session_key, day),
+                ).fetchone()[0]
+                if session_spent + session_held + estimate_usd > session_limit:
+                    return "", (
+                        f"Session cost limit reached: ${session_spent:.2f} spent + ${session_held:.2f} in flight "
+                        f"/ ${session_limit:.2f}. Resets at midnight UTC."
+                    )
+            conn.execute(
+                "INSERT INTO budget_holds (id, day, session_key, agent, amount_usd, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (hold_id, day, session_key, agent, float(estimate_usd), time.time()),
+            )
+            return hold_id, ""
+
+        return self._db.write_tx(_reserve)
+
+    def settle_cost(
+        self,
+        *,
+        agent: str,
+        session_key: str,
+        cost_usd: float,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        hold_id: str = "",
+    ) -> None:
+        """Record a call's actual cost and drop its hold in one transaction.
+
+        If this fails, the hold stays: the money is still counted, never lost.
+        """
+        day = self._today()
+        now = time.time()
+
+        def _settle(conn) -> None:
+            conn.execute(
+                """
+                INSERT INTO swarm_costs
+                    (day, agent, requests, input_tokens, output_tokens, cost_usd, updated_at)
+                VALUES (?, ?, 1, ?, ?, ?, ?)
+                ON CONFLICT(day, agent) DO UPDATE SET
+                    requests = requests + 1,
+                    input_tokens = input_tokens + excluded.input_tokens,
+                    output_tokens = output_tokens + excluded.output_tokens,
+                    cost_usd = cost_usd + excluded.cost_usd,
+                    updated_at = excluded.updated_at
+                """,
+                (day, agent, int(input_tokens), int(output_tokens), float(cost_usd), now),
+            )
+            if session_key:
+                conn.execute(
+                    """
+                    INSERT INTO session_costs (session_key, day, cost_usd, updated_at) VALUES (?, ?, ?, ?)
+                    ON CONFLICT(session_key, day) DO UPDATE SET
+                        cost_usd = cost_usd + excluded.cost_usd, updated_at = excluded.updated_at
+                    """,
+                    (session_key, day, float(cost_usd), now),
+                )
+            if hold_id:
+                conn.execute("DELETE FROM budget_holds WHERE id = ?", (hold_id,))
+
+        self._db.write_tx(_settle)
+
+    def add_session_cost(self, session_key: str, cost_usd: float) -> None:
+        """Add spend to a conversation's durable daily total."""
+        now = time.time()
+        self._db.write(
+            """
+            INSERT INTO session_costs (session_key, day, cost_usd, updated_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT(session_key, day) DO UPDATE SET
+                cost_usd = cost_usd + excluded.cost_usd, updated_at = excluded.updated_at
+            """,
+            (session_key, self._today(), float(cost_usd), now),
+        )
+
+    def release_budget_hold(self, hold_id: str) -> None:
+        """Drop a hold for a call that verifiably cost nothing."""
+        self._db.write("DELETE FROM budget_holds WHERE id = ?", (hold_id,))
+
+    def mark_budget_hold_unknown(self, hold_id: str) -> None:
+        """Keep counting a call whose billing outcome was never learned."""
+        self._db.write("UPDATE budget_holds SET state = 'unknown' WHERE id = ? AND state = 'held'", (hold_id,))
+
+    def session_cost(self, session_key: str, *, include_holds: bool = True) -> float:
+        """Today's recorded spend for one conversation, by default plus its open holds."""
+        day = self._today()
+        row = self._db.read_one(
+            """SELECT
+                 (SELECT COALESCE(SUM(cost_usd), 0) FROM session_costs WHERE session_key = ? AND day = ?) AS spent,
+                 (SELECT COALESCE(SUM(amount_usd), 0) FROM budget_holds WHERE session_key = ? AND day = ?) AS held""",
+            (session_key, day, session_key, day),
+        )
+        if not row:
+            return 0.0
+        return float(row["spent"]) + (float(row["held"]) if include_holds else 0.0)
+
+    def session_keys(self) -> set[str]:
+        """Conversations with recorded spend today."""
+        rows = self._db.read("SELECT session_key FROM session_costs WHERE day = ?", (self._today(),))
+        return {row["session_key"] for row in rows}
+
+    def budget_holds(self, day: str = "") -> dict[str, float]:
+        """Open holds for a day by state, for status and reconciliation."""
+        rows = self._db.read(
+            "SELECT state, COALESCE(SUM(amount_usd), 0) AS total FROM budget_holds WHERE day = ? GROUP BY state",
+            (day or self._today(),),
+        )
+        totals = {row["state"]: float(row["total"]) for row in rows}
+        return {"held": totals.get("held", 0.0), "unknown": totals.get("unknown", 0.0)}
 
     def daily_cost(self, day: str = "") -> dict:
         """Swarm-wide cost totals for a day (default: today), summed over agents."""

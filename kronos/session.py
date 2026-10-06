@@ -32,6 +32,7 @@ from kronos.migrations.v008_turn_delivery import migrate as migrate_delivery
 from kronos.migrations.v009_turn_owner import migrate as migrate_turn_owner
 from kronos.migrations.v010_effect_reconciliations import migrate as migrate_effect_reconciliations
 from kronos.migrations.v011_reply_state import migrate as migrate_reply_state
+from kronos.migrations.v012_turn_budget_session import migrate as migrate_budget_session
 from kronos.outcomes import InvocationOutcome, InvocationStatus
 from kronos.tool_history import trim_completed_history, unanswered_tool_calls
 from kronos.turn_delivery import RecoveryDestination, queue_approval, queue_result, suppress_approval
@@ -299,6 +300,7 @@ class SessionStore:
             await migrate_turn_owner(db)
             await migrate_effect_reconciliations(db)
             await migrate_reply_state(db)
+            await migrate_budget_session(db)
             self._initialized = True
 
     async def begin_turn(
@@ -310,8 +312,12 @@ class SessionStore:
         recovery_destination: RecoveryDestination | None = None,
         user_id: str = "",
         reply_owed: bool = False,
+        budget_session: str = "",
     ) -> str:
         """Open a turn, recording the caller's immutable correlation atomically.
+
+        ``budget_session`` is the conversation this turn's model calls are
+        charged to; approval and resume charge the same one.
 
         ``user_id`` is the transport-verified owner; resume and approval read it
         back instead of trusting whoever triggers the continuation.
@@ -329,8 +335,8 @@ class SessionStore:
                 """
                 INSERT INTO active_turns
                     (turn_id, thread_id, status, input_message, effect_protocol, caller_key,
-                     recovery_destination, user_id, reply_state)
-                VALUES (?, ?, 'running', ?, 1, ?, ?, ?, ?)
+                     recovery_destination, user_id, reply_state, budget_session)
+                VALUES (?, ?, 'running', ?, 1, ?, ?, ?, ?, ?)
                 """,
                 (
                     turn_id,
@@ -340,6 +346,7 @@ class SessionStore:
                     recovery_destination.encode() if recovery_destination else "",
                     str(user_id or "").strip(),
                     "owed" if reply_owed and recovery_destination else "",
+                    str(budget_session or ""),
                 ),
             )
             await db.commit()
@@ -393,6 +400,14 @@ class SessionStore:
         if rows:
             log.warning("Adopted %d finished answer(s) whose delivery was never confirmed", len(rows))
         return len(rows)
+
+    async def turn_budget_session(self, turn_id: str, thread_id: str) -> str:
+        """Conversation the turn is charged to; legacy turns use their thread."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute("SELECT budget_session FROM active_turns WHERE turn_id = ?", (turn_id,))
+            row = await cursor.fetchone()
+        return str(row[0]) if row and row[0] else thread_id
 
     async def turn_owner(self, turn_id: str) -> str:
         """Owner recorded at begin_turn; empty for legacy or unknown turns."""

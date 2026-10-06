@@ -23,6 +23,15 @@ from tests.test_cost_tracking import cost_env  # noqa: F401
 from tests.test_model_budget import models  # noqa: F401
 
 
+def _recorded(session_key: str) -> float:
+    """Recorded spend only; a hold left behind would be an accounting bug."""
+    from kronos.swarm_store import get_swarm as _swarm
+
+    assert _swarm().budget_holds() == {"held": 0.0, "unknown": 0.0}
+    return _swarm().session_cost(session_key, include_holds=False)
+
+
+
 @pytest.fixture
 def direct(request, monkeypatch):
     fixture = request.getfixturevalue("models")
@@ -286,7 +295,7 @@ async def test_pre_agent_vision_uses_the_same_chat_budget_and_restores_context(d
         assert get_tool_audit_context()["session_id"] == "771"
         assert get_tool_audit_context()["thread_id"] == "771:8"
         await vision.analyze_image_bytes(b"fake-image")
-    assert get_guardian()._session_costs["771"] > 0
+    assert _recorded("771") > 0
     get_guardian().record_cost("771", 1.1)
     with (
         media_cost_scope(chat_id=771, topic_id=8, user_id=123),

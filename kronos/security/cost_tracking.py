@@ -173,34 +173,31 @@ def record_llm_cost(
 
     Agent and session come from the per-request audit context (set around the
     model loop in ``graph.ainvoke``); the swarm write always has the agent
-    (falls back to ``settings.agent_name``), the session tally only fires when
-    a ``session_id`` is present. Both writes are best-effort.
+    (falls back to ``settings.agent_name``), the session total only when the
+    context names a conversation.
     """
     if isinstance(cost_usd, bool) or not math.isfinite(cost_usd) or cost_usd < 0:
         raise ValueError("cost must be finite and non-negative")
+    from kronos.security.model_budget import budget_session_key, current_hold
+
     context = get_tool_audit_context()
     agent = context.get("agent") or settings.agent_name
-    session_id = context.get("session_id") or context.get("thread_id", "")
 
+    # One transaction: the day's total, the conversation's total and the end of
+    # this call's hold. If it fails, the hold stays and the money stays counted.
     try:
         from kronos.swarm_store import get_swarm
 
-        get_swarm().add_cost(
+        get_swarm().settle_cost(
             agent=agent,
+            session_key=budget_session_key(context),
             cost_usd=cost_usd,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            hold_id=current_hold(),
         )
-    except Exception as e:  # pragma: no cover - defensive
-        log.debug("Swarm cost ledger write failed: %s", e)
-
-    if session_id:
-        try:
-            from kronos.security.cost_guardian import get_guardian
-
-            get_guardian().record_cost(session_id, cost_usd)
-        except Exception as e:  # pragma: no cover - defensive
-            log.debug("Guardian session cost record failed: %s", e)
+    except Exception as e:
+        log.warning("Cost ledger write failed; the call's hold stays counted: %s", type(e).__name__)
 
 
 class CostTrackingCallbackHandler(BaseCallbackHandler):

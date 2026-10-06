@@ -564,7 +564,8 @@ class KronosAgent:
             agent=settings.agent_name,
             thread_id=thread_id,
             user_id=decided_by,
-            session_id=thread_id,
+            # Charged to the conversation that started the turn, as before the pause.
+            session_id=await self._session_store.turn_budget_session(turn_id, thread_id),
             source_kind="approval_callback",
         )
         try:
@@ -691,7 +692,7 @@ class KronosAgent:
         audit_token = set_tool_audit_context(
             agent=settings.agent_name,
             thread_id=thread_id,
-            session_id=thread_id,
+            session_id=await self._session_store.turn_budget_session(turn_id, thread_id),
             source_kind="durable_resume",
         )
         owner = await self._session_store.turn_owner(turn_id)
@@ -1079,6 +1080,7 @@ class KronosAgent:
                 recovery_destination=recovery_destination,
                 user_id=user_id,
                 reply_owed=reply_owed,
+                budget_session=session_id or thread_id,
             )
             if on_turn_started is not None:
                 try:
