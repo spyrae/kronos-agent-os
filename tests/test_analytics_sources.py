@@ -41,27 +41,59 @@ def test_supabase_active_trials_exclude_ended_trials(monkeypatch) -> None:
     assert trial_filters[0]["ends_at"].startswith("gt.")
 
 
-def test_langfuse_separates_own_exposure_probe_from_other_unauthenticated(monkeypatch) -> None:
-    def rejected(route: str) -> dict:
-        return {
-            "statusMessage": "No api key passed in.",
-            "level": "ERROR",
-            "metadata": {"user_api_key_request_route": route},
-        }
-
-    observations = [rejected("/v1/models")] * 3 + [rejected("/azure/.env")]
-
+def _collect_langfuse(monkeypatch, observations: list[dict]) -> dict:
     def fake_api_get(path, params=None):
         if path == "/traces":
-            return {"meta": {"totalItems": 4}}
+            return {"meta": {"totalItems": len(observations)}}
         return {"data": observations, "meta": {"totalItems": len(observations)}}
 
     monkeypatch.setattr(langfuse_stats.settings, "langfuse_public_key", "public")
     monkeypatch.setattr(langfuse_stats.settings, "langfuse_secret_key", "secret")
     monkeypatch.setattr(langfuse_stats, "_api_get", fake_api_get)
+    return langfuse_stats.collect()
 
-    result = langfuse_stats.collect()
+
+def _keyless(route: str, start_time: str | None) -> dict:
+    observation = {
+        "statusMessage": "No api key passed in.",
+        "level": "ERROR",
+        "metadata": {"user_api_key_request_route": route},
+    }
+    if start_time is not None:
+        observation["startTime"] = start_time
+    return observation
+
+
+def test_langfuse_separates_own_exposure_probe_from_other_unauthenticated(monkeypatch) -> None:
+    result = _collect_langfuse(
+        monkeypatch,
+        [
+            _keyless("/v1/models", "2026-10-06T05:00:02.000Z"),
+            _keyless("/v1/models", "2026-10-06T05:00:03.000Z"),
+            _keyless("/v1/models", "2026-10-06T06:00:02.000Z"),
+            _keyless("/azure/.env", "2026-10-06T06:10:00.000Z"),
+        ],
+    )
 
     assert result["exposure_probe_requests"] == 3
     assert result["unauthenticated_requests"] == 1
     assert result["error_rate_pct"] == 0
+
+
+def test_langfuse_flags_keyless_probe_route_requests_beyond_the_probe_footprint(monkeypatch) -> None:
+    # The route is chosen by the sender, so it cannot excuse unlimited traffic:
+    # only what the hourly probe itself produces is written off.
+    result = _collect_langfuse(
+        monkeypatch,
+        [_keyless("/v1/models", f"2026-10-06T05:{minute:02d}:00.000Z") for minute in range(7)],
+    )
+
+    assert result["exposure_probe_requests"] == 2
+    assert result["unauthenticated_requests"] == 5
+
+
+def test_langfuse_flags_probe_route_request_without_a_timestamp(monkeypatch) -> None:
+    result = _collect_langfuse(monkeypatch, [_keyless("/v1/models", None)])
+
+    assert result["exposure_probe_requests"] == 0
+    assert result["unauthenticated_requests"] == 1
