@@ -1,5 +1,6 @@
 """Memory API — inspect and manage KAOS memory stores."""
 
+import asyncio
 import json
 import logging
 import sqlite3
@@ -11,6 +12,8 @@ from pydantic import BaseModel
 from dashboard.auth import verify_token
 from kronos.config import settings
 from kronos.memory import fts
+from kronos.memory.reset import SCOPES, forget_fact
+from kronos.memory.reset import reset_memory as run_memory_reset
 from kronos.memory.store import add_memories, get_all_memories, get_memory, search_memories
 
 router = APIRouter(prefix="/api/memory", tags=["memory"], dependencies=[Depends(verify_token)])
@@ -339,9 +342,14 @@ async def delete_memory_record(record_id: str):
     prefix, raw_id = record_id.split(":", 1)
     deleted = 0
     if prefix == "fts":
-        db_path = Path(settings.db_dir) / "memory_fts.db"
-        deleted += _sqlite_exec(db_path, "DELETE FROM memory_fts WHERE rowid = ?", (raw_id,))
-        deleted += _sqlite_exec(db_path, "DELETE FROM memory_facts WHERE id = ?", (raw_id,))
+        # The same fact also lives in Mem0 and, mirrored, in shared facts.
+        if not raw_id.isdecimal():
+            raise HTTPException(400, "fts record id must be numeric")
+        try:
+            deleted += sum((await asyncio.to_thread(forget_fact, int(raw_id))).values())
+        except Exception as error:
+            log.error("Memory record delete incomplete: %s", type(error).__name__)
+            raise HTTPException(500, "memory record could not be deleted from every store") from error
     elif prefix == "shared":
         deleted += _sqlite_exec(Path(settings.swarm_db_path), "DELETE FROM shared_user_facts WHERE id = ?", (raw_id,))
     elif prefix == "entity":
@@ -363,34 +371,28 @@ async def delete_memory_record(record_id: str):
 class ResetMemory(BaseModel):
     scope: str
     confirm: bool = False
+    user_id: str = ""
 
 
 @router.post("/reset")
 async def reset_memory(body: ResetMemory):
-    """Reset a memory store. Requires explicit confirmation."""
+    """Reset memory for one user, or for everyone when user_id is empty.
+
+    Covers this agent's stores and the shared ones. A layer that could not be
+    cleared fails the request: a partial reset is not reported as a reset.
+    """
     if not body.confirm:
         raise HTTPException(400, "confirm=true is required")
-    if body.scope not in {"facts", "shared", "knowledge_graph", "sessions", "all"}:
+    if body.scope not in {*SCOPES, "all"}:
         raise HTTPException(400, "scope must be facts, shared, knowledge_graph, sessions, or all")
 
-    deleted = 0
-    if body.scope in {"facts", "all"}:
-        db_path = Path(settings.db_dir) / "memory_fts.db"
-        deleted += _sqlite_exec(db_path, "DELETE FROM memory_fts")
-        deleted += _sqlite_exec(db_path, "DELETE FROM memory_facts")
-    if body.scope in {"shared", "all"}:
-        db_path = Path(settings.swarm_db_path)
-        deleted += _sqlite_exec(db_path, "DELETE FROM shared_user_facts_fts")
-        deleted += _sqlite_exec(db_path, "DELETE FROM shared_user_facts")
-    if body.scope in {"knowledge_graph", "all"}:
-        db_path = Path(settings.db_dir) / "knowledge_graph.db"
-        deleted += _sqlite_exec(db_path, "DELETE FROM relations")
-        deleted += _sqlite_exec(db_path, "DELETE FROM entities")
-    if body.scope in {"sessions", "all"}:
-        deleted += _sqlite_exec(Path(settings.db_path), "DELETE FROM sessions")
-
-    log.info("Memory reset: scope=%s deleted=%d", body.scope, deleted)
-    return {"ok": True, "scope": body.scope, "deleted": deleted}
+    scopes = set(SCOPES) if body.scope == "all" else {body.scope}
+    report = await run_memory_reset(scopes, user_id=body.user_id)
+    deleted = sum(v for layer in report["layers"].values() for v in layer.values() if isinstance(v, int))
+    log.info("Memory reset: scope=%s user_scoped=%s ok=%s", body.scope, bool(report["user_id"]), report["ok"])
+    if not report["ok"]:
+        raise HTTPException(500, {"message": "memory reset incomplete", **report, "scope": body.scope})
+    return {**report, "scope": body.scope, "deleted": deleted}
 
 
 class SearchQuery(BaseModel):

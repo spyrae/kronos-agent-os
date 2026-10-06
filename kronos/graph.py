@@ -44,6 +44,7 @@ from kronos.execution_control import ExecutionStoppedError, check_execution, exe
 from kronos.llm import get_model
 from kronos.memory.context_engine import get_context_engine
 from kronos.memory.nodes import retrieve_memories, store_memories_background
+from kronos.memory.reset import memory_generation
 from kronos.memory.scope import data_owner_scope
 from kronos.outcomes import InvocationOutcome
 from kronos.persona import build_system_prompt
@@ -1046,6 +1047,8 @@ class KronosAgent:
             "safety_passed": True,
             "loop_detector": None,
         }
+        if self._memory_enabled and user_id and not is_ephemeral:
+            state["memory_generation"] = self._memory_generation(user_id)
 
         # Step 1: Validate input
         rejection = validate_input(message, source=user_id)
@@ -1191,6 +1194,15 @@ class KronosAgent:
             turn_id,
             reason=failure_reason,
         )
+
+    @staticmethod
+    def _memory_generation(user_id: str) -> str:
+        """Marker for background storage; unreadable means "do not store", not "unguarded"."""
+        try:
+            return memory_generation(user_id)
+        except Exception as error:
+            log.warning("Memory generation unavailable, this turn will not be stored: %s", type(error).__name__)
+            return "unavailable"
 
     async def clear_context(self, thread_id: str) -> str:
         """Clear conversation history for a thread.
