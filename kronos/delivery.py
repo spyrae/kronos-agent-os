@@ -138,6 +138,73 @@ def stream_status(db: SafeDB, stream_key: str) -> dict:
     return {state: counts.get(state, 0) for state in ("pending", "delivered", "needs_review")}
 
 
+def review_queue(db: SafeDB) -> list[dict]:
+    """Deliveries the worker stopped on. Metadata only, never the text or recipient."""
+    rows = db.read(
+        """SELECT seq, event_key, stream_key, attempts, last_error, next_chunk, chunks, updated_at
+           FROM delivery_outbox WHERE state = 'needs_review' AND obsolete = 0 ORDER BY seq"""
+    )
+    queue = []
+    for row in rows:
+        try:
+            total = len(json.loads(row["chunks"]))
+        except (ValueError, TypeError):
+            total = 0
+        queue.append(
+            {
+                "seq": row["seq"],
+                "event_key": row["event_key"],
+                "stream_key": row["stream_key"],
+                "attempts": row["attempts"],
+                "last_error": row["last_error"],
+                "sent_chunks": row["next_chunk"],
+                "total_chunks": total,
+                "updated_at": row["updated_at"],
+            }
+        )
+    return queue
+
+
+async def resolve_review(
+    db: SafeDB,
+    event_key: str,
+    *,
+    action: str,
+    rebind_sender: bool = False,
+    now: Callable[[], float] = time.time,
+) -> bool:
+    """Operator decision on a delivery that needs review. Returns False if none matched.
+
+    ``retry`` puts it back in the queue with its stored message identity, so
+    chunks Telegram already accepted from the same account are not repeated.
+    ``rebind_sender`` lets the current account take it over; a chunk the old
+    account did send would then arrive twice, which is why it is opt-in.
+    ``abandon`` stops it blocking its stream. It is never marked delivered:
+    no receipt exists, and none is invented.
+    """
+    if action not in {"retry", "abandon"}:
+        raise ValueError("action must be retry or abandon")
+    # The delivery's own lock: never decide underneath a sender that is mid-flight.
+    async with own_conversation(str(db.path), f"delivery:{event_key}", wait=False):
+        if action == "retry":
+            sender = ", sender_id = 0" if rebind_sender else ""
+            cursor = db.write(
+                f"""UPDATE delivery_outbox SET state = 'pending', next_attempt = ?, last_error = 'operator_retry',
+                    updated_at = ?{sender} WHERE event_key = ? AND state = 'needs_review' AND obsolete = 0""",
+                (now(), now(), event_key),
+            )
+        else:
+            cursor = db.write(
+                """UPDATE delivery_outbox SET obsolete = 1, last_error = 'operator_abandoned', updated_at = ?
+                   WHERE event_key = ? AND state = 'needs_review' AND obsolete = 0""",
+                (now(), event_key),
+            )
+    changed = bool(cursor and cursor.rowcount)
+    if changed:
+        log.info("Delivery %s: operator chose %s", event_key, action)
+    return changed
+
+
 async def drain(
     db: SafeDB,
     *,

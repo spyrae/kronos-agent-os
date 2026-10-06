@@ -1475,6 +1475,69 @@ def run_turns_reconcile(key: str, *, outcome: str, result: str, note: str, opera
     return _asyncio.run(_reconcile())
 
 
+def _delivery_queues() -> dict:
+    """The two producer databases that hold delivery obligations."""
+    from pathlib import Path as _Path
+
+    from kronos import plans
+    from kronos.db import SafeDB
+
+    return {"plans": (plans._db(), False), "turns": (SafeDB(_Path(settings.db_path)), True)}
+
+
+def run_delivery_review() -> int:
+    """List deliveries the worker stopped on and will not retry by itself."""
+    from kronos.delivery import review_queue
+
+    total = 0
+    for name, (db, owned) in _delivery_queues().items():
+        try:
+            rows = review_queue(db)
+        finally:
+            if owned:
+                db.close()
+        for row in rows:
+            total += 1
+            print(f"  [{name}] {row['event_key']}")
+            print(
+                f"    stream={row['stream_key']}  sent {row['sent_chunks']}/{row['total_chunks']} chunk(s)  "
+                f"attempts={row['attempts']}  reason={row['last_error']}"
+            )
+    if not total:
+        print("No deliveries need review.")
+        return 0
+    print("\nDecide with: kaos delivery resolve <plans|turns> <event_key> --action retry|abandon")
+    print("A delivery is never marked delivered by hand: no receipt exists for it.")
+    return 0
+
+
+def run_delivery_resolve(queue: str, event_key: str, *, action: str, rebind_sender: bool) -> int:
+    """Retry or abandon one delivery that needs review."""
+    import asyncio as _asyncio
+
+    from kronos.delivery import resolve_review
+    from kronos.turn_ownership import TurnBusyError
+
+    db, owned = _delivery_queues()[queue]
+    try:
+        changed = _asyncio.run(resolve_review(db, event_key, action=action, rebind_sender=rebind_sender))
+    except TurnBusyError:
+        print("A sender is working on this delivery right now — nothing changed.")
+        return 1
+    finally:
+        if owned:
+            db.close()
+    if not changed:
+        print(f"No delivery needing review with key: {event_key}")
+        return 1
+    if action == "retry":
+        note = " The current account takes it over; a chunk the old one sent may repeat." if rebind_sender else ""
+        print(f"Queued again with its original message identity.{note}")
+    else:
+        print("Abandoned. It no longer blocks its stream and is not reported as delivered.")
+    return 0
+
+
 def run_turns_fork(turn_id: str, *, at_seq: int, thread: str) -> int:
     """Fork a turn's prefix into a new thread, leaving the original intact."""
     import asyncio as _asyncio
@@ -2404,6 +2467,17 @@ def build_parser() -> argparse.ArgumentParser:
     turns_reconcile.add_argument("--note", default="", help="how the outcome was verified")
     turns_reconcile.add_argument("--operator", default="", help="who decided; defaults to the OS user")
 
+    delivery_cmd = sub.add_parser("delivery", help="review deliveries the worker stopped on")
+    delivery_sub = delivery_cmd.add_subparsers(dest="delivery_command")
+    delivery_sub.add_parser("review", help="list deliveries that need an operator decision")
+    delivery_resolve = delivery_sub.add_parser("resolve", help="retry or abandon one delivery")
+    delivery_resolve.add_argument("queue", choices=["plans", "turns"])
+    delivery_resolve.add_argument("event_key")
+    delivery_resolve.add_argument("--action", required=True, choices=["retry", "abandon"])
+    delivery_resolve.add_argument(
+        "--rebind-sender", action="store_true", help="with retry: let the current Telegram account take it over"
+    )
+
     policy_cmd = sub.add_parser("policy", help="inspect the governance policy")
     policy_sub = policy_cmd.add_subparsers(dest="policy_command")
     policy_report = policy_sub.add_parser("report", help="print the effective policy and value sources")
@@ -2653,6 +2727,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "import":
         return run_import(args.path, merge=args.merge, dry_run=args.dry_run, rebind_chat=args.rebind_chat)
+    if args.command == "delivery":
+        if args.delivery_command == "review":
+            return run_delivery_review()
+        if args.delivery_command == "resolve":
+            return run_delivery_resolve(
+                args.queue, args.event_key, action=args.action, rebind_sender=args.rebind_sender
+            )
+        parser.parse_args(["delivery", "--help"])
+        return 0
     if args.command == "turns":
         if args.turns_command == "list":
             return run_turns_list(status=args.status, thread=args.thread, limit=args.limit)
