@@ -1726,7 +1726,13 @@ class SessionStore:
         return indexed
 
     async def clear(self, thread_id: str) -> int:
-        """Clear conversation history for a thread. Returns rows deleted."""
+        """Clear a thread's history and its session-search rows. Returns rows deleted.
+
+        The caller must own the conversation: a live executor would otherwise
+        write the history it loaded before the clear straight back. Parked and
+        interrupted turns reload history when they continue, so they cannot.
+        A failure to clear the search index is raised, not hidden.
+        """
         async with self._open_db() as db:
             await self._ensure_table(db)
             # Clear new sessions table
@@ -1748,4 +1754,9 @@ class SessionStore:
                     pass  # table may not exist
 
             await db.commit()
-            return deleted
+
+        if self._agent_name:
+            from kronos.swarm_store import get_swarm
+
+            deleted += get_swarm().clear_session_index(agent_name=self._agent_name, thread_id=thread_id)
+        return deleted

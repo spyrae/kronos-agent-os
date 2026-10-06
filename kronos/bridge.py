@@ -512,13 +512,15 @@ async def _clear_context(chat_id: int, topic_id: int | None = None) -> str:
     cross-conversation and are NOT removed here — see clear_context's message.
     """
     thread_id = _thread_id_for(chat_id, topic_id)
-    result = await _agent.clear_context(thread_id)
     try:
+        result = await _agent.clear_context(thread_id)
         from kronos.swarm_store import get_swarm
 
         get_swarm().clear_thread_messages(chat_id=chat_id, topic_id=topic_id)
     except Exception as e:
-        log.debug("Swarm message clear failed (non-fatal): %s", e)
+        # Saying "cleared" after a partial clear would be a false statement.
+        log.error("Context clear incomplete for thread %s: %s", thread_id, type(e).__name__)
+        return "⚠️ Не удалось полностью очистить историю этого диалога. Часть записей могла остаться, попробуй ещё раз."
     return result
 
 

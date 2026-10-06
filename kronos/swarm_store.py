@@ -1467,6 +1467,14 @@ class SwarmStore:
 
         return [dict(r) for r in rows]
 
+    def clear_session_index(self, *, agent_name: str, thread_id: str) -> int:
+        """Remove one conversation of one agent from session search (a /clear)."""
+        cursor = self._db.write(
+            "DELETE FROM session_messages WHERE agent_name = ? AND thread_id = ?",
+            (agent_name, thread_id),
+        )
+        return int(cursor.rowcount) if cursor else 0
+
     def ownerless_session_threads(self, *, agent_name: str) -> list[dict]:
         """Operator view: threads of ``agent_name`` whose indexed rows have no owner."""
         rows = self._db.read(
