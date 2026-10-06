@@ -14,6 +14,40 @@ class ModelBudgetError(RuntimeError):
 
 
 _force_lite: ContextVar[bool] = ContextVar("model_budget_force_lite", default=False)
+# The hold of the model call being made in this context (see ``admit_model_call``).
+_hold: ContextVar[str] = ContextVar("model_budget_hold", default="")
+
+
+def current_hold() -> str:
+    """Hold reserved for the call in flight in this context, if any."""
+    return _hold.get()
+
+
+def budget_session_key(context: dict[str, str]) -> str:
+    """The conversation a model call is charged to."""
+    return context.get("session_id") or context.get("thread_id", "")
+
+
+def finish_hold(hold_id: str, error: BaseException | None = None) -> None:
+    """Close the hold of a call that will never report its cost.
+
+    A call that was recorded has no hold left and this is a no-op. A provider
+    refusal with a 4xx status was not billed, so its hold is released. Anything
+    else — timeout, 5xx, cancellation, a success without usable usage — has an
+    unknown billing outcome and keeps counting against today's limits.
+    """
+    if not hold_id:
+        return
+    try:
+        from kronos.swarm_store import get_swarm
+
+        status = getattr(error, "status_code", None)
+        if error is not None and type(status) is int and 400 <= status < 500:
+            get_swarm().release_budget_hold(hold_id)
+        else:
+            get_swarm().mark_budget_hold_unknown(hold_id)
+    except Exception:  # pragma: no cover - the hold simply stays counted
+        pass
 
 
 @contextmanager
@@ -29,25 +63,31 @@ def model_budget_scope(force_tier: str | None = None) -> Iterator[None]:
 
 
 def admit_model_call() -> bool:
-    """Check current accounting before dispatch and return the lite constraint.
+    """Reserve budget for one dispatch and return the lite constraint.
 
-    This is admission against recorded spend, not an atomic money reservation.
-    In-flight/unknown costs and durable session accounting need the next ledger
-    stage; no exactly-once billing or hard upper bound is claimed here.
+    The reservation is atomic across agent processes: recorded spend plus the
+    holds of calls still in flight plus this call's estimate must fit both
+    limits. The hold is settled when the call's cost is recorded. The estimate
+    is a policy value, not the call's price, so the bound is on how far
+    concurrent calls can overshoot, not an exact cap; no provider invoice is
+    reconciled here.
     """
-    from kronos.security.cost_guardian import get_guardian
+    from kronos.security.cost_guardian import BudgetRefusedError, get_guardian
 
     check_execution()
-    context = get_tool_audit_context()
-    session_id = context.get("session_id") or context.get("thread_id", "")
+    session_id = budget_session_key(get_tool_audit_context())
     guardian = get_guardian()
     try:
         allowed, reason = guardian.check_budget(session_id=session_id)
         if not allowed:
             raise ModelBudgetError(reason)
-        return _force_lite.get() or guardian.should_degrade()
+        lite = _force_lite.get() or guardian.should_degrade()
+        _hold.set(guardian.reserve(session_id))
+        return lite
     except ModelBudgetError:
         raise
+    except BudgetRefusedError as error:
+        raise ModelBudgetError(str(error)) from error
     except Exception as error:
         raise ModelBudgetError("Cost accounting unavailable; model request blocked") from error
 
@@ -89,12 +129,26 @@ class BudgetedModel:
         return model
 
     def invoke(self, *args: Any, **kwargs: Any) -> Any:
-        result = self._effective_model().invoke(*args, **kwargs)
+        model = self._effective_model()
+        hold = current_hold()
+        try:
+            result = model.invoke(*args, **kwargs)
+        except BaseException as error:
+            finish_hold(hold, error)
+            raise
+        finish_hold(hold)
         check_execution()
         return result
 
     async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
-        result = await self._effective_model().ainvoke(*args, **kwargs)
+        model = self._effective_model()
+        hold = current_hold()
+        try:
+            result = await model.ainvoke(*args, **kwargs)
+        except BaseException as error:
+            finish_hold(hold, error)
+            raise
+        finish_hold(hold)
         check_execution()
         return result
 

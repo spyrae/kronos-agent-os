@@ -18,6 +18,7 @@ silently reverting to permissive defaults.
 """
 
 import logging
+import math
 from pathlib import Path
 from typing import Any
 
@@ -78,11 +79,22 @@ class BudgetPolicy(BaseModel):
     daily_usd: float = 5.0
     session_usd: float = 1.0
     degrade_at_fraction: float = 0.8
+    # Held against the limits for each model call until its real cost is
+    # recorded. It bounds what concurrent in-flight calls can overspend; it is
+    # an estimate, not the price of a call.
+    reservation_usd: float = 0.02
     per_agent_daily_usd: dict[str, float] = Field(default_factory=dict)
     # Tokens of conversation history carried before it is compacted. A budget in
     # money and a budget in context are the same question asked twice, so they
     # live together. 0 = the code default.
     context_tokens: int = 0
+
+    @field_validator("reservation_usd")
+    @classmethod
+    def _reservation_not_negative(cls, value: float) -> float:
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("reservation_usd must be a finite, non-negative amount")
+        return value
 
     @field_validator("degrade_at_fraction")
     @classmethod

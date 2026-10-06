@@ -25,6 +25,15 @@ from tests.test_graph_contract import agent, session_store  # noqa: F401
 from tests.test_model_budget import models  # noqa: F401
 
 
+def _recorded(session_key: str) -> float:
+    """Recorded spend only; a hold left behind would be an accounting bug."""
+    from kronos.swarm_store import get_swarm as _swarm
+
+    assert _swarm().budget_holds() == {"held": 0.0, "unknown": 0.0}
+    return _swarm().session_cost(session_key, include_holds=False)
+
+
+
 @pytest.fixture
 def memory(request, monkeypatch):
     import sys
@@ -110,7 +119,7 @@ def test_mem0_sdk_usage_reaches_original_scope_across_its_worker(memory):
     assert result["results"] and len(memory.calls) == 1
     assert memory.calls[0][1]["session_id"] == "chat"
     assert get_swarm().daily_cost()["requests"] == 1
-    assert get_guardian()._session_costs["chat"] > 0
+    assert _recorded("chat") > 0
     assert memory.instance.shared_data == [memory.result]
 
 
@@ -185,7 +194,7 @@ async def test_shared_mem0_does_not_mix_simultaneous_caller_scopes(memory):
 
     await asyncio.gather(call("first"), call("second"))
     assert {context["session_id"] for _, context in memory.calls} == {"first", "second"}
-    assert set(get_guardian()._session_costs) == {"first", "second"}
+    assert get_swarm().session_keys() == {"first", "second"}
     assert get_swarm().daily_cost()["requests"] == 2
 
 
@@ -246,7 +255,7 @@ async def test_full_invocation_context_covers_retrieval_background_and_compactio
     assert {label for label, _, _ in observations} == {"retrieve", "store", "compact"}
     assert all(context["session_id"] == "session" for _, context, _ in observations)
     assert all(model == "lite" for _, _, model in observations)
-    assert get_guardian()._session_costs["session"] == pytest.approx(0.03)
+    assert _recorded("session") == pytest.approx(0.03)
     assert get_tool_audit_context() == before
 
 

@@ -18,6 +18,15 @@ from tests.test_model_budget import models  # noqa: F401
 from tests.test_observer_bridge_capture import FakeEvent, FakeMessage, _noop, _registered_message_handler
 
 
+def _recorded(session_key: str) -> float:
+    """Recorded spend only; a hold left behind would be an accounting bug."""
+    from kronos.swarm_store import get_swarm as _swarm
+
+    assert _swarm().budget_holds() == {"held": 0.0, "unknown": 0.0}
+    return _swarm().session_cost(session_key, include_holds=False)
+
+
+
 @pytest.fixture
 def speech(request, tmp_path, monkeypatch):
     request.getfixturevalue("models")
@@ -102,7 +111,7 @@ async def test_voice_accounts_audio_seconds_not_transcript_tokens(speech, second
     stored = get_swarm()._db.read_one("SELECT cost_usd FROM swarm_costs WHERE agent = ?", ("nexus",))
     assert stored["cost_usd"] == pytest.approx(expected)
     assert (cost["requests"], cost["input_tokens"], cost["output_tokens"]) == (1, 0, 0)
-    assert get_guardian()._session_costs["42"] == pytest.approx(expected)
+    assert _recorded("42") == pytest.approx(expected)
     assert get_tool_audit_context() == original
     fields = speech.calls[0][1]["data"].fields
     assert fields["response_format"] == "verbose_json"

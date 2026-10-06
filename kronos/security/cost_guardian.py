@@ -1,9 +1,10 @@
 """Cost Guardian — enforces spending limits per session and per day.
 
-The daily cap reads the shared swarm cost ledger (``swarm_costs``), so the
-limit is swarm-wide rather than per-process; the session cap reads a
-per-process tally fed by the cost-tracking callback. Blocks requests when
-either limit is exceeded.
+Both caps read the shared swarm ledger: ``swarm_costs`` for the day and
+``session_costs`` for one conversation's day, so neither is per-process and a
+restart resets nothing. ``reserve`` is the hard gate: it checks recorded spend
+plus the holds of calls still in flight and adds its own hold in the same
+transaction. ``check_budget`` is the read-only view of the same numbers.
 
 On top of those, an agent may have a personal daily slice (``budget_usd_daily``
 in agents.yaml, overridable by ``budgets.per_agent_daily_usd`` in the policy).
@@ -18,6 +19,10 @@ import math
 from dataclasses import dataclass, field
 
 log = logging.getLogger("kronos.security.cost_guardian")
+
+
+class BudgetRefusedError(RuntimeError):
+    """The limits leave no room for another model call."""
 
 
 def _swarm_daily_cost() -> dict:
@@ -74,17 +79,47 @@ class CostGuardian:
     daily_limit: float = field(default_factory=lambda: _policy_budgets().daily_usd)
     session_limit: float = field(default_factory=lambda: _policy_budgets().session_usd)
 
-    # Per-session tracking (resets when session changes)
-    _session_costs: dict[str, float] = field(default_factory=dict)
+    def _limits_valid(self) -> bool:
+        return all(
+            not isinstance(limit, bool) and math.isfinite(limit) and limit >= 0
+            for limit in (self.daily_limit, self.session_limit)
+        )
+
+    def reserve(self, session_id: str = "") -> str:
+        """Hold the per-call estimate against both limits, or raise ``BudgetRefusedError``.
+
+        The returned hold must be settled with the call's real cost, released
+        if the call verifiably cost nothing, or left in place when the outcome
+        is unknown — a hold nobody settles keeps counting for the rest of the day.
+        """
+        if not self._limits_valid():
+            raise BudgetRefusedError("Invalid cost limit; model request blocked")
+        from kronos.config import settings
+
+        try:
+            from kronos.swarm_store import get_swarm
+
+            hold_id, reason = get_swarm().reserve_budget(
+                session_key=session_id,
+                agent=settings.agent_name,
+                estimate_usd=_policy_budgets().reservation_usd,
+                daily_limit=self.daily_limit,
+                session_limit=self.session_limit,
+            )
+        except Exception as error:
+            raise BudgetRefusedError("Cost accounting unavailable; model request blocked") from error
+        if not hold_id:
+            log.warning("Cost guardian: %s", reason)
+            raise BudgetRefusedError(reason)
+        return hold_id
 
     def check_budget(self, session_id: str = "") -> tuple[bool, str]:
         """Check if request is within budget.
 
         Returns (allowed, reason).
         """
-        for limit in (self.daily_limit, self.session_limit):
-            if isinstance(limit, bool) or not math.isfinite(limit) or limit < 0:
-                return False, "Invalid cost limit; model request blocked"
+        if not self._limits_valid():
+            return False, "Invalid cost limit; model request blocked"
         try:
             daily = _swarm_daily_cost()
         except Exception:
@@ -102,11 +137,14 @@ class CostGuardian:
 
         # Session limit check
         if session_id:
-            session_cost = self._session_costs.get(session_id, 0)
+            try:
+                session_cost = self._session_cost(session_id)
+            except Exception:
+                return False, "Cost accounting unavailable; model request blocked"
             if session_cost >= self.session_limit:
                 msg = (
                     f"Session cost limit reached: ${session_cost:.2f} / ${self.session_limit:.2f}. "
-                    f"Start a new conversation to reset."
+                    f"Resets at midnight UTC."
                 )
                 log.warning("Cost guardian: %s", msg)
                 return False, msg
@@ -122,12 +160,20 @@ class CostGuardian:
 
         return True, ""
 
+    @staticmethod
+    def _session_cost(session_id: str) -> float:
+        from kronos.swarm_store import get_swarm
+
+        return get_swarm().session_cost(session_id)
+
     def record_cost(self, session_id: str, cost_usd: float) -> None:
-        """Record a cost for a session."""
+        """Add spend to a session's durable daily total."""
         if isinstance(cost_usd, bool) or not math.isfinite(cost_usd) or cost_usd < 0:
             raise ValueError("cost must be finite and non-negative")
         if session_id:
-            self._session_costs[session_id] = self._session_costs.get(session_id, 0) + cost_usd
+            from kronos.swarm_store import get_swarm
+
+            get_swarm().add_session_cost(session_id, cost_usd)
 
     def should_degrade(self) -> bool:
         """True once daily spend crosses the policy degrade fraction.
@@ -198,11 +244,23 @@ class CostGuardian:
             "daily_cost": daily.get("cost_usd", 0),
             "daily_limit": self.daily_limit,
             "daily_requests": daily.get("requests", 0),
-            "session_count": len(self._session_costs),
+            "holds": self._holds(),
             "personal_cost": self.personal_spend(),
             "personal_limit": self.personal_limit(),
             "quiet": bool(self.quiet_reason()),
         }
+
+
+    @staticmethod
+    def _holds() -> dict[str, float]:
+        """Money held for calls in flight or with an unknown billing outcome."""
+        try:
+            from kronos.swarm_store import get_swarm
+
+            return get_swarm().budget_holds()
+        except Exception as e:  # pragma: no cover - defensive
+            log.debug("Budget holds read failed: %s", e)
+            return {}
 
 
 # Singleton
