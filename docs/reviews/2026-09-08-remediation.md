@@ -44,7 +44,7 @@ A02/F13 и оставшиеся части F08–F15/A01/A03–A06/PROD/V сох
 | F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | В работе: intent/journal boundary проверен; полный перечень путей и reconciliation не закрыты | Ожидает |
 | F11 | Один resume на turn; live registry и atomic ownership | Исправлено и проверено локально | Нужен согласованный rollout без старых исполнителей |
 | F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | В работе: factory, прямые ASO/GEO/Vision/scripts/Whisper и Mem0 boundary проверены с fake transports; реальный Mem0 1.0.7, durable session ledger, reservations и unknown outcomes ещё нужны | Ожидает |
-| F13 | Честный scoped reset по всем слоям, включая background writers | Ожидает | Ожидает |
+| F13 | Честный scoped reset по всем слоям, включая background writers | Исправлено и проверено локально (2026-10-06, ADR-0021); Mem0 — на fake, реальный пакет в F12 | Ожидает rollout |
 | F14 | Desired/effective runtime settings совпадают или restart явно указан | Ожидает | Ожидает |
 | F15 | Model/memory I/O не блокирует event loop; responsiveness test | Ожидает | Ожидает |
 | F16 | Timeout/cancel Codex CLI завершает процесс и потомков, очищает ресурсы | Основной llm_codex и отдельный Vision path используют общий проверенный process cleanup | Ожидает Linux/live Codex-приёмки и rollout |
@@ -1100,3 +1100,48 @@ tests/test_knowledge_graph_scope.py tests/test_user_model.py -q`, затем п�
 Discord id делят одно пространство до A01; scoped reset — F13; keyless
 retrieval — A05. После rollout существующий граф и session index невидимы
 пользователям, пока оператор не назначит владельца.
+
+### F13 — честный scoped reset (2026-10-06)
+
+- Причина: `/clear` удалял историю, но оставлял те же сообщения в session
+  search, а ещё работающий ход сохранял загруженную до очистки историю обратно.
+  Dashboard reset удалял FTS, оставляя факты в Mem0, не трогал session search и
+  всегда отвечал `ok`; ход, завершившийся позже, записывал факты заново.
+- `/clear` берёт conversation ownership (ADR-0008): выполняется после живого
+  хода, не под ним. Отложенные и прерванные ходы при продолжении читают историю
+  из хранилища, поэтому старое вернуть не могут. Очищается и session index.
+  Частичная очистка сообщается как отказ.
+- `kronos/memory/reset.py`: сброс facts (Mem0 + FTS), shared facts, knowledge
+  graph, sessions — для одного пользователя или для всех. Перед удалением
+  продвигается поколение в `swarm.db`. Фоновая запись и ночная сборка графа
+  запоминают поколение в начале работы и отступают, если оно изменилось;
+  вставка shared facts проверяет его в своей же транзакции.
+- Writer, уже находящийся внутри хранилищ, дописывает, затем reset удаляет
+  записанное: writers делят gate, reset держит его эксклюзивно.
+- Отчёт называет каждый слой; отказ слоя даёт HTTP 500, а не `ok`. Удаление
+  одного факта убирает его также из Mem0 и shared facts.
+- **2595 passed, 58 integration deselected, 1 warning**; **27 crash/restart
+  passed**; Ruff и diff-check чистые. 22 новых test cases: покрытие слоёв для
+  пользователя и глобально, чужой пользователь не затронут, частичный отказ,
+  reset до запуска writer, reset во время извлечения, чужой reset не мешает,
+  ночная сборка графа, нечитаемое поколение, отсутствие голодания reset,
+  `/clear` под живым ходом и с ходом, ждущим approval.
+- Реальные Mem0/Qdrant, модели, Telegram и production не вызывались.
+
+Файлы: `kronos/memory/reset.py`, `kronos/memory/nodes.py`,
+`kronos/memory/model_boundary.py`, `kronos/memory/knowledge_graph.py`,
+`kronos/swarm_store.py`, `kronos/session.py`, `kronos/graph.py`,
+`kronos/bridge.py`, `kronos/state.py`, `kronos/cron/sleep_compute.py`,
+`dashboard/api/memory.py`; тесты `test_memory_reset.py`,
+`test_conversation_clear.py`, `test_mem0_budget.py`; ADR-0021.
+
+Проверить: `KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python
+-m pytest tests/test_memory_reset.py tests/test_conversation_clear.py
+tests/test_mem0_budget.py tests/test_dashboard_memory.py -q`.
+
+**Не закрыто этим этапом:** удаление в Mem0 проверено на fake — приёмка на
+mem0ai 1.0.7 остаётся в F12. Reset одного агента не трогает приватные
+хранилища других агентов. Durable outcomes ходов и очередь доставки не
+считаются памятью и остаются под своей retention. Пользовательской команды
+«забудь меня» нет: scoped reset доступен оператору через Dashboard API
+(`user_id`), UI передаёт только scope.
