@@ -19,3 +19,23 @@ def test_grafana_prom_query_ignores_non_object_response(monkeypatch) -> None:
     monkeypatch.setattr(grafana, "_api_get", lambda *args, **kwargs: [])
 
     assert grafana._prom_query("up") is None
+
+
+def test_supabase_active_trials_exclude_ended_trials(monkeypatch) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    def fake_rest_get(table, params=None, **kwargs):
+        calls.append((table, dict(params or {})))
+        return 0 if kwargs.get("head") else []
+
+    monkeypatch.setattr(supabase_stats.settings, "supabase_url", "https://db.test")
+    monkeypatch.setattr(supabase_stats.settings, "supabase_service_role_key", "key")
+    monkeypatch.setattr(supabase_stats, "_rest_get", fake_rest_get)
+
+    result = supabase_stats.collect()
+
+    trial_filters = [params for table, params in calls if table == "user_trials"]
+    assert result["db_active_trials"] == 0
+    assert len(trial_filters) == 1
+    assert trial_filters[0]["status"] == "eq.active"
+    assert trial_filters[0]["ends_at"].startswith("gt.")
