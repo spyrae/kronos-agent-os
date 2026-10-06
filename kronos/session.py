@@ -29,6 +29,7 @@ from kronos.migrations.v003_effect_intents import migrate as migrate_effect_inte
 from kronos.migrations.v004_effect_protocol import migrate as migrate_effect_protocol
 from kronos.migrations.v005_plan_execution import migrate_turns as migrate_caller_key
 from kronos.migrations.v008_turn_delivery import migrate as migrate_delivery
+from kronos.migrations.v009_turn_owner import migrate as migrate_turn_owner
 from kronos.outcomes import InvocationOutcome, InvocationStatus
 from kronos.tool_history import trim_completed_history, unanswered_tool_calls
 from kronos.turn_delivery import RecoveryDestination, queue_approval, queue_result, suppress_approval
@@ -293,6 +294,7 @@ class SessionStore:
             await migrate_effect_protocol(db)
             await migrate_caller_key(db)
             await migrate_delivery(db)
+            await migrate_turn_owner(db)
             self._initialized = True
 
     async def begin_turn(
@@ -302,8 +304,13 @@ class SessionStore:
         *,
         caller_key: str = "",
         recovery_destination: RecoveryDestination | None = None,
+        user_id: str = "",
     ) -> str:
-        """Open a turn, recording the caller's immutable correlation atomically."""
+        """Open a turn, recording the caller's immutable correlation atomically.
+
+        ``user_id`` is the transport-verified owner; resume and approval read it
+        back instead of trusting whoever triggers the continuation.
+        """
         if recovery_destination is not None:
             recovery_destination.assert_thread(thread_id)
         turn_id = str(uuid.uuid4())
@@ -312,8 +319,9 @@ class SessionStore:
             await db.execute(
                 """
                 INSERT INTO active_turns
-                    (turn_id, thread_id, status, input_message, effect_protocol, caller_key, recovery_destination)
-                VALUES (?, ?, 'running', ?, 1, ?, ?)
+                    (turn_id, thread_id, status, input_message, effect_protocol, caller_key,
+                     recovery_destination, user_id)
+                VALUES (?, ?, 'running', ?, 1, ?, ?, ?)
                 """,
                 (
                     turn_id,
@@ -321,10 +329,19 @@ class SessionStore:
                     input_message,
                     caller_key,
                     recovery_destination.encode() if recovery_destination else "",
+                    str(user_id or "").strip(),
                 ),
             )
             await db.commit()
         return turn_id
+
+    async def turn_owner(self, turn_id: str) -> str:
+        """Owner recorded at begin_turn; empty for legacy or unknown turns."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute("SELECT user_id FROM active_turns WHERE turn_id = ?", (turn_id,))
+            row = await cursor.fetchone()
+        return str(row[0] or "") if row else ""
 
     async def get_turn_for_caller(self, caller_key: str) -> dict | None:
         """Read identity only, so corrupt journal content cannot hide a claim."""
