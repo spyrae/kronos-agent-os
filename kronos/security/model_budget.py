@@ -1,5 +1,6 @@
 """Model-call admission, including models cached before a request starts."""
 
+import asyncio
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -92,6 +93,19 @@ def admit_model_call() -> bool:
         raise ModelBudgetError("Cost accounting unavailable; model request blocked") from error
 
 
+def _release_undispatched(task: "asyncio.Future") -> None:
+    if task.cancelled() or task.exception() is not None:
+        return
+    _, hold = task.result()
+    if hold:
+        try:
+            from kronos.swarm_store import get_swarm
+
+            get_swarm().release_budget_hold(hold)
+        except Exception:  # pragma: no cover - the hold simply stays counted
+            pass
+
+
 class BudgetedModel:
     """Recheck every call and bind tools to the effective, not cached, tier.
 
@@ -128,6 +142,24 @@ class BudgetedModel:
             model = model.bind_tools(*args, **kwargs)
         return model
 
+    def _admit(self) -> tuple[Any, str]:
+        """Admission for a worker thread: the hold is returned, because a
+        ContextVar set in the thread's copied context never reaches the caller."""
+        model = self._effective_model()
+        return model, current_hold()
+
+    async def _admit_off_loop(self) -> tuple[Any, str]:
+        """Reserve without blocking the loop on the shared ledger's write lock."""
+        task = asyncio.ensure_future(asyncio.to_thread(self._admit))
+        try:
+            model, hold = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # Nothing was dispatched, so a hold the worker still creates is released.
+            task.add_done_callback(_release_undispatched)
+            raise
+        _hold.set(hold)
+        return model, hold
+
     def invoke(self, *args: Any, **kwargs: Any) -> Any:
         model = self._effective_model()
         hold = current_hold()
@@ -141,8 +173,7 @@ class BudgetedModel:
         return result
 
     async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
-        model = self._effective_model()
-        hold = current_hold()
+        model, hold = await self._admit_off_loop()
         try:
             result = await model.ainvoke(*args, **kwargs)
         except BaseException as error:

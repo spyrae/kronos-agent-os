@@ -1096,11 +1096,10 @@ class KronosAgent:
         # Step 2: Retrieve memories (non-fatal — DB issues must not crash pipeline)
         if self._memory_enabled:
             try:
-                mem_update = (
-                    await run_sync_owned(retrieve_memories, state)
-                    if thread_id.startswith("plan:")
-                    else retrieve_memories(state)
-                )
+                # Vector search embeds locally and reads several stores. On the
+                # loop it froze the bridge, the dashboard and every other
+                # conversation for as long as it took.
+                mem_update = await run_sync_owned(retrieve_memories, state)
                 if mem_update.get("messages"):
                     # Insert memory context before the last user message in
                     # working history only — never into persisted_history.
@@ -1172,11 +1171,8 @@ class KronosAgent:
             engine = get_context_engine()
             compact_state = {**state, "messages": list(persisted_history)}
             if engine.should_compact(compact_state):
-                compact_result = (
-                    await run_sync_owned(engine.compact, compact_state)
-                    if thread_id.startswith("plan:")
-                    else engine.compact(compact_state)
-                )
+                # Summarising calls a model synchronously: seconds, off the loop.
+                compact_result = await run_sync_owned(engine.compact, compact_state)
                 if compact_result.get("messages"):
                     persisted_history = compact_result["messages"]
 
