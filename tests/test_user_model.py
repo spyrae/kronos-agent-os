@@ -27,8 +27,8 @@ class FailingModel:
 
 
 class FakeSwarm:
-    def search_sessions(self, query: str, **_kwargs):
-        if query == "предпочитаю":
+    def search_sessions(self, query: str, *, user_id: str, **_kwargs):
+        if query == "предпочитаю" and user_id == "42":
             return [{"role": "user", "content": "Я предпочитаю короткие технические ответы с причиной."}]
         return []
 
@@ -48,6 +48,7 @@ def user_model_workspace(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "workspace_path", str(root))
     monkeypatch.setattr(settings, "db_path", str(db_path))
     monkeypatch.setattr(settings, "agent_name", "kronos")
+    monkeypatch.setattr(settings, "allowed_users", "42")
     return ws
 
 
@@ -70,6 +71,7 @@ def _entries(count: int = 6):
             {
                 "ts": (now - timedelta(hours=idx)).isoformat(),
                 "session_id": f"s-{idx}",
+                "user_id": "42",
                 "tier": "standard" if idx % 2 else "lite",
                 "duration_ms": 20_000 if idx == 0 else 500 + idx,
                 "approx_cost_usd": 0.0001 * (idx + 1),
@@ -155,3 +157,35 @@ def test_collect_passive_signals_summarizes_implicit_quality():
     assert "Correction/refinement requests: 1" in signals
     assert "Slow responses" in signals
     assert "Tool-heavy sessions (>=5 calls): 1" in signals
+
+
+@pytest.mark.asyncio
+async def test_user_model_ignores_non_owner_conversations(user_model_workspace, monkeypatch):
+    """USER-MODEL.md reaches every prompt, so a stranger's chat must not shape it."""
+    import kronos.cron.user_model as user_model
+    import kronos.swarm_store as swarm_store
+    from kronos.config import settings
+
+    captured = {}
+    stranger = [{**e, "user_id": "777", "input_preview": "stranger asks about a secret merger"} for e in _entries()]
+    _write_audit(Path(settings.db_path), _entries() + stranger)
+    monkeypatch.setattr(user_model, "get_model", lambda _tier: FakeModel("## Confirmed patterns\n- ok", captured))
+    monkeypatch.setattr(user_model, "send_bot_api", lambda text, topic_id=None: None)
+    monkeypatch.setattr(swarm_store, "get_swarm", lambda: FakeSwarm())
+
+    await user_model.run_user_model()
+
+    assert "secret merger" not in captured["prompt"]
+    assert "Дай краткий технический план" in captured["prompt"]
+
+
+def test_open_allowlist_names_no_owner_for_session_context(user_model_workspace, monkeypatch):
+    import kronos.cron.user_model as user_model
+    import kronos.swarm_store as swarm_store
+    from kronos.config import settings
+
+    monkeypatch.setattr(settings, "allowed_users", "")
+    monkeypatch.setattr(settings, "allow_all_users", True)
+    monkeypatch.setattr(swarm_store, "get_swarm", lambda: FakeSwarm())
+    assert user_model._owner_ids() == []
+    assert user_model._collect_session_context(user_model._owner_ids()) == ""

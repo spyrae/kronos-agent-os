@@ -1055,7 +1055,7 @@ class KronosAgent:
             if not is_ephemeral:
                 persisted_history.append(AIMessage(content=response_text))
                 if self._session_store:
-                    await self._session_store.save(thread_id, persisted_history)
+                    await self._session_store.save(thread_id, persisted_history, user_id=user_id)
             return InvocationOutcome("blocked", response_text, thread_id, reason="input_rejected")
 
         # Link durable callers before retrieval can invoke an embedding provider.
@@ -1181,7 +1181,7 @@ class KronosAgent:
                     failure_reason=getattr(result, "failure_reason", ""),
                 )
             else:
-                await self._session_store.save(thread_id, save_messages)
+                await self._session_store.save(thread_id, save_messages, user_id=user_id)
 
         failure_reason = getattr(result, "failure_reason", "")
         return InvocationOutcome(

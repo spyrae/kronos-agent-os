@@ -102,7 +102,11 @@ async def run_user_model() -> None:
         log.info("No audit log yet, skipping user-model")
         return
 
+    owners = _owner_ids()
     entries = _load_recent_entries(audit_file)
+    if owners:
+        # The model is injected into every prompt, so it may describe owners only.
+        entries = [e for e in entries if str(e.get("user_id", "")) in owners]
 
     if len(entries) < MIN_ENTRIES:
         log.info("Only %d entries (min %d), skipping", len(entries), MIN_ENTRIES)
@@ -113,7 +117,7 @@ async def run_user_model() -> None:
 
     # Phase 2: Conversation previews for qualitative analysis
     conversations = _format_conversations(entries)
-    session_context = _collect_session_context()
+    session_context = _collect_session_context(owners)
 
     if session_context:
         conversations += f"\n\nКонтекст из сессий (поиск по решениям):\n{session_context}"
@@ -210,25 +214,32 @@ def _format_conversations(entries: list[dict], limit: int = MAX_CONVERSATIONS) -
     )
 
 
-def _collect_session_context() -> str:
-    """Collect decision/preference snippets from the shared session index."""
+def _owner_ids() -> list[str]:
+    """Explicitly configured owners; an open allowlist names nobody."""
+    return sorted(str(uid) for uid in settings.allowed_user_ids)
+
+
+def _collect_session_context(owners: list[str]) -> str:
+    """Collect decision/preference snippets from the owners' own sessions."""
     snippets = []
     try:
         from kronos.swarm_store import get_swarm
 
         swarm = get_swarm()
-        for query in ["решил", "выбрал", "предпочитаю", "хочу", "не хочу"]:
-            results = swarm.search_sessions(
-                query=query,
-                agent_name=settings.agent_name,
-                days=LOOKBACK_DAYS,
-                limit=3,
-            )
-            for result in results:
-                role = str(result.get("role", "?"))
-                content = str(result.get("content", ""))[:150]
-                if content:
-                    snippets.append(f"[{role}] {content}")
+        for owner in owners:
+            for query in ["решил", "выбрал", "предпочитаю", "хочу", "не хочу"]:
+                results = swarm.search_sessions(
+                    query=query,
+                    user_id=owner,
+                    agent_name=settings.agent_name,
+                    days=LOOKBACK_DAYS,
+                    limit=3,
+                )
+                for result in results:
+                    role = str(result.get("role", "?"))
+                    content = str(result.get("content", ""))[:150]
+                    if content:
+                        snippets.append(f"[{role}] {content}")
     except Exception as e:
         log.warning("Session context collection failed (non-fatal): %s", e)
 

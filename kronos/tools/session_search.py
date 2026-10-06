@@ -1,4 +1,4 @@
-"""Session search tool -- FTS5 search across all agent sessions."""
+"""Session search tool -- FTS5 search across the caller's own sessions with every agent."""
 
 import logging
 from datetime import datetime
@@ -6,6 +6,7 @@ from datetime import datetime
 from langchain_core.tools import tool
 
 from kronos.llm import ModelTier, get_model
+from kronos.memory.scope import current_data_owner
 from kronos.swarm_store import get_swarm
 
 log = logging.getLogger("kronos.tools.session_search")
@@ -19,7 +20,7 @@ def session_search(
     limit: int = 5,
     summarize: bool = True,
 ) -> str:
-    """Search across conversation history of all agents. Use to find what was discussed before.
+    """Search the current user's conversation history with all agents. Use to find what was discussed before.
 
     Args:
         query: Search keywords (Russian or English)
@@ -31,9 +32,15 @@ def session_search(
     if not query.strip():
         return "Укажи поисковый запрос."
 
+    # The owner comes from the runtime, never from model-supplied arguments.
+    owner = current_data_owner()
+    if not owner:
+        return "Поиск по истории недоступен: не удалось определить владельца диалога."
+
     swarm = get_swarm()
     results = swarm.search_sessions(
         query=query,
+        user_id=owner,
         agent_name=agent,
         days=days,
         limit=limit,

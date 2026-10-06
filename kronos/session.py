@@ -642,7 +642,7 @@ class SessionStore:
                 continue
 
         target = new_thread_id or f"{detail['thread_id']}:fork-{at_seq or len(prefix)}"
-        await self.save(target, messages)
+        await self.save(target, messages, user_id=await self.turn_owner(turn_id))
         log.info("Forked turn %s into thread %s (%d message(s))", turn_id, target, len(messages))
         return {"thread_id": target, "messages": len(messages), "source_turn": turn_id}
 
@@ -1281,7 +1281,8 @@ class SessionStore:
             await self._ensure_table(db)
             await db.execute("BEGIN IMMEDIATE")
             async with db.execute(
-                "SELECT thread_id, status, final_content, error FROM active_turns WHERE turn_id = ?", (turn_id,)
+                "SELECT thread_id, status, final_content, error, user_id FROM active_turns WHERE turn_id = ?",
+                (turn_id,),
             ) as cursor:
                 existing = await cursor.fetchone()
             if not existing or existing[0] != thread_id:
@@ -1318,7 +1319,7 @@ class SessionStore:
             await db.execute("DELETE FROM tool_results WHERE turn_id = ?", (turn_id,))
             await db.commit()
 
-        self._index_to_swarm_fts(thread_id, trimmed)
+        self._index_to_swarm_fts(thread_id, trimmed, user_id=existing[4] or "")
 
     async def get_turn_outcome(self, turn_id: str) -> InvocationOutcome:
         """Read a consistent execution/approval snapshot without running tools."""
@@ -1496,7 +1497,7 @@ class SessionStore:
             await db.execute("BEGIN IMMEDIATE")
             try:
                 cursor = await db.execute(
-                    """SELECT thread_id, input_message FROM active_turns t
+                    """SELECT thread_id, input_message, user_id FROM active_turns t
                        WHERE turn_id = ? AND status IN ('running', 'resuming')
                          AND NOT EXISTS (SELECT 1 FROM pending_approvals p
                              WHERE p.turn_id = t.turn_id AND p.status = 'pending')""",
@@ -1506,7 +1507,7 @@ class SessionStore:
                 if not row:
                     await db.rollback()
                     return 0
-                thread_id, input_message = row
+                thread_id, input_message, owner = row
                 ownership.assert_held(self.db_path, thread_id)
                 session_cursor = await db.execute(
                     "SELECT messages FROM sessions WHERE thread_id = ?",
@@ -1590,7 +1591,7 @@ class SessionStore:
             except BaseException:
                 await db.rollback()
                 raise
-        self._index_to_swarm_fts(thread_id, trimmed)
+        self._index_to_swarm_fts(thread_id, trimmed, user_id=owner or "")
         return 1
 
     def _record_durable_metric(self, metric: str, delta: int) -> None:
@@ -1622,7 +1623,7 @@ class SessionStore:
             log.error("Failed to deserialize session %s: %s", thread_id, e)
             return []
 
-    async def save(self, thread_id: str, messages: list[BaseMessage]) -> None:
+    async def save(self, thread_id: str, messages: list[BaseMessage], *, user_id: str = "") -> None:
         """Save conversation history, keeping only the last MAX_HISTORY messages."""
         # Trim to max history (keep most recent)
         trimmed = trim_completed_history(messages, MAX_HISTORY)
@@ -1644,14 +1645,20 @@ class SessionStore:
             )
             await db.commit()
 
-        self._index_to_swarm_fts(thread_id, trimmed)
+        self._index_to_swarm_fts(thread_id, trimmed, user_id=user_id)
 
     def _index_to_swarm_fts(
         self,
         thread_id: str,
         messages: list[BaseMessage],
+        *,
+        user_id: str = "",
     ) -> int:
-        """Index session messages into swarm FTS. Non-blocking, non-fatal."""
+        """Index session messages into swarm FTS. Non-blocking, non-fatal.
+
+        Rows already indexed keep their first owner. Without ``user_id`` new
+        rows are ownerless, which hides them from every user search.
+        """
         if not self._agent_name:
             return 0
         try:
@@ -1672,6 +1679,7 @@ class SessionStore:
                         thread_id=thread_id,
                         role=role,
                         content=msg.content,
+                        user_id=user_id,
                         fingerprint=_session_fts_fingerprint(
                             agent_name=self._agent_name,
                             thread_id=thread_id,
@@ -1691,6 +1699,8 @@ class SessionStore:
         """Index existing session rows into the shared session-search FTS store.
 
         This is idempotent when the target swarm database has fingerprints.
+        Stored history carries no owner, so backfilled rows are ownerless and
+        stay invisible to user search until an operator assigns them.
         """
         if not self._agent_name:
             log.info("Skipping session FTS backfill: agent_name is empty")
