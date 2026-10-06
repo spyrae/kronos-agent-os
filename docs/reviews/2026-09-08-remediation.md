@@ -45,8 +45,8 @@ A02/F13 и оставшиеся части F08–F15/A01/A03–A06/PROD/V сох
 | F11 | Один resume на turn; live registry и atomic ownership | Исправлено и проверено локально | Нужен согласованный rollout без старых исполнителей |
 | F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | Локально: durable session ledger, атомарные reservations и учёт unknown outcomes добавлены (2026-10-06, ADR-0023). Реальный Mem0 1.0.7 не проверен: установка пакета не согласована | Ожидает |
 | F13 | Честный scoped reset по всем слоям, включая background writers | Исправлено и проверено локально (2026-10-06, ADR-0021); Mem0 — на fake, реальный пакет в F12 | Ожидает rollout |
-| F14 | Desired/effective runtime settings совпадают или restart явно указан | Ожидает | Ожидает |
-| F15 | Model/memory I/O не блокирует event loop; responsiveness test | Ожидает | Ожидает |
+| F14 | Desired/effective runtime settings совпадают или restart явно указан | Исправлено и проверено локально (2026-10-06) | Ожидает rollout |
+| F15 | Model/memory I/O не блокирует event loop; responsiveness test | Локально: retrieval, compaction и budget admission вынесены с event loop, есть heartbeat-тест (2026-10-06). Короткие sync SQLite-вызовы в bridge/routers остаются | Ожидает rollout |
 | F16 | Timeout/cancel Codex CLI завершает процесс и потомков, очищает ресурсы | Основной llm_codex и отдельный Vision path используют общий проверенный process cleanup | Ожидает Linux/live Codex-приёмки и rollout |
 | F17 | Необязательный Dashboard без доступного пароля не выключает bridge/cron; crash возвращает failure | Исправлено локально: explicit disabled outcome и проверенный service supervision | Ожидает rollout; текущие Dashboard работают |
 
@@ -1229,3 +1229,60 @@ distinct logical operation ids, provider idempotency и retention
 провайдера. При отказе провайдера с 5xx/timeout каждая попытка держит оценку
 до конца дня. Приёмка на mem0ai 1.0.7 требует установки пакета во временное
 окружение — не согласовано. Live E2E всех model paths не выполнялся.
+
+### F14 — desired и effective настройки Dashboard (2026-10-06)
+
+- Причина: страница Config читала и переписывала `.env` базового агента для
+  любого агента, игнорируя, что каждый unit загружает свой `.env.<agent>`.
+  Dashboard не-базового агента менял чужую конфигурацию, а свою оставлял без
+  изменений. Отличить сохранённое значение от действующего было нельзя.
+- Dashboard работает с файлом, который загрузил его процесс; путь разрешается
+  один раз при импорте (`kronos.config.loaded_env_file`), поэтому chdir или
+  поздняя переменная окружения его не перенаправляют.
+- `desired_settings()` строит настройки из файла на диске, не трогая живые.
+  Для каждого ключа API сообщает `applied`: true, false (сохранено, не
+  действует до рестарта) или null (не runtime-настройка — судить нельзя).
+  Значения сравниваются на сервере и не возвращаются.
+- Capability с отличающимся значением в файле помечается `pending_restart`;
+  `status` продолжает описывать работающий процесс. Незагружаемый файл —
+  ошибка 500, а не молчаливое «применено».
+- UI показывает «not in effect until restart» у переменных и capabilities.
+- 9 новых/обновлённых test cases; TypeScript `tsc --noEmit` и ESLint для
+  `ConfigPage.tsx` прошли во временной копии с существующими зависимостями.
+
+Файлы: `kronos/config.py`, `dashboard/api/config.py`,
+`dashboard-ui/src/pages/ConfigPage.tsx`, `tests/test_dashboard_config.py`.
+
+**Не закрыто:** Dashboard не применяет настройки без рестарта — он честно
+сообщает, что рестарт нужен. Настройки вне `Settings` (читаемые напрямую из
+окружения другими модулями) помечаются как неизвестные. Это не закрывает
+PROD-11: какой env-файл реально указан в unit основного агента, проверяется
+на сервере.
+
+### F15 — отзывчивость event loop (2026-10-06)
+
+- Причина: поиск по памяти (локальный embedding + несколько хранилищ) и
+  compaction истории (синхронный вызов модели) выполнялись прямо на event
+  loop для всех не-plan бесед. На эти секунды останавливались bridge,
+  Dashboard, scheduler и остальные беседы.
+- Оба шага выполняются в worker для всех бесед (`run_sync_owned`), как уже
+  было для планов. Worker сохраняет audit/owner/budget/stop scope; отменённый
+  ход ждёт его завершения, а не отпускает беседу под работающим worker.
+- Budget admission берёт write lock общего ledger, поэтому async-вызовы
+  резервируют тоже в worker; hold возвращается явно, а вызов, отменённый во
+  время admission, освобождает неиспользованный hold.
+- Heartbeat-тест измеряет самую длинную паузу loop: 0.4 с до исправления
+  (красный прогон на старом коде зафиксирован), меньше 0.15 с после — для
+  retrieval, compaction и admission. Отдельно проверено, что вторая беседа
+  отвечает, пока первая ждёт память.
+- **2699 passed, 58 integration deselected, 1 warning**; **27 crash/restart
+  passed**; Ruff и diff-check чистые.
+
+Файлы: `kronos/graph.py`, `kronos/security/model_budget.py`,
+`tests/test_event_loop_responsiveness.py`.
+
+**Не закрыто:** короткие синхронные SQLite-вызовы (swarm ledger в bridge и
+routers, запись стоимости в callback) остаются на event loop и под
+конкуренцией за блокировку могут ждать; порог 0.15 с проверен на локальной
+машине с fake-задержками, не под production-нагрузкой. Синхронный SDK,
+зависший в worker, по-прежнему держит беседу до своего timeout.
