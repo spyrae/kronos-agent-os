@@ -26,3 +26,4 @@ gets a new record and marks the previous one superseded.
 | 0019 | [Mem0 operation model scope](ADR-0019-mem0-operation-model-scope.md) | accepted | 2026-09-08 |
 | 0020 | [User-scoped memory](ADR-0020-user-scoped-memory.md) | accepted | 2026-10-06 |
 | 0021 | [Memory reset generations](ADR-0021-memory-reset-generations.md) | accepted | 2026-10-06 |
+| 0022 | [Operator reconciliation and delivery repair](ADR-0022-operator-reconciliation-and-delivery-repair.md) | accepted | 2026-10-06 |

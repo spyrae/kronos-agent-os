@@ -39,9 +39,9 @@ A02/F13 и оставшиеся части F08–F15/A01/A03–A06/PROD/V сох
 | F05 | Per-item ledger; partial/unknown outcomes не теряются и не дублируются | Перенесён, regression пройден | Код присутствует; таблицы email_expense_items в 10:44 ещё нет; нужны инициализация и сверка |
 | F06 | Межпроцессная сериализация всех budget writers | Перенесён, regression пройден | Код присутствует; live приёмка не выполнена |
 | F07 | Approval wait не завершает шаг; approve/reject/restart согласованы | Исправлено и проверено локально | Нужны миграции, rollout и Telegram smoke |
-| F08 | Отмена/падение шага восстанавливаются без слепого повтора эффектов | В работе: claim/link recovery, live cancel/TTL и fenced cleanup проверены; operator reconciliation и гарантированное stop-уведомление ещё нужны | Ожидает |
-| F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | В работе: transactional outbox планов и восстановленных session turns проверен; обычные ответы, остальные producers и operator repair ещё нужны | Ожидает |
-| F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | В работе: intent/journal boundary проверен; полный перечень путей и reconciliation не закрыты | Ожидает |
+| F08 | Отмена/падение шага восстанавливаются без слепого повтора эффектов | Локально: добавлена operator reconciliation (2026-10-06, ADR-0022); stop-уведомление идёт через outbox (F09 этап 1). Workflow для plan-level needs_review и retention reconciliations остаются | Ожидает |
+| F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | Локально: operator repair, восстановление обычных ответов после рестарта и retry cron-уведомлений добавлены (2026-10-06, ADR-0022). Cron-уведомления — retry после отказа, не transactional outbox; live Telegram не проверен | Ожидает |
+| F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | Локально: reconciliation и явная классификация всех встроенных инструментов с inventory-тестом (2026-10-06, ADR-0022). Writers вне engine перечислены в ADR, их идемпотентность не проверена; distinct logical operation ids и provider idempotency остаются | Ожидает |
 | F11 | Один resume на turn; live registry и atomic ownership | Исправлено и проверено локально | Нужен согласованный rollout без старых исполнителей |
 | F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | В работе: factory, прямые ASO/GEO/Vision/scripts/Whisper и Mem0 boundary проверены с fake transports; реальный Mem0 1.0.7, durable session ledger, reservations и unknown outcomes ещё нужны | Ожидает |
 | F13 | Честный scoped reset по всем слоям, включая background writers | Исправлено и проверено локально (2026-10-06, ADR-0021); Mem0 — на fake, реальный пакет в F12 | Ожидает rollout |
@@ -1145,3 +1145,52 @@ mem0ai 1.0.7 остаётся в F12. Reset одного агента не тр�
 считаются памятью и остаются под своей retention. Пользовательской команды
 «забудь меня» нет: scoped reset доступен оператору через Dashboard API
 (`user_id`), UI передаёт только scope.
+
+### F08/F09/F10 — сверка оператором, ремонт доставки, инвентаризация (2026-10-06)
+
+- **Сверка эффектов.** `kaos turns effects` показывает намерения без
+  записанного исхода (аргументы — через redaction). `kaos turns reconcile
+  <key> --outcome happened|did-not-happen|unknown` записывает вердикт, удерживая
+  conversation ownership: под живым исполнителем команда отказывает.
+  `happened` делает указанный результат записанным эффектом — продолжение его
+  переиспользует, а не отправляет повторно. `did-not-happen` освобождает
+  намерение. `unknown` освобождает и завершает ещё активный ход ошибкой.
+  Вердикт с полным исходным намерением хранится в `effect_reconciliations`
+  (v010). Уже упавший ход не оживляется.
+- **Ремонт доставки.** `kaos delivery review` и `kaos delivery resolve
+  <plans|turns> <key> --action retry|abandon`. Retry сохраняет исходную
+  идентичность сообщения; `--rebind-sender` — явное согласие на отправку
+  другим аккаунтом. Пометки «доставлено» вручную нет: квитанции не существует.
+- **Обычные ответы.** Ход, ответ на который bridge отправляет сам, помечается
+  `reply owed` (v011). Bridge подтверждает отправку. При старте процесса, до
+  запуска bridge, завершённые ходы без подтверждения за последние 24 часа
+  передаются в существующий outbox с сохранённым текстом.
+- **Cron-уведомления.** Отправка, которую Telegram подтверждённо не принял
+  (429, 5xx, нет соединения), ставится в очередь с backoff: до шести попыток
+  за 24 часа, затем dead и один отчёт. Timeout после отправки — неизвестный
+  исход, автоматически не повторяется. В очереди хранится тело, не URL с токеном.
+- **Классификация эффектов.** Каждый модуль инструментов объявляет свои
+  инструменты через `mark_side_effect` или `mark_read_only`. Inventory-тест
+  падает при необъявленном встроенном инструменте, расхождении с проверенным
+  списком и появлении новой группы в `_init_tools`. `mcp_reload`,
+  `create_new_tool` и сгенерированные инструменты — эффекты. Composio получает
+  политику MCP без префикса приложения, вывод помечен untrusted.
+- **2657 passed, 58 integration deselected, 1 warning**; **27 crash/restart
+  passed**; Ruff и diff-check чистые. 62 новых test cases относительно F13.
+- Живые Telegram, MCP, Composio, провайдеры и production не вызывались.
+
+Файлы: `kronos/session.py`, `kronos/migrations/v010_effect_reconciliations.py`,
+`kronos/migrations/v011_reply_state.py`, `kronos/delivery.py`, `kronos/cli.py`,
+`kronos/graph.py`, `kronos/bridge.py`, `kronos/app.py`,
+`kronos/cron/notify.py`, `kronos/cron/notify_retry.py`, `kronos/cron/setup.py`,
+`kronos/security/effects.py`, модули `kronos/tools/*`, `kronos/skills/tools.py`;
+тесты `test_effect_reconciliation.py`, `test_delivery_repair.py`,
+`test_reply_obligation.py`, `test_notify_retry.py`,
+`test_tool_effect_inventory.py`; ADR-0022.
+
+**Не закрыто:** повтор ответа, отправленного прямо перед падением (помечается
+как восстановление); cron-уведомления — retry, не transactional outbox;
+writers вне engine перечислены в ADR-0022, их идемпотентность не проверялась;
+distinct logical operation ids, provider idempotency и retention
+`effect_reconciliations` остаются; plan-level needs_review по-прежнему
+решается через Plans UI. Ничего из этого не проверено на живом Telegram.

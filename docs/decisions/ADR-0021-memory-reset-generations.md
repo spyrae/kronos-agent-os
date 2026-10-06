@@ -68,3 +68,7 @@ shared copies as well, Mem0 first, so a failure leaves the fact listed.
   F12. Listing uses an explicit high limit because Mem0 pages at 100.
 - Facts imported by an operator bypass the generation: an import is a new,
   deliberate write.
+- The dashboard has one principal, the operator, who manages every user's
+  memory by design; `user_id` on the reset endpoint narrows a reset, it is not
+  an access check. If the dashboard ever gains per-user accounts, the memory
+  endpoints need authorization per principal.
