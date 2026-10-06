@@ -1409,7 +1409,70 @@ def run_turns_show(turn_id: str) -> int:
         print("\n  external effects (pending requires reconciliation, not retry):")
         for row in detail["effects"]:
             print(f"    {row['tool']} [{row.get('status', 'recorded')}]: {str(row['result'])[:60]}")
+    verdicts = _asyncio.run(store.effect_reconciliations(turn_id))
+    if verdicts:
+        print("\n  operator reconciliations:")
+        for row in verdicts:
+            print(f"    {row['tool']} → {row['outcome']} by {row['operator']} at {row['reconciled_at']}")
     return 0
+
+
+def run_turns_effects() -> int:
+    """List effects that were dispatched without a recorded outcome."""
+    import asyncio as _asyncio
+
+    pending = _asyncio.run(_session_store().pending_effects())
+    if not pending:
+        print("No unresolved external effects.")
+        return 0
+    print(f"{len(pending)} unresolved external effect(s). Verify each one at its provider before deciding.\n")
+    for row in pending:
+        args = json.dumps(_redact_tool_payload(row["args"]), ensure_ascii=False)[:200]
+        print(f"  {row['idempotency_key']}")
+        print(f"    tool={row['tool']}  turn={row['turn_id']} [{row['turn_status']}]  thread={row['thread_id']}")
+        print(f"    dispatched: {row['created_at']}  args: {args}")
+    print("\nRecord a verdict with: kaos turns reconcile <key> --outcome happened|did-not-happen|unknown")
+    return 0
+
+
+def run_turns_reconcile(key: str, *, outcome: str, result: str, note: str, operator: str) -> int:
+    """Record the operator's verified outcome for one unresolved effect."""
+    import asyncio as _asyncio
+    import getpass
+
+    async def _reconcile() -> int:
+        from kronos.effect_state import DurableStateError
+        from kronos.turn_ownership import TurnBusyError, own_conversation
+
+        store = _session_store()
+        row = next((item for item in await store.pending_effects() if item["idempotency_key"] == key), None)
+        if not row:
+            print(f"No unresolved effect with key: {key}")
+            return 1
+        try:
+            async with own_conversation(store.db_path, row["thread_id"], wait=False) as ownership:
+                done = await store.reconcile_effect(
+                    key,
+                    outcome=outcome.replace("-", "_"),
+                    result=result,
+                    note=note,
+                    operator=operator or getpass.getuser(),
+                    ownership=ownership,
+                )
+        except TurnBusyError:
+            print("Conversation has a live executor — stop it before recording a verdict.")
+            return 1
+        except (DurableStateError, ValueError) as error:
+            print(f"Not recorded: {error}")
+            return 1
+        print(f"Recorded '{done['outcome']}' for {done['tool']} in turn {done['turn_id']} [{done['turn_status']}].")
+        if done["turn_status"] in {"running", "resuming"}:
+            print(f"The turn is still in flight. Continue it with: kaos turns resume {done['turn_id']}")
+        else:
+            print("The turn is not continued; the verdict only closes the uncertainty.")
+        return 0
+
+    return _asyncio.run(_reconcile())
 
 
 def run_turns_fork(turn_id: str, *, at_seq: int, thread: str) -> int:
@@ -2331,6 +2394,15 @@ def build_parser() -> argparse.ArgumentParser:
     turns_fork.add_argument("--thread", default="", help="target thread id")
     turns_resume = turns_sub.add_parser("resume", help="finish an interrupted turn now")
     turns_resume.add_argument("turn_id")
+    turns_sub.add_parser("effects", help="list external effects with no recorded outcome")
+    turns_reconcile = turns_sub.add_parser(
+        "reconcile", help="record the verified outcome of an unresolved external effect"
+    )
+    turns_reconcile.add_argument("key", help="idempotency key from 'kaos turns effects'")
+    turns_reconcile.add_argument("--outcome", required=True, choices=["happened", "did-not-happen", "unknown"])
+    turns_reconcile.add_argument("--result", default="", help="what the provider shows; required for 'happened'")
+    turns_reconcile.add_argument("--note", default="", help="how the outcome was verified")
+    turns_reconcile.add_argument("--operator", default="", help="who decided; defaults to the OS user")
 
     policy_cmd = sub.add_parser("policy", help="inspect the governance policy")
     policy_sub = policy_cmd.add_subparsers(dest="policy_command")
@@ -2590,6 +2662,12 @@ def main(argv: list[str] | None = None) -> int:
             return run_turns_fork(args.turn_id, at_seq=args.at_seq, thread=args.thread)
         if args.turns_command == "resume":
             return run_turns_resume(args.turn_id)
+        if args.turns_command == "effects":
+            return run_turns_effects()
+        if args.turns_command == "reconcile":
+            return run_turns_reconcile(
+                args.key, outcome=args.outcome, result=args.result, note=args.note, operator=args.operator
+            )
         parser.parse_args(["turns", "--help"])
         return 0
     if args.command == "policy":
