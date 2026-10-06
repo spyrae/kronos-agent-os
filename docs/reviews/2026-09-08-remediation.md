@@ -43,7 +43,7 @@ A02/F13 и оставшиеся части F08–F15/A01/A03–A06/PROD/V сох
 | F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | Локально: operator repair, восстановление обычных ответов после рестарта и retry cron-уведомлений добавлены (2026-10-06, ADR-0022). Cron-уведомления — retry после отказа, не transactional outbox; live Telegram не проверен | Ожидает |
 | F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | Локально: reconciliation и явная классификация всех встроенных инструментов с inventory-тестом (2026-10-06, ADR-0022). Writers вне engine перечислены в ADR, их идемпотентность не проверена; distinct logical operation ids и provider idempotency остаются | Ожидает |
 | F11 | Один resume на turn; live registry и atomic ownership | Исправлено и проверено локально | Нужен согласованный rollout без старых исполнителей |
-| F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | В работе: factory, прямые ASO/GEO/Vision/scripts/Whisper и Mem0 boundary проверены с fake transports; реальный Mem0 1.0.7, durable session ledger, reservations и unknown outcomes ещё нужны | Ожидает |
+| F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | Локально: durable session ledger, атомарные reservations и учёт unknown outcomes добавлены (2026-10-06, ADR-0023). Реальный Mem0 1.0.7 не проверен: установка пакета не согласована | Ожидает |
 | F13 | Честный scoped reset по всем слоям, включая background writers | Исправлено и проверено локально (2026-10-06, ADR-0021); Mem0 — на fake, реальный пакет в F12 | Ожидает rollout |
 | F14 | Desired/effective runtime settings совпадают или restart явно указан | Ожидает | Ожидает |
 | F15 | Model/memory I/O не блокирует event loop; responsiveness test | Ожидает | Ожидает |
@@ -1194,3 +1194,38 @@ writers вне engine перечислены в ADR-0022, их идемпоте�
 distinct logical operation ids, provider idempotency и retention
 `effect_reconciliations` остаются; plan-level needs_review по-прежнему
 решается через Plans UI. Ничего из этого не проверено на живом Telegram.
+
+### F12 — этап 5: reservations и durable session ledger (2026-10-06)
+
+- Причина: admission сравнивал вызов с уже записанным расходом, поэтому
+  параллельные вызовы видели один и тот же остаток. Сессионный итог жил в
+  памяти процесса и сбрасывался рестартом. Вызов с timeout не оставлял следа.
+  Approval и resume списывали на thread id, а не на chat id исходного хода.
+- `swarm.db`: `session_costs` (расход беседы за UTC-день) и `budget_holds`.
+  Reserve в одной транзакции проверяет записанный расход + открытые holds +
+  оценку вызова против дневного и сессионного лимита и вставляет hold.
+- Запись стоимости обновляет день, беседу и удаляет hold одной транзакцией;
+  при сбое записи hold остаётся учтённым.
+- Вызов без записанной стоимости (timeout, 5xx, отмена, успех без usage)
+  сохраняет hold как `unknown` до конца дня. Отказ 4xx не тарифицируется и
+  освобождает hold.
+- `active_turns.budget_session` (v012): approval и resume списывают на ту же
+  беседу, что и исходный ход.
+- **2686 passed, 58 integration deselected, 1 warning**; **27 crash/restart
+  passed**; Ruff и diff-check чистые. 29 новых test cases: десять потоков на
+  пять мест, второй процесс, сессия + holds, рестарт, смена дня, четыре вида
+  unknown, отмена, 4xx, успех без usage, сбой записи, нечитаемый ledger,
+  невалидные лимиты, миграция.
+- Реальные провайдеры, Mem0 и production не вызывались.
+
+Файлы: `kronos/swarm_store.py`, `kronos/security/cost_guardian.py`,
+`kronos/security/model_budget.py`, `kronos/security/cost_tracking.py`,
+`kronos/policy.py`, `kronos/session.py`, `kronos/graph.py`,
+`kronos/migrations/v012_turn_budget_session.py`; тесты
+`test_budget_reservations.py` и обновлённые бюджетные наборы; ADR-0023.
+
+**Не закрыто:** оценка — значение политики, не цена: лимит ограничивает
+перерасход параллельных вызовов, а не является точным потолком или счётом
+провайдера. При отказе провайдера с 5xx/timeout каждая попытка держит оценку
+до конца дня. Приёмка на mem0ai 1.0.7 требует установки пакета во временное
+окружение — не согласовано. Live E2E всех model paths не выполнялся.
