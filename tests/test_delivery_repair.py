@@ -48,8 +48,9 @@ async def test_review_queue_shows_metadata_without_text_or_recipient(db):
     assert [(r["event_key"], r["last_error"], r["sent_chunks"], r["total_chunks"]) for r in listing] == [
         ("event:1", "DeliveryUncertainError", 0, 1)
     ]
-    flat = repr(listing)
-    assert "private result text" not in flat and "77" not in flat
+    # No text and no recipient: checked by field, since a timestamp can contain any digits.
+    assert "private result text" not in repr(listing)
+    assert not {"chat_id", "topic_id", "chunks", "sender_id"} & set(listing[0])
 
 
 async def test_plain_retry_keeps_identity_and_still_refuses_another_account(db):
