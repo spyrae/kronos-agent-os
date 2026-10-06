@@ -1195,12 +1195,17 @@ class KronosAgent:
     async def clear_context(self, thread_id: str) -> str:
         """Clear conversation history for a thread.
 
-        Clears THIS conversation only. Facts the agent has learned about the
-        user (Mem0 + shared_user_facts) are cross-conversation and are kept on
-        purpose — the message says so rather than implying everything is gone.
+        Clears THIS conversation only, including its rows in session search.
+        Facts the agent has learned about the user (Mem0 + shared_user_facts)
+        are cross-conversation and are kept on purpose — the message says so
+        rather than implying everything is gone.
+
+        Waits for a turn that is still running in this thread: clearing under
+        it would be undone when that turn saves the history it started with.
         """
         if self._session_store:
-            deleted = await self._session_store.clear(thread_id)
+            async with own_conversation(self._session_store.db_path, thread_id):
+                deleted = await self._session_store.clear(thread_id)
             log.info("Cleared context for thread %s: %d rows", thread_id, deleted)
             return (
                 "🧹 История этого диалога очищена. "
