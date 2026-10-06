@@ -4,6 +4,7 @@ import json
 import logging
 import urllib.parse
 import urllib.request
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 from kronos.config import settings
@@ -11,6 +12,8 @@ from kronos.config import settings
 log = logging.getLogger("kronos.analytics.sources.langfuse_stats")
 
 _TIMEOUT = 15
+_EXPOSURE_PROBE_ROUTE = "/v1/models"
+_EXPOSURE_PROBE_OBSERVATIONS_PER_HOUR = 2
 
 
 def _api_get(path: str, params: dict | None = None) -> dict | list:
@@ -100,18 +103,34 @@ def collect() -> dict:
             return "default-message-value" in str(o.get("input", ""))
 
         # Our own external exposure probe asks the gateway for /v1/models
-        # without a key every hour, to prove it still answers 401. Langfuse
-        # records no address or user agent, so the route is the only thing
-        # that tells it apart: on 2026-10-06 all 50 keyless requests of the day
-        # were this probe, and the pulse reported them as something to
-        # investigate. Keyless requests to any other route stay a real signal.
-        def _is_exposure_probe(o: dict) -> bool:
+        # without a key every hour, to prove it still answers 401. On
+        # 2026-10-06 all 50 keyless requests of the day were this probe, and
+        # the pulse reported them as something to investigate.
+        #
+        # Langfuse records no address or user agent, so the route is all that
+        # identifies the probe — and the sender picks the route. Writing off
+        # every keyless /v1/models request would let anyone silence this
+        # signal by using that route. So only the probe's own footprint is
+        # written off: it leaves two observations per hourly run, and anything
+        # beyond that in the same hour, or without a timestamp to place it,
+        # is still counted as unauthenticated.
+        def _has_probe_shape(o: dict) -> bool:
             metadata = o.get("metadata")
             route = metadata.get("user_api_key_request_route") if isinstance(metadata, dict) else None
-            return _is_unauthenticated(o) and route == "/v1/models"
+            return _is_unauthenticated(o) and route == _EXPOSURE_PROBE_ROUTE
+
+        probe_by_hour: Counter[str] = Counter()
+        for o in obs_list:
+            hour = str(o.get("startTime") or "")[:13]
+            if (
+                _has_probe_shape(o)
+                and len(hour) == 13
+                and probe_by_hour[hour] < _EXPOSURE_PROBE_OBSERVATIONS_PER_HOUR
+            ):
+                probe_by_hour[hour] += 1
 
         scored = [o for o in obs_list if not _is_unauthenticated(o) and not _is_probe(o)]
-        exposure_probe = sum(1 for o in obs_list if _is_exposure_probe(o))
+        exposure_probe = sum(probe_by_hour.values())
         unauthenticated = sum(1 for o in obs_list if _is_unauthenticated(o)) - exposure_probe
         errors = sum(1 for o in scored if o.get("level") == "ERROR")
         error_rate = round(errors / len(scored) * 100, 1) if scored else 0
