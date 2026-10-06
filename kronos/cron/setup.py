@@ -40,6 +40,7 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     from kronos.cron.mcp_smoke import run_mcp_smoke
     from kronos.cron.memory_ask import run_memory_intake
     from kronos.cron.news_monitor import run_news_monitor
+    from kronos.cron.notify_retry import run_notify_retry
     from kronos.cron.persona_evolve import run_persona_evolution
     from kronos.cron.personal_observer import run_daily_scope, run_personal_observer
     from kronos.cron.plans import run_due_plan_steps
@@ -188,6 +189,10 @@ def setup_cron_jobs(scheduler: Scheduler) -> None:
     # owning agent — the binaries and the uv cache are per-host, and the one
     # agent-scoped server is meant to be absent elsewhere.
     scheduler.add_daily("mcp-smoke", run_mcp_smoke, hour_utc=9)
+
+    # Notification retry — every 5 minutes. Re-sends cron notifications that
+    # Telegram verifiably did not accept (429/5xx/no connection).
+    scheduler.add_periodic("notify-retry", run_notify_retry, interval_seconds=300)
 
     # Swarm Retention — weekly Sunday 03:00 UTC. Prunes swarm_messages
     # older than MESSAGE_RETENTION_DAYS (90d). Safe on all 6 agents.

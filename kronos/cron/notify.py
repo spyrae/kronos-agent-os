@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import time
+import urllib.error
 import urllib.request
 
 from kronos.config import settings
@@ -314,42 +315,77 @@ def _sanitize_html(text: str) -> str:
     return text.strip()
 
 
-def _send_message(url: str, body: dict) -> bool:
-    """Send a single message, retry without parse_mode on HTML error."""
+def _post(url: str, body: dict) -> None:
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    resp = urllib.request.urlopen(req, timeout=15)
+    if resp.status != 200:
+        raise OSError(f"unexpected Bot API status {resp.status}")
+
+
+def _attempt(url: str, body: dict) -> str:
+    """One send. Returns ``sent``, ``retry`` (Telegram verifiably did not accept
+    it and may later), ``refused`` (it never will) or ``unknown`` (the request
+    may have arrived, so repeating it could duplicate the message)."""
     try:
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
-        resp = urllib.request.urlopen(req, timeout=15)
-        return resp.status == 200
-    except urllib.request.HTTPError as e:
-        err_body = e.read().decode()
+        _post(url, body)
+        return "sent"
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode(errors="replace")
         if e.code == 400 and "can't parse entities" in err_body:
             log.warning("HTML parse failed, retrying as plain text")
             body.pop("parse_mode", None)
             try:
-                req = urllib.request.Request(
-                    url,
-                    data=json.dumps(body).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                )
-                resp = urllib.request.urlopen(req, timeout=15)
-                return resp.status == 200
+                _post(url, body)
+                return "sent"
             except Exception as e2:
-                log.error("Bot API send failed (plain fallback): %s", e2)
-                return False
+                log.error("Bot API send failed (plain fallback): %s", type(e2).__name__)
+                return "unknown"
         reason = permanent_delivery_reason(err_body)
         if reason:
             destination = describe_destination(body.get("chat_id"), body.get("message_thread_id"))
             report_undelivered(destination, reason, str(body.get("text", "")))
-        else:
-            log.error("Bot API send failed: %s — %s", e, err_body[:200])
-        return False
+            return "refused"
+        log.error("Bot API send failed: %s — %s", e, err_body[:200])
+        # Telegram answered and did not accept: rate limit or its own outage.
+        return "retry" if e.code == 429 or e.code >= 500 else "refused"
+    except urllib.error.URLError as e:
+        log.error("Bot API send failed: %s", type(e.reason).__name__)
+        # No connection was opened, so nothing was sent. A timeout is different:
+        # the request may already be on Telegram's side.
+        return "unknown" if isinstance(e.reason, TimeoutError) else "retry"
     except Exception as e:
-        log.error("Bot API send failed: %s", e)
-        return False
+        log.error("Bot API send failed: %s", type(e).__name__)
+        return "unknown"
+
+
+def _send_message(url: str, body: dict) -> bool:
+    """Send a single message, retry without parse_mode on HTML error.
+
+    A message Telegram verifiably did not accept is queued for a later retry
+    instead of being dropped (see ``kronos.cron.notify_retry``).
+    """
+    return _send_or_queue(url, body) == "sent"
+
+
+def _send_or_queue(url: str, body: dict) -> str:
+    outcome = _attempt(url, body)
+    if outcome == "retry":
+        from kronos.cron.notify_retry import queue_retry
+
+        queue_retry(body, "telegram temporarily unavailable")
+    return outcome
+
+
+def send_prepared(body: dict) -> str:
+    """Re-send a queued Bot API body. The URL is rebuilt here: it carries the token."""
+    token = settings.tg_bot_token
+    if not token:
+        return "refused"
+    return _attempt(f"https://api.telegram.org/bot{token}/sendMessage", dict(body))
 
 
 def _split_by_lines(text: str, max_len: int = 4000) -> list[str]:
@@ -417,9 +453,16 @@ def send_bot_api(
     # Chunk long messages — split by lines, not mid-sentence
     if len(text) > 4000:
         chunks = _split_by_lines(text, max_len=4000)
-        for chunk in chunks:
+        for index, chunk in enumerate(chunks):
             body["text"] = chunk
-            if not _send_message(url, body.copy()):
+            outcome = _send_or_queue(url, body.copy())
+            if outcome != "sent":
+                if outcome == "retry":
+                    # The rest follows the queued chunk, in order, instead of being dropped.
+                    from kronos.cron.notify_retry import queue_retry
+
+                    for later in chunks[index + 1 :]:
+                        queue_retry({**body, "text": later}, "follows a queued chunk")
                 return False
         return True
 
