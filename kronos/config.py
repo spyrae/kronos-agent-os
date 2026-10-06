@@ -111,6 +111,9 @@ class Settings(BaseSettings):
     # Discord
     discord_bot_token: str = ""
     discord_allowed_guilds: str = ""  # comma-separated guild IDs
+    # Comma-separated Discord user IDs that may talk to the agent. Empty means
+    # nobody: a bot token alone must not open the agent to every Discord user.
+    discord_allowed_users: str = ""
 
     # MCP Servers
     brave_api_key: str = ""
