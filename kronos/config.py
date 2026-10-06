@@ -20,6 +20,9 @@ def _select_env_file() -> str:
 
 
 _ENV_FILE = _select_env_file()
+# Resolved once, at import: a later chdir must not make "the file this process
+# loaded" point somewhere else.
+_ENV_FILE_ABS = os.path.abspath(os.path.expanduser(_ENV_FILE))
 load_dotenv(_ENV_FILE, override=False)
 
 
@@ -298,6 +301,21 @@ class Settings(BaseSettings):
         if allowed:
             return user_id in allowed
         return self.allow_all_users
+
+
+def loaded_env_file() -> str:
+    """The dotenv file this process read its settings from."""
+    return _ENV_FILE_ABS
+
+
+def desired_settings() -> Settings:
+    """Settings as the dotenv file on disk says now, without touching the live ones.
+
+    Process environment variables still take precedence, exactly as they did at
+    startup, so this answers "what would a restart load" rather than "what does
+    the file contain".
+    """
+    return Settings(_env_file=_ENV_FILE_ABS)
 
 
 settings = Settings()

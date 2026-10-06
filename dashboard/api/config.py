@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from dashboard.auth import verify_token
-from kronos.config import settings
+from kronos.config import desired_settings, loaded_env_file, settings
 
 router = APIRouter(prefix="/api/config", tags=["config"], dependencies=[Depends(verify_token)])
 log = logging.getLogger("kronos.dashboard.config")
@@ -28,19 +28,30 @@ def _mask_value(key: str, value: str) -> str:
 
 
 def _get_env_path() -> Path:
-    explicit = os.environ.get("KAOS_ENV_FILE") or os.environ.get("KRONOS_ENV_FILE")
-    if explicit:
-        return Path(explicit).expanduser()
+    """The dotenv file the running process loaded — never another agent's.
 
-    cwd_env = Path.cwd() / ".env"
-    if cwd_env.exists():
-        return cwd_env
+    Each agent unit reads its own file (``.env.<agent>``). Editing ``.env``
+    from a non-base agent's dashboard would change the base agent instead and
+    leave this one untouched.
+    """
+    return Path(loaded_env_file()).expanduser()
 
-    project_env = Path(__file__).resolve().parents[2] / ".env"
-    if project_env.exists():
-        return project_env
 
-    return cwd_env
+def _pending_restart() -> dict[str, bool]:
+    """Per dotenv key: does the running process already use the value on disk?
+
+    A key that is not a runtime setting is absent from the result: it may be
+    read by something else, and nothing here can tell whether it is in effect.
+    Values are never returned, only whether they match.
+    """
+    try:
+        desired = desired_settings()
+    except Exception as error:
+        # A file that no longer parses would stop a restart; say so, don't guess.
+        raise HTTPException(500, f"dotenv file is not loadable: {type(error).__name__}") from error
+    return {
+        name.upper(): getattr(desired, name) != getattr(settings, name) for name in type(settings).model_fields
+    }
 
 
 def _approval_events_path() -> Path:
@@ -93,8 +104,9 @@ async def get_env_vars():
     """Get .env variables with masked secrets."""
     env_path = _get_env_path()
     if not env_path.exists():
-        return {"vars": []}
+        return {"vars": [], "env_file": env_path.name, "restart_required": False}
 
+    pending = _pending_restart()
     result = []
     for line in env_path.read_text().splitlines():
         line = line.strip()
@@ -110,9 +122,16 @@ async def get_env_vars():
                 "key": key,
                 "value": _mask_value(key, value),
                 "is_secret": bool(SECRET_PATTERNS.search(key)),
+                # False: saved but not in effect until restart. None: not a
+                # runtime setting, so its effect cannot be told from here.
+                "applied": (not pending[key.upper()]) if key.upper() in pending else None,
             }
         )
-    return {"vars": result}
+    return {
+        "vars": result,
+        "env_file": env_path.name,
+        "restart_required": any(item["applied"] is False for item in result),
+    }
 
 
 class EnvUpdate(BaseModel):
@@ -151,6 +170,7 @@ def _capability(
         "owner": workspace,
         "change_mode": "approval_required_restart",
         "can_request_change": True,
+        "pending_restart": False,
     }
 
 
@@ -232,13 +252,58 @@ async def update_env_var(key: str, body: EnvUpdate):
 
     env_path.write_text("\n".join(new_lines) + "\n")
     log.info("Env var updated: %s", key)
-    return {"ok": True, "key": key, "note": "Restart required for changes to take effect"}
+    pending = _pending_restart()
+    applied = (not pending[key.upper()]) if key.upper() in pending else None
+    return {
+        "ok": True,
+        "key": key,
+        "env_file": env_path.name,
+        "applied": applied,
+        "restart_required": applied is False,
+        "note": (
+            "Saved. The running agent already uses this value."
+            if applied
+            else "Saved, not in effect: the running agent keeps the old value until it is restarted."
+            if applied is False
+            else "Saved. This is not a runtime setting, so whether it is in effect cannot be told from here."
+        ),
+    }
+
+
+_CAPABILITY_SETTINGS = {
+    "tool_approvals": "tool_approvals_enabled",
+    "dynamic_tools": "enable_dynamic_tools",
+    "dynamic_tool_sandbox": "require_dynamic_tool_sandbox",
+    "mcp_gateway_management": "enable_mcp_gateway_management",
+    "dynamic_mcp_servers": "enable_dynamic_mcp_servers",
+    "server_ops": "enable_server_ops",
+}
+
+
+def _mark_pending_capabilities(capabilities: list[dict]) -> list[dict]:
+    """Flag a capability whose dotenv value differs from what is running.
+
+    ``enabled`` always describes the running process. Without this flag a
+    protective setting switched on in the file would look either already
+    active or never requested.
+    """
+    try:
+        desired = desired_settings()
+    except Exception:
+        return capabilities
+    for item in capabilities:
+        field = _CAPABILITY_SETTINGS.get(item["key"])
+        if field:
+            wanted = bool(getattr(desired, field))
+            item["pending_restart"] = wanted != item["enabled"]
+            item["desired_enabled"] = wanted
+    return capabilities
 
 
 @router.get("/capabilities")
 async def get_capabilities():
     """Get public-safe capability gate status."""
-    return {"capabilities": _build_capabilities()}
+    return {"capabilities": _mark_pending_capabilities(_build_capabilities())}
 
 
 @router.get("/approvals")

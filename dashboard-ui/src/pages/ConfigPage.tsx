@@ -3,7 +3,8 @@ import type { CSSProperties } from 'react';
 import { api } from '../api/client';
 import { SectionHeader, StatusBadge } from '../components/Charts';
 
-interface EnvVar { key: string; value: string; is_secret: boolean; }
+// applied: false = saved but not in effect until restart; null = not a runtime setting.
+interface EnvVar { key: string; value: string; is_secret: boolean; applied?: boolean | null; }
 interface LlmConfig { tiers: Record<string, { model: string; temperature?: number; max_tokens?: number }>; routing: { complex_patterns_count: number; simple_patterns_count: number } }
 interface Capability {
   key: string;
@@ -17,6 +18,8 @@ interface Capability {
   owner: string;
   change_mode: string;
   can_request_change: boolean;
+  pending_restart?: boolean;
+  desired_enabled?: boolean;
 }
 interface Approval {
   id: string;
@@ -87,8 +90,8 @@ export default function ConfigPage() {
   const saveVar = async () => {
     if (!editing || !editValue) return;
     try {
-      await api(`/api/config/env/${editing}`, { method: 'PUT', body: JSON.stringify({ value: editValue }) });
-      showToast(`${editing} updated. Restart required.`);
+      const saved = await api<{ note?: string }>(`/api/config/env/${editing}`, { method: 'PUT', body: JSON.stringify({ value: editValue }) });
+      showToast(`${editing}: ${saved.note || 'saved'}`);
       setEditing(null);
       setEditValue('');
       load();
@@ -195,6 +198,11 @@ export default function ConfigPage() {
                   textTransform: 'uppercase',
                 }}>{capability.status}</span>
               </div>
+              {capability.pending_restart && (
+                <p style={{ color: '#fbbf24', fontSize: '0.74rem', margin: '0 0 0.5rem' }}>
+                  The env file says {capability.desired_enabled ? 'enabled' : 'disabled'}; the running agent has not picked it up. Restart to apply.
+                </p>
+              )}
               <p style={{ color: '#888', fontSize: '0.78rem', lineHeight: 1.5, margin: '0 0 0.75rem' }}>{capability.description}</p>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center', fontSize: '0.72rem' }}>
                 <span style={{ color: RISK_COLORS[capability.risk] || '#888', fontWeight: 600, textTransform: 'uppercase' }}>{capability.risk}</span>
@@ -298,7 +306,14 @@ export default function ConfigPage() {
           <tbody>
             {vars.map(v => (
               <tr key={v.key} style={{ borderBottom: '1px solid #111' }}>
-                <td style={{ padding: '0.55rem 1rem', fontFamily: 'monospace', color: '#e0e0e0', fontSize: '0.8rem' }}>{v.key}</td>
+                <td style={{ padding: '0.55rem 1rem', fontFamily: 'monospace', color: '#e0e0e0', fontSize: '0.8rem' }}>
+                  {v.key}
+                  {v.applied === false && (
+                    <span title="Saved in the env file; the running agent still uses the old value" style={{ marginLeft: '0.5rem', color: '#fbbf24', fontSize: '0.68rem', fontFamily: 'inherit' }}>
+                      not in effect until restart
+                    </span>
+                  )}
+                </td>
                 <td style={{ padding: '0.55rem 1rem', fontFamily: 'monospace', color: v.is_secret ? '#444' : '#4ade80', fontSize: '0.8rem' }}>
                   {editing === v.key ? (
                     <div style={{ display: 'flex', gap: '0.3rem' }}>
