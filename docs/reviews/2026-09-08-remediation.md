@@ -72,7 +72,7 @@ A02/F13 и оставшиеся части F08–F15/A01/A03–A06/PROD/V сох
 | ID | Требование / критерий приёмки | Статус |
 |---|---|---|
 | A01 | Discord owner allowlist, безопасные DM и границы контекста | Ожидает |
-| A02 | User-scoped KG/session search без раскрытия чужой памяти | Ожидает |
+| A02 | User-scoped KG/session search без раскрытия чужой памяти | Исправлено и проверено локально (2026-10-06, ADR-0020); production: миграции, rollout и решение оператора о старых записях ещё нужны |
 | A03 | Browser screenshot доходит до модели полноценным изображением | Ожидает |
 | A04 | Полное резервирование вместо одного workspace | См. PROD-07; не исключено из цели |
 | A05 | FTS/shared memory доступна без обязательного DeepSeek key | Ожидает |
@@ -1047,3 +1047,56 @@ keyless memory) нужно сочетать с A02. Проверка текущ�
 принимает только query/limit, а `session_search` ищет общий индекс. Простое снятие
 DeepSeek gate без user-scoping расширило бы выдачу общей памяти. Схема требует
 отдельной миграции и решения о старых записях; ничего не удалено/не мигрировано.
+
+### A02 — граница данных пользователей (2026-10-06)
+
+- Причина: у инструмента не было доверенной идентичности. Единственный user id
+  в досягаемости — audit context, где при approval стоит подтверждающий, а при
+  durable resume его нет. `search_sessions` и knowledge graph не фильтровали
+  по пользователю вообще.
+- Миграция v009 добавляет `active_turns.user_id`; `begin_turn` сохраняет
+  отправителя, проверенного транспортом. `kronos/memory/scope.py` привязывает
+  владельца для нового хода, approval continuation (из хода, не из
+  `decided_by`) и durable resume. Пустой владелец не совпадает ни с кем.
+- `session_messages.user_id`: строки пишутся под владельцем хода, уже
+  проиндексированная строка сохраняет первого владельца. `search_sessions`
+  требует владельца. У инструмента нет аргумента, выбирающего пользователя.
+- `entities/relations.user_id`: запись без владельца отклоняется, чтение
+  возвращает только свои строки, имена уникальны в пределах владельца.
+  Повреждённая связь между владельцами не раскрывает чужую сущность.
+  Sleep compute строит отдельный граф на пользователя; export/import
+  сохраняют владельца.
+- Cron user-model ищет по настроенным владельцам и отбрасывает audit-записи
+  посторонних: `USER-MODEL.md` попадает в каждый prompt.
+- Старые строки остаются с `user_id IS NULL`: ничего не удалено и не
+  присвоено. Их не видит ни один пользователь. Оператор назначает владельца
+  явно: `kaos sessions owners`, `kaos sessions assign-owner`.
+- **2573 passed, 58 integration deselected, 1 warning**; **27 crash/restart
+  passed**; Ruff и diff-check чистые. 47 новых test cases: чужой/пустой/
+  враждебный владелец, обязательность владельца, approval другим лицом,
+  resume, групповая беседа, миграция старой схемы session index и графа,
+  round-trip bundle, операторское назначение без merge/delete.
+- Реальные Telegram/Discord/MCP/модели и production не вызывались. Миграции
+  проверены на вручную созданной старой схеме, не на копии production-БД.
+
+Файлы: `kronos/memory/scope.py`, `kronos/migrations/v009_turn_owner.py`,
+`kronos/session.py`, `kronos/graph.py`, `kronos/swarm_store.py`,
+`kronos/tools/session_search.py`, `kronos/memory/knowledge_graph.py`,
+`kronos/memory/nodes.py`, `kronos/cron/sleep_compute.py`,
+`kronos/cron/user_model.py`, `kronos/portability/{build,export,import_}.py`,
+`kronos/portability/importers/obsidian.py`, `kronos/demo_seed.py`,
+`kronos/cli.py`; тесты `test_data_owner_scope.py`, `test_session_search.py`,
+`test_knowledge_graph_scope.py`, `test_user_model.py`,
+`test_portability_{import,export}.py`; ADR-0020.
+
+Проверить: `KAOS_ENV_FILE=/dev/null PYTHONPATH="$PWD" ../app/.venv/bin/python
+-m pytest tests/test_data_owner_scope.py tests/test_session_search.py
+tests/test_knowledge_graph_scope.py tests/test_user_model.py -q`, затем полный
+набор и четыре `test_*_kill.py`.
+
+**Не закрыто этим этапом:** атрибуция в групповой беседе — на уровне беседы,
+не отдельного сообщения (см. ADR-0020); при открытом allowlist без настроенных
+владельцев cron user-model по-прежнему читает все audit-записи; Telegram и
+Discord id делят одно пространство до A01; scoped reset — F13; keyless
+retrieval — A05. После rollout существующий граф и session index невидимы
+пользователям, пока оператор не назначит владельца.
