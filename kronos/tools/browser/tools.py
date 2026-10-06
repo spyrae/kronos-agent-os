@@ -9,6 +9,7 @@ import logging
 
 from langchain_core.tools import BaseTool, tool
 
+from kronos.security.effects import mark_read_only
 from kronos.security.untrusted import mark_untrusted
 from kronos.tools.browser import engine
 
@@ -95,6 +96,8 @@ mark_untrusted(_BROWSER_TOOLS, reason="browser")
 
 # Exposing these to the supervisor must not turn a read session into an
 # unapproved submit/delete action. JavaScript and form fields can mutate too.
+# Loading and looking at a page is a read; acting on it is not.
+mark_read_only([browser_navigate, browser_snapshot, browser_screenshot], reason="browser reads")
 for _mutation in (browser_click, browser_type, browser_evaluate):
     _mutation.metadata = {**(_mutation.metadata or {}), "needs_approval": True, "side_effect": True}
 

@@ -32,3 +32,24 @@ def mark_side_effect(tools: Iterable[Any], *, reason: str = "") -> list[Any]:
     if marked and reason:
         log.debug("Marked %d %s tool(s) as side-effecting", len(marked), reason)
     return marked
+
+
+def mark_read_only(tools: Iterable[Any], *, reason: str = "") -> list[Any]:
+    """Declare that calling these tools changes nothing outside this process.
+
+    An explicit ``False`` is a statement, not a default: it is what lets an
+    interrupted turn run the call again without review. A tool that reads
+    through an authenticated session still counts as read-only if it only reads.
+    """
+    marked = []
+    for tool in tools:
+        try:
+            tool.metadata = {**(getattr(tool, "metadata", None) or {}), SIDE_EFFECT_METADATA_KEY: False}
+        except (AttributeError, ValueError) as e:
+            # Undeclared is the safe failure: resume then refuses to replay it.
+            log.error("Cannot mark tool %s as read-only: %s", getattr(tool, "name", tool), e)
+            continue
+        marked.append(tool)
+    if marked and reason:
+        log.debug("Marked %d %s tool(s) as read-only", len(marked), reason)
+    return marked

@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from langchain_core.tools import tool
 
 from kronos.plan_conditions import format_number, parse_number
+from kronos.security.effects import mark_read_only
 
 log = logging.getLogger("kronos.tools.compare")
 
@@ -248,3 +249,5 @@ async def compare_offers(offers: str, recurring: str = "", one_off: str = "", pe
 # The output is bounded by MAX_OFFERS, and its value is being complete: a ranking
 # cut off halfway is a different ranking. Exempt from the general output ceiling.
 compare_offers.metadata = {**(compare_offers.metadata or {}), "output_max_chars": 0}
+# A pure ranking of the offers it is given.
+mark_read_only([compare_offers], reason="offer comparison")

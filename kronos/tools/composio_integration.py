@@ -11,8 +11,26 @@ import logging
 from langchain_core.tools import BaseTool
 
 from kronos.config import settings
+from kronos.security.mcp_tools import mcp_requires_approval, normalized_tool_name
+from kronos.security.untrusted import mark_untrusted
 
 log = logging.getLogger("kronos.tools.composio")
+
+
+def classify_composio_tools(tools: list[BaseTool]) -> list[BaseTool]:
+    """Give third-party actions the same local policy as MCP tools.
+
+    Composio names lead with the app (``GITHUB_GET_ISSUE``), so the action is
+    judged without that prefix. Anything not recognisably a read is an effect:
+    it needs approval and goes through the intent ledger. What these tools
+    return is external content and is framed as untrusted.
+    """
+    marked = mark_untrusted(tools, reason="composio")
+    for tool in marked:
+        action = normalized_tool_name(tool.name).split("_", 1)[-1]
+        risky = mcp_requires_approval(action)
+        tool.metadata = {**(tool.metadata or {}), "needs_approval": risky, "side_effect": risky}
+    return marked
 
 
 def get_composio_tools(apps: list[str] | None = None) -> list[BaseTool]:
@@ -58,7 +76,7 @@ def get_composio_tools(apps: list[str] | None = None) -> list[BaseTool]:
             tools = toolset.get_tools()
 
         log.info("Composio: loaded %d tools from %s", len(tools), apps or "all connected")
-        return tools
+        return classify_composio_tools(tools)
 
     except Exception as e:
         log.error("Composio initialization failed: %s", e)

@@ -7,6 +7,7 @@ from langchain_core.tools import tool
 
 from kronos.llm import ModelTier, get_model
 from kronos.memory.scope import current_data_owner
+from kronos.security.effects import mark_read_only
 from kronos.swarm_store import get_swarm
 
 log = logging.getLogger("kronos.tools.session_search")
@@ -87,3 +88,6 @@ Return 2-4 concise Russian bullet points. Mention uncertainty if the hits are we
     except Exception as e:
         log.debug("Session-search summarization failed: %s", e)
         return ""
+
+
+mark_read_only([session_search], reason="session search")
