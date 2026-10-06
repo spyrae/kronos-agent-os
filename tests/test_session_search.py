@@ -302,3 +302,52 @@ async def test_finalize_turn_indexes_under_the_turn_owner(isolated_session_searc
     )
     assert len(swarm.search_sessions(query="forecast", user_id="alice")) == 2
     assert swarm.search_sessions(query="forecast", user_id="bob") == []
+
+
+# --- operator assignment of ownerless rows -----------------------------------
+
+
+def test_operator_assigns_one_thread_and_never_takes_over_an_owned_row(isolated_session_search):
+    _, swarm = isolated_session_search
+    swarm.index_session_message(agent_name="kronos", thread_id="100", role="user", content="old alpha note")
+    swarm.index_session_message(agent_name="kronos", thread_id="200", role="user", content="old beta note")
+    swarm.index_session_message(agent_name="nexus", thread_id="100", role="user", content="other agent alpha note")
+    swarm.index_session_message(
+        agent_name="kronos", thread_id="100", role="user", content="bob alpha note", user_id="bob"
+    )
+
+    assert swarm.ownerless_session_threads(agent_name="kronos") == [
+        {"thread_id": "100", "messages": 1},
+        {"thread_id": "200", "messages": 1},
+    ]
+    with pytest.raises(ValueError):
+        swarm.assign_session_owner(agent_name="kronos", thread_id="100", user_id=" ")
+
+    assert swarm.assign_session_owner(agent_name="kronos", thread_id="100", user_id="alice") == 1
+    assert swarm.assign_session_owner(agent_name="kronos", thread_id="100", user_id="alice") == 0
+
+    assert [r["content"] for r in swarm.search_sessions(query="alpha", user_id="alice")] == ["old alpha note"]
+    assert [r["content"] for r in swarm.search_sessions(query="alpha", user_id="bob")] == ["bob alpha note"]
+    assert swarm.search_sessions(query="beta", user_id="alice") == []
+    assert swarm.ownerless_session_threads(agent_name="nexus") == [{"thread_id": "100", "messages": 1}]
+
+
+def test_cli_lists_counts_and_assigns_only_on_explicit_request(isolated_session_search, monkeypatch, capsys):
+    import kronos.cli as cli
+    from kronos.memory import knowledge_graph
+
+    _, swarm = isolated_session_search
+    monkeypatch.setattr(settings, "agent_name", "kronos")
+    monkeypatch.setattr(knowledge_graph, "_schema_initialized", False)
+    swarm.index_session_message(agent_name="kronos", thread_id="100", role="user", content="old private note")
+
+    assert cli.main(["sessions", "owners"]) == 0
+    listing = capsys.readouterr().out
+    assert "thread 100 — 1 message(s)" in listing and "private" not in listing
+
+    assert cli.main(["sessions", "assign-owner", "--user-id", "alice"]) == 2
+    assert swarm.search_sessions(query="private", user_id="alice") == []
+
+    assert cli.main(["sessions", "assign-owner", "--user-id", "alice", "--thread", "100", "--graph"]) == 0
+    assert "thread 100: 1 message(s) assigned" in capsys.readouterr().out
+    assert len(swarm.search_sessions(query="private", user_id="alice")) == 1

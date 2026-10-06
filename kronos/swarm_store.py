@@ -1467,6 +1467,34 @@ class SwarmStore:
 
         return [dict(r) for r in rows]
 
+    def ownerless_session_threads(self, *, agent_name: str) -> list[dict]:
+        """Operator view: threads of ``agent_name`` whose indexed rows have no owner."""
+        rows = self._db.read(
+            """
+            SELECT thread_id, COUNT(*) AS messages
+            FROM session_messages
+            WHERE user_id IS NULL AND agent_name = ?
+            GROUP BY thread_id
+            ORDER BY thread_id
+            """,
+            (agent_name,),
+        )
+        return [dict(r) for r in rows]
+
+    def assign_session_owner(self, *, agent_name: str, thread_id: str, user_id: str) -> int:
+        """Operator decision: hand one thread's ownerless rows to ``user_id``.
+
+        Never called by the runtime, and never reassigns a row that has an owner.
+        """
+        owner = str(user_id or "").strip()
+        if not owner:
+            raise ValueError("assigning session rows requires the owning user_id")
+        cursor = self._db.write(
+            "UPDATE session_messages SET user_id = ? WHERE user_id IS NULL AND agent_name = ? AND thread_id = ?",
+            (owner, agent_name, thread_id),
+        )
+        return int(cursor.rowcount) if cursor else 0
+
     # ------------------------------------------------------------------
     # Feedback — Telegram reactions as RL signal
     # ------------------------------------------------------------------

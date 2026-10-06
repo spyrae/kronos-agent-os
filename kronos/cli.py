@@ -2095,6 +2095,52 @@ async def _run_sessions_backfill_search(agent: str = "") -> int:
     return 0
 
 
+def _run_sessions_owners(agent: str = "") -> int:
+    """List memory that predates owner scoping. Counts only, never content."""
+    from kronos.memory import knowledge_graph
+    from kronos.swarm_store import get_swarm
+
+    target_agent = agent or settings.agent_name
+    threads = get_swarm().ownerless_session_threads(agent_name=target_agent)
+    graph = knowledge_graph.legacy_row_counts()
+    print(f"Ownerless memory for agent '{target_agent}' (hidden from every user until assigned):")
+    if not threads:
+        print("  session search: none")
+    for row in threads:
+        print(f"  session search: thread {row['thread_id']} — {row['messages']} message(s)")
+    print(f"  knowledge graph: {graph['entities']} entities, {graph['relations']} relations")
+    return 0
+
+
+def _run_sessions_assign_owner(user_id: str, threads: list[str], graph: bool, agent: str = "") -> int:
+    """Assign ownerless memory to a user. An explicit operator decision."""
+    from kronos.memory import knowledge_graph
+    from kronos.swarm_store import get_swarm
+
+    if not user_id.strip():
+        print("--user-id is required.")
+        return 2
+    if not threads and not graph:
+        print("Nothing to assign: pass --thread and/or --graph.")
+        return 2
+
+    target_agent = agent or settings.agent_name
+    swarm = get_swarm()
+    for thread_id in threads:
+        moved = swarm.assign_session_owner(agent_name=target_agent, thread_id=thread_id, user_id=user_id)
+        print(f"thread {thread_id}: {moved} message(s) assigned")
+    if graph:
+        moved = knowledge_graph.assign_legacy_rows(user_id)
+        left = knowledge_graph.legacy_row_counts()
+        print(f"knowledge graph: {moved['entities']} entities, {moved['relations']} relations assigned")
+        if left["entities"] or left["relations"]:
+            print(
+                f"  left ownerless (name already used by this user): {left['entities']} entities, "
+                f"{left['relations']} relations"
+            )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     # Imported here, like the other command modules, so `kaos --help` does not
     # pay for the portability stack on every unrelated invocation.
@@ -2197,6 +2243,19 @@ def build_parser() -> argparse.ArgumentParser:
         "backfill-search", help="backfill existing sessions into session_search"
     )
     sessions_backfill.add_argument("--agent", default="", help="agent name to index under; defaults to AGENT_NAME")
+    sessions_owners = sessions_sub.add_parser(
+        "owners", help="list memory with no recorded owner (hidden from every user)"
+    )
+    sessions_owners.add_argument("--agent", default="", help="agent name; defaults to AGENT_NAME")
+    sessions_assign = sessions_sub.add_parser(
+        "assign-owner", help="assign ownerless memory to a user (explicit operator decision)"
+    )
+    sessions_assign.add_argument("--user-id", required=True, help="user the memory belongs to")
+    sessions_assign.add_argument(
+        "--thread", action="append", default=[], help="thread whose ownerless search rows to assign; repeatable"
+    )
+    sessions_assign.add_argument("--graph", action="store_true", help="also assign ownerless knowledge-graph rows")
+    sessions_assign.add_argument("--agent", default="", help="agent name; defaults to AGENT_NAME")
 
     signals = sub.add_parser("signals", help="Signal Intelligence verification tools")
     signals_sub = signals.add_subparsers(dest="signals_command")
@@ -2488,6 +2547,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "sessions":
         if args.sessions_command == "backfill-search":
             return asyncio.run(_run_sessions_backfill_search(agent=args.agent))
+        if args.sessions_command == "owners":
+            return _run_sessions_owners(agent=args.agent)
+        if args.sessions_command == "assign-owner":
+            return _run_sessions_assign_owner(args.user_id, args.thread, args.graph, agent=args.agent)
         parser.parse_args(["sessions", "--help"])
         return 0
     if args.command == "signals":
