@@ -99,8 +99,20 @@ def collect() -> dict:
                 return False
             return "default-message-value" in str(o.get("input", ""))
 
+        # Our own external exposure probe asks the gateway for /v1/models
+        # without a key every hour, to prove it still answers 401. Langfuse
+        # records no address or user agent, so the route is the only thing
+        # that tells it apart: on 2026-10-06 all 50 keyless requests of the day
+        # were this probe, and the pulse reported them as something to
+        # investigate. Keyless requests to any other route stay a real signal.
+        def _is_exposure_probe(o: dict) -> bool:
+            metadata = o.get("metadata")
+            route = metadata.get("user_api_key_request_route") if isinstance(metadata, dict) else None
+            return _is_unauthenticated(o) and route == "/v1/models"
+
         scored = [o for o in obs_list if not _is_unauthenticated(o) and not _is_probe(o)]
-        unauthenticated = sum(1 for o in obs_list if _is_unauthenticated(o))
+        exposure_probe = sum(1 for o in obs_list if _is_exposure_probe(o))
+        unauthenticated = sum(1 for o in obs_list if _is_unauthenticated(o)) - exposure_probe
         errors = sum(1 for o in scored if o.get("level") == "ERROR")
         error_rate = round(errors / len(scored) * 100, 1) if scored else 0
 
@@ -112,6 +124,7 @@ def collect() -> dict:
             "error_rate_pct": error_rate,
             "error_sample_size": len(scored),
             "unauthenticated_requests": unauthenticated,
+            "exposure_probe_requests": exposure_probe,
         }
 
     except Exception as e:
