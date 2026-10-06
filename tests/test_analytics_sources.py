@@ -39,3 +39,29 @@ def test_supabase_active_trials_exclude_ended_trials(monkeypatch) -> None:
     assert len(trial_filters) == 1
     assert trial_filters[0]["status"] == "eq.active"
     assert trial_filters[0]["ends_at"].startswith("gt.")
+
+
+def test_langfuse_separates_own_exposure_probe_from_other_unauthenticated(monkeypatch) -> None:
+    def rejected(route: str) -> dict:
+        return {
+            "statusMessage": "No api key passed in.",
+            "level": "ERROR",
+            "metadata": {"user_api_key_request_route": route},
+        }
+
+    observations = [rejected("/v1/models")] * 3 + [rejected("/azure/.env")]
+
+    def fake_api_get(path, params=None):
+        if path == "/traces":
+            return {"meta": {"totalItems": 4}}
+        return {"data": observations, "meta": {"totalItems": len(observations)}}
+
+    monkeypatch.setattr(langfuse_stats.settings, "langfuse_public_key", "public")
+    monkeypatch.setattr(langfuse_stats.settings, "langfuse_secret_key", "secret")
+    monkeypatch.setattr(langfuse_stats, "_api_get", fake_api_get)
+
+    result = langfuse_stats.collect()
+
+    assert result["exposure_probe_requests"] == 3
+    assert result["unauthenticated_requests"] == 1
+    assert result["error_rate_pct"] == 0
