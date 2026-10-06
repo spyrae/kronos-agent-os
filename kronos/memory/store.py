@@ -17,6 +17,15 @@ from kronos.security.pii import mask_pii
 log = logging.getLogger("kronos.memory")
 
 
+def extraction_configured() -> bool:
+    """Whether Mem0 can run: it needs a model to extract facts with.
+
+    Without it memory still works in keyword mode — the local FTS index, shared
+    user facts and the knowledge graph need no key.
+    """
+    return bool(settings.deepseek_api_key)
+
+
 @lru_cache(maxsize=1)
 def get_memory():
     """Get or create Mem0 Memory instance (singleton)."""
@@ -80,13 +89,14 @@ def search_memories(query: str, user_id: str, limit: int = 5) -> list[str]:
     vector_results = []
     fts_results = []
 
-    # 1. Vector search via Mem0
-    try:
-        mem = get_memory()
-        results = mem.search(query, user_id=user_id, limit=limit * 3)
-        vector_results = results.get("results", [])
-    except Exception as e:
-        log.error("Vector search failed: %s", e)
+    # 1. Vector search via Mem0 — skipped, not failed, when it is not configured
+    if extraction_configured():
+        try:
+            mem = get_memory()
+            results = mem.search(query, user_id=user_id, limit=limit * 3)
+            vector_results = results.get("results", [])
+        except Exception as e:
+            log.error("Vector search failed: %s", e)
 
     # 2. Keyword search via FTS5
     try:
@@ -137,6 +147,9 @@ def add_memories(
         to mirror user-sourced facts into shared cross-agent storage.
     """
     facts: list[str] = []
+    if not extraction_configured():
+        # Keyword mode: nothing extracts facts; the caller still indexes the raw turn.
+        return facts
     try:
         mem = get_memory()
         kwargs = {"user_id": user_id}
