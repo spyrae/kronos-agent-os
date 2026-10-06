@@ -197,6 +197,8 @@ async def main():
     durable = get_policy().durable
     if durable.resume_mode != "resume":
         await session_store.recover_abandoned_turns()
+    # Before the bridge starts: no send of this process can be in flight yet.
+    await session_store.adopt_unacknowledged_replies()
 
     async with managed_mcp_tools() as tools:
         agent = KronosAgent(

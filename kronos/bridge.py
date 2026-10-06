@@ -641,8 +641,13 @@ async def _ask_agent(
     extra_system_context: str = "",
     force_tier: str | None = None,
     recovery_owner_review: bool = False,
+    turn_sink: list[str] | None = None,
 ) -> str | None:
     """Send message to KronosAgent and return response text.
+
+    A caller that passes ``turn_sink`` takes on the reply: the durable turn id
+    is appended to it and the turn records that its answer is owed until the
+    caller confirms the send with ``_settle_reply``.
 
     Shows typing indicator while processing. Returns error message
     instead of None on failure (so user always gets feedback).
@@ -670,6 +675,16 @@ async def _ask_agent(
     start_ms = int(time.monotonic() * 1000)
     reply = None
 
+    route = (
+        recovery_route(chat_id, topic_id, owner_review=recovery_owner_review)
+        if persist_user_turn and source_kind == "user"
+        else None
+    )
+    # An owed reply needs a route to recover through and a store to record it in.
+    owed: dict = {}
+    if turn_sink is not None and route is not None and getattr(_agent, "session_store", None) is not None:
+        owed = {"on_turn_started": turn_sink.append, "reply_owed": True}
+
     try:
         async with _thread_lock(thread_id), _agent_semaphore:
             reply = await _agent.ainvoke(
@@ -682,9 +697,8 @@ async def _ask_agent(
                 extra_system_context=extra_system_context,
                 on_tool_event=reporter.on_event,
                 force_tier=force_tier,
-                recovery_destination=recovery_route(chat_id, topic_id, owner_review=recovery_owner_review)
-                if persist_user_turn and source_kind == "user"
-                else None,
+                recovery_destination=route,
+                **owed,
             )
     except Exception as e:
         log.error("Agent error: %s", e)
@@ -714,6 +728,22 @@ async def _ask_agent(
     )
 
     return reply
+
+
+async def _settle_reply(turn_ids: list[str], outcome: str = "sent") -> None:
+    """Confirm that the answers of these turns reached Telegram.
+
+    A failure here is logged, not raised: the message is already sent, and an
+    unconfirmed turn is only re-sent, marked as recovery, after a restart.
+    """
+    store = getattr(_agent, "session_store", None)
+    if store is None:
+        return
+    for turn_id in turn_ids:
+        try:
+            await store.settle_reply(turn_id, outcome)
+        except Exception as e:
+            log.warning("Reply confirmation failed for turn %s: %s", turn_id, type(e).__name__)
 
 
 async def _send_to_chat(
@@ -1040,6 +1070,9 @@ async def run_bridge(agent: KronosAgent) -> None:
             )
         else:
             await event.respond(reply, buttons=buttons)
+        # The continuation's answer is out; another gate keeps the turn owed.
+        if pending and not next_approval_id and not is_plan_approval:
+            await _settle_reply([str(pending["turn_id"])])
 
     @_client.on(events.NewMessage(incoming=True))
     async def handle_message(event):
@@ -1442,6 +1475,9 @@ async def run_bridge(agent: KronosAgent) -> None:
         ):
             return
 
+        # Durable turns whose answer this handler sends itself (see _settle_reply).
+        owed_turns: list[str] = []
+
         # /clear command — reset conversation context for this chat/topic
         if clean_text.strip().lower() in ("/clear", "/reset"):
             reply = await _clear_context(event.chat_id, topic_id)
@@ -1527,6 +1563,7 @@ async def run_bridge(agent: KronosAgent) -> None:
                     recovery_owner_review=bool(
                         not is_dm and decision is not None and decision.topic_owner == settings.agent_name
                     ),
+                    turn_sink=owed_turns,
                 )
 
         # Peer-reaction "PASS" protocol: the agent is instructed to reply
@@ -1667,6 +1704,10 @@ async def run_bridge(agent: KronosAgent) -> None:
 
         reply_mode = "voice" if voice_sent else "text"
         log.info("[%s%s] Replied (%s) to %s: %s", chat_type, topic_label, reply_mode, sender.first_name, reply[:100])
+        # An approval prompt is not the answer: that turn stays owed until its
+        # continuation is sent by the approval callback.
+        if not approval_id:
+            await _settle_reply(owed_turns)
 
     # --- Reaction handler (RL feedback loop) ---
 

@@ -847,6 +847,8 @@ class KronosAgent:
         on_tool_event: ToolEventCallback | None = None,
         force_tier: str | None = None,
         recovery_destination: RecoveryDestination | None = None,
+        on_turn_started: Callable[[str], None] | None = None,
+        reply_owed: bool = False,
     ) -> str:
         """Process a message, preserving the legacy text-only API.
 
@@ -863,6 +865,8 @@ class KronosAgent:
             on_tool_event=on_tool_event,
             force_tier=force_tier,
             recovery_destination=recovery_destination,
+            on_turn_started=on_turn_started,
+            reply_owed=reply_owed,
         )
         return outcome.content
 
@@ -887,6 +891,7 @@ class KronosAgent:
         caller_key: str = "",
         execution_ownership: TurnOwnership | None = None,
         recovery_destination: RecoveryDestination | None = None,
+        reply_owed: bool = False,
     ) -> InvocationOutcome:
         """Process raw input with call-local outcome and exclusive history writes.
 
@@ -908,6 +913,7 @@ class KronosAgent:
             recovery_destination=recovery_destination,
             on_turn_started=on_turn_started,
             caller_key=caller_key,
+            reply_owed=reply_owed,
         )
         if execution_ownership is not None:
             if not self._session_store or not persist_user_turn:
@@ -985,6 +991,7 @@ class KronosAgent:
         on_turn_started: Callable[[str], None] | None = None,
         caller_key: str = "",
         recovery_destination: RecoveryDestination | None = None,
+        reply_owed: bool = False,
     ) -> InvocationOutcome:
         """Process a message and return its explicit execution outcome.
 
@@ -1071,6 +1078,7 @@ class KronosAgent:
                 caller_key=caller_key,
                 recovery_destination=recovery_destination,
                 user_id=user_id,
+                reply_owed=reply_owed,
             )
             if on_turn_started is not None:
                 try:

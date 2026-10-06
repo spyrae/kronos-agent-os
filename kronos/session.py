@@ -31,6 +31,7 @@ from kronos.migrations.v005_plan_execution import migrate_turns as migrate_calle
 from kronos.migrations.v008_turn_delivery import migrate as migrate_delivery
 from kronos.migrations.v009_turn_owner import migrate as migrate_turn_owner
 from kronos.migrations.v010_effect_reconciliations import migrate as migrate_effect_reconciliations
+from kronos.migrations.v011_reply_state import migrate as migrate_reply_state
 from kronos.outcomes import InvocationOutcome, InvocationStatus
 from kronos.tool_history import trim_completed_history, unanswered_tool_calls
 from kronos.turn_delivery import RecoveryDestination, queue_approval, queue_result, suppress_approval
@@ -297,6 +298,7 @@ class SessionStore:
             await migrate_delivery(db)
             await migrate_turn_owner(db)
             await migrate_effect_reconciliations(db)
+            await migrate_reply_state(db)
             self._initialized = True
 
     async def begin_turn(
@@ -307,11 +309,16 @@ class SessionStore:
         caller_key: str = "",
         recovery_destination: RecoveryDestination | None = None,
         user_id: str = "",
+        reply_owed: bool = False,
     ) -> str:
         """Open a turn, recording the caller's immutable correlation atomically.
 
         ``user_id`` is the transport-verified owner; resume and approval read it
         back instead of trusting whoever triggers the continuation.
+
+        ``reply_owed`` records that the transport will send this turn's answer
+        itself and must confirm it with ``settle_reply``. It needs a route: an
+        answer with nowhere to go cannot be owed.
         """
         if recovery_destination is not None:
             recovery_destination.assert_thread(thread_id)
@@ -322,8 +329,8 @@ class SessionStore:
                 """
                 INSERT INTO active_turns
                     (turn_id, thread_id, status, input_message, effect_protocol, caller_key,
-                     recovery_destination, user_id)
-                VALUES (?, ?, 'running', ?, 1, ?, ?, ?)
+                     recovery_destination, user_id, reply_state)
+                VALUES (?, ?, 'running', ?, 1, ?, ?, ?, ?)
                 """,
                 (
                     turn_id,
@@ -332,10 +339,60 @@ class SessionStore:
                     caller_key,
                     recovery_destination.encode() if recovery_destination else "",
                     str(user_id or "").strip(),
+                    "owed" if reply_owed and recovery_destination else "",
                 ),
             )
             await db.commit()
         return turn_id
+
+    async def settle_reply(self, turn_id: str, outcome: str) -> bool:
+        """Transport confirmation for an owed reply: ``sent`` or deliberately ``waived``."""
+        if outcome not in {"sent", "waived"}:
+            raise ValueError("reply outcome must be sent or waived")
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            cursor = await db.execute(
+                "UPDATE active_turns SET reply_state = ? WHERE turn_id = ? AND reply_state = 'owed'",
+                (outcome, turn_id),
+            )
+            await db.commit()
+        return bool(cursor.rowcount)
+
+    async def adopt_unacknowledged_replies(self, *, max_age_hours: int = 24) -> int:
+        """Queue finished answers whose direct send was never confirmed.
+
+        Call once at process start, before the transport handles messages: only
+        then is it certain that no send of this process is still in flight. An
+        answer the transport did send just before dying arrives a second time,
+        marked as a recovery message — repeating it is the lesser failure than
+        losing it. Older turns are left alone rather than replayed days later.
+        """
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    """SELECT turn_id, status, final_content FROM active_turns
+                       WHERE reply_state = 'owed' AND delivery_requested = 0
+                         AND status IN ('done', 'failed')
+                         AND COALESCE(completed_at, started_at) >= datetime('now', ?)
+                       ORDER BY COALESCE(completed_at, started_at)""",
+                    (f"-{int(max_age_hours)} hours",),
+                )
+                rows = await cursor.fetchall()
+                for turn_id, status, content in rows:
+                    await db.execute(
+                        "UPDATE active_turns SET delivery_requested = 1, reply_state = 'adopted' WHERE turn_id = ?",
+                        (turn_id,),
+                    )
+                    await queue_result(db, turn_id, content, failed=status == "failed")
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
+        if rows:
+            log.warning("Adopted %d finished answer(s) whose delivery was never confirmed", len(rows))
+        return len(rows)
 
     async def turn_owner(self, turn_id: str) -> str:
         """Owner recorded at begin_turn; empty for legacy or unknown turns."""

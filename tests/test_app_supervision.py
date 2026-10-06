@@ -45,7 +45,7 @@ async def runtime(monkeypatch):
         finally:
             mcp_closed()
 
-    store = SimpleNamespace(recover_abandoned_turns=AsyncMock())
+    store = SimpleNamespace(recover_abandoned_turns=AsyncMock(), adopt_unacknowledged_replies=AsyncMock(return_value=0))
     agent = SimpleNamespace()
     scheduler = SimpleNamespace(run=lambda: service("scheduler"), stop=Mock())
     for name in ("_activate_policy_or_exit", "_load_swarm_registry_or_exit", "_ensure_data_dirs"):
@@ -198,9 +198,7 @@ def real_dashboard(runtime, monkeypatch):
         finally:
             exited.set()
 
-    config = server.uvicorn.Config(
-        FastAPI(lifespan=lifespan), host="127.0.0.1", port=0, ws="none", log_level="warning"
-    )
+    config = server.uvicorn.Config(FastAPI(lifespan=lifespan), host="127.0.0.1", port=0, ws="none", log_level="warning")
     serving = server.uvicorn.Server(config)
     monkeypatch.setattr(server, "run_dashboard", runtime.original_dashboard)
     monkeypatch.setattr(server, "DASHBOARD_PASSWORD", "test-only-password")

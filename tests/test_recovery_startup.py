@@ -39,7 +39,7 @@ async def test_recovery_is_concurrent_and_one_shot_completion_is_not_shutdown(mo
     async def mcp():
         yield []
 
-    store = SimpleNamespace(recover_abandoned_turns=AsyncMock())
+    store = SimpleNamespace(recover_abandoned_turns=AsyncMock(), adopt_unacknowledged_replies=AsyncMock(return_value=0))
     agent = SimpleNamespace(resume_abandoned_turns=resume)
     scheduler = SimpleNamespace(run=lambda: service("scheduler"), stop=Mock())
     for name in ("_activate_policy_or_exit", "_load_swarm_registry_or_exit", "_ensure_data_dirs"):
@@ -72,6 +72,8 @@ async def test_recovery_is_concurrent_and_one_shot_completion_is_not_shutdown(mo
         assert started == {"bridge", "discord", "scheduler", "dashboard", "delivery"}
         assert agent._durable_recovery_checked
         store.recover_abandoned_turns.assert_not_awaited()
+        # Unconfirmed answers are adopted before the bridge can start a new send.
+        store.adopt_unacknowledged_replies.assert_awaited_once()
         if stop == "after_recovery":
             finish.set()
             await asyncio.sleep(0.02)

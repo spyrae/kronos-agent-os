@@ -107,7 +107,11 @@ class TestAinvokeContract:
             "on_tool_event",
             "force_tier",
             "recovery_destination",
+            "on_turn_started",
+            "reply_owed",
         }
+        assert sig.parameters["reply_owed"].default is False
+        assert sig.parameters["on_turn_started"].default is None
         assert sig.parameters["source_kind"].default == "user"
         assert sig.parameters["persist_user_turn"].default is True
         assert sig.parameters["extra_system_context"].default == ""
