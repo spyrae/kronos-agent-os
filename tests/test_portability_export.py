@@ -66,8 +66,8 @@ def agent_env(tmp_path, monkeypatch):
 
     fts.index_fact("Предпочитает краткие технические ответы", "roman")
     fts.index_fact("Ключ доступа Bearer abcdefghijklmnop12345", "roman")
-    knowledge_graph.add_entity("KAOS", "project", {"stack": "python"})
-    knowledge_graph.add_relation("Роман", "person", "KAOS", "project", "owns")
+    knowledge_graph.add_entity("KAOS", "project", {"stack": "python"}, user_id="roman")
+    knowledge_graph.add_relation("Роман", "person", "KAOS", "project", "owns", user_id="roman")
 
     # Shared facts: one from this agent, one from a peer (must not be exported)
     from kronos.swarm_store import get_swarm

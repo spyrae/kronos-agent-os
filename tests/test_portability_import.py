@@ -78,7 +78,7 @@ def env(tmp_path, monkeypatch):
 
     fts.index_fact("Предпочитает краткие ответы", "roman")
     fts.index_fact("Работает из Бали", "roman")
-    knowledge_graph.add_relation("Роман", "person", "KAOS", "project", "owns")
+    knowledge_graph.add_relation("Роман", "person", "KAOS", "project", "owns", user_id="roman")
     get_swarm().add_shared_fact(user_id="roman", fact="Часовой пояс UTC+8", source_agent="source")
     scheduled_tasks.add_task(
         agent_name="source",
@@ -290,3 +290,14 @@ def test_path_traversal_in_bundle_is_refused(tmp_path):
     with pytest.raises(BundleError, match="unsafe path"):
         import_bundle(evil)
     assert not (tmp_path.parent / "escaped.md").exists()
+
+
+def test_imported_graph_keeps_its_owner(env):
+    """A02: a round trip must not turn one user's graph into everyone's."""
+    from kronos.memory import knowledge_graph
+
+    import_bundle(env.bundle)
+
+    assert knowledge_graph.get_graph_context("Роман", user_id="roman") == "Роман (person): owns→KAOS(project)"
+    assert knowledge_graph.get_graph_context("Роман", user_id="someone-else") == ""
+    assert knowledge_graph.legacy_row_counts() == {"entities": 0, "relations": 0}
