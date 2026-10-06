@@ -214,10 +214,17 @@ class KronosAgent:
         get_context_engine(settings.context_strategy)
 
     def _init_memory(self, enable: bool) -> None:
-        """Initialize memory (requires DeepSeek for fact extraction)."""
-        self._memory_enabled = enable and bool(settings.deepseek_api_key)
-        if enable and not self._memory_enabled:
-            log.info("Memory disabled: DEEPSEEK_API_KEY not set")
+        """Initialize memory.
+
+        Fact extraction (Mem0) needs a DeepSeek key. Everything else — the
+        keyword index, shared user facts, the knowledge graph — does not, and
+        every one of those reads is scoped to the calling user.
+        """
+        from kronos.memory.store import extraction_configured
+
+        self._memory_enabled = enable
+        if enable and not extraction_configured():
+            log.info("Memory runs in keyword mode: DEEPSEEK_API_KEY not set, no fact extraction")
 
     def _init_supervisor(self, enable: bool) -> None:
         """Build supervisor if tools are available."""
