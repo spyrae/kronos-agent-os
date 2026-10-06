@@ -17,6 +17,7 @@ from kronos.cron.notify import TOPIC_GENERAL, send_bot_api
 from kronos.llm import ModelTier, get_model
 from kronos.memory import fts
 from kronos.memory import knowledge_graph as kg
+from kronos.memory.reset import MemoryResetError, memory_generation, memory_write
 
 log = logging.getLogger("kronos.cron.sleep_compute")
 
@@ -133,6 +134,8 @@ def _get_recent_facts(days: int = 7) -> dict[str, list[str]]:
 
 async def _extract_and_build_graph(facts: list[str], user_id: str) -> tuple[int, int]:
     """Extract entities from one user's facts and add them to that user's graph."""
+    # Facts read before a reset must not rebuild the graph the reset removed.
+    generation = memory_generation(user_id)
     facts_text = "\n".join(f"- {f[:200]}" for f in facts[:50])
 
     prompt = ENTITY_EXTRACTION_PROMPT.format(facts=facts_text)
@@ -160,23 +163,28 @@ async def _extract_and_build_graph(facts: list[str], user_id: str) -> tuple[int,
     entities_added = 0
     relations_added = 0
 
-    for entity in data.get("entities", []):
-        name = entity.get("name", "").strip()
-        etype = entity.get("type", "concept").strip()
-        props = entity.get("properties", {})
-        if name:
-            kg.add_entity(name, etype, props, user_id=user_id)
-            entities_added += 1
+    try:
+        with memory_write(user_id, generation):
+            for entity in data.get("entities", []):
+                name = entity.get("name", "").strip()
+                etype = entity.get("type", "concept").strip()
+                props = entity.get("properties", {})
+                if name:
+                    kg.add_entity(name, etype, props, user_id=user_id)
+                    entities_added += 1
 
-    for rel in data.get("relations", []):
-        src = rel.get("source", "").strip()
-        src_type = rel.get("source_type", "concept").strip()
-        tgt = rel.get("target", "").strip()
-        tgt_type = rel.get("target_type", "concept").strip()
-        rtype = rel.get("relation", "related_to").strip()
-        if src and tgt:
-            kg.add_relation(src, src_type, tgt, tgt_type, rtype, user_id=user_id)
-            relations_added += 1
+            for rel in data.get("relations", []):
+                src = rel.get("source", "").strip()
+                src_type = rel.get("source_type", "concept").strip()
+                tgt = rel.get("target", "").strip()
+                tgt_type = rel.get("target_type", "concept").strip()
+                rtype = rel.get("relation", "related_to").strip()
+                if src and tgt:
+                    kg.add_relation(src, src_type, tgt, tgt_type, rtype, user_id=user_id)
+                    relations_added += 1
+    except MemoryResetError:
+        log.info("Memory was reset during extraction; graph left untouched")
+        return 0, 0
 
     log.info("KG updated: +%d entities, +%d relations", entities_added, relations_added)
     return entities_added, relations_added

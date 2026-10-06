@@ -1725,6 +1725,21 @@ class SessionStore:
         log.info("Session FTS backfill complete: %d new messages indexed", indexed)
         return indexed
 
+    async def thread_ids(self, *, user_id: str = "") -> list[str]:
+        """Threads with stored history; with ``user_id``, those the user took a turn in."""
+        async with self._open_db() as db:
+            await self._ensure_table(db)
+            if user_id:
+                cursor = await db.execute(
+                    """SELECT thread_id FROM sessions
+                       WHERE thread_id IN (SELECT thread_id FROM active_turns WHERE user_id = ?)
+                       ORDER BY thread_id""",
+                    (user_id,),
+                )
+            else:
+                cursor = await db.execute("SELECT thread_id FROM sessions ORDER BY thread_id")
+            return [str(row[0]) for row in await cursor.fetchall()]
+
     async def clear(self, thread_id: str) -> int:
         """Clear a thread's history and its session-search rows. Returns rows deleted.
 

@@ -294,9 +294,26 @@ def test_unknown_mem0_capability_is_not_left_unguarded(memory, unsupported):
 
 def test_new_mem0_operations_are_not_silently_forwarded(memory):
     instance = store.get_memory()
-    memory.instance.delete = lambda *args: "not admitted"
+    memory.instance.update = lambda *args: "not admitted"
     with pytest.raises(AttributeError):
-        instance.delete("id")
+        instance.update("id", "text")
+
+
+def test_deletions_reach_the_cached_instance_without_a_model_scope(memory):
+    """F13: reset needs delete/delete_all/reset; none of them calls a model."""
+    instance = store.get_memory()
+    calls = []
+    memory.instance.delete = lambda memory_id: calls.append(("delete", memory_id))
+    memory.instance.delete_all = lambda **kwargs: calls.append(("delete_all", kwargs))
+    memory.instance.reset = lambda: calls.append(("reset",))
+
+    instance.delete("m1")
+    instance.delete_all(user_id="alice")
+    instance.reset()
+    with pytest.raises(ValueError):
+        instance.delete_all(user_id="")
+
+    assert calls == [("delete", "m1"), ("delete_all", {"user_id": "alice"}), ("reset",)]
 
 
 def test_lite_mem0_counts_factory_usage_exactly_once(memory, monkeypatch):

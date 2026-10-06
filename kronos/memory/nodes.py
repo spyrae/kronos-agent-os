@@ -23,6 +23,7 @@ from kronos.config import settings
 from kronos.execution_control import ExecutionStoppedError, check_execution
 from kronos.memory import fts
 from kronos.memory import knowledge_graph as kg
+from kronos.memory.reset import MemoryResetError, memory_write
 from kronos.memory.store import add_memories, search_memories
 from kronos.state import AgentState
 
@@ -147,9 +148,25 @@ def store_memories_background(state: AgentState) -> AgentState:
 
     log.info("Storing memories for user %s: %s", user_id, last_user[:60])
 
-    # 1. Mem0 fact extraction + FTS5 indexing of extracted facts (per-agent)
-    check_execution()
-    extracted_facts = add_memories(messages, user_id, session_id)
+    # A reset that lands while this turn was running wins: nothing extracted
+    # from the pre-reset conversation is written back to any layer.
+    generation = state.get("memory_generation")
+    try:
+        with memory_write(user_id, generation):
+            # 1. Mem0 fact extraction + FTS5 indexing of extracted facts (per-agent)
+            check_execution()
+            extracted_facts = add_memories(messages, user_id, session_id)
+
+            # 3. Index raw conversation turn in FTS5 (catches exact phrases,
+            #    names, URLs that Mem0 fact extraction might miss). Per-agent.
+            try:
+                turn_text = f"User: {last_user}\nKronos: {last_assistant}"
+                fts.index_fact(turn_text, user_id)
+            except Exception as e:
+                log.debug("FTS5 conversation indexing failed: %s", e)
+    except MemoryResetError:
+        log.info("Memory was reset during this turn; skipping storage for user %s", user_id)
+        return {}
 
     # 2. Shared user facts: mirror user-sourced extractions into the
     #    cross-agent swarm ledger so every agent sees the same facts.
@@ -157,6 +174,7 @@ def store_memories_background(state: AgentState) -> AgentState:
     #    contains a USER message is eligible for sharing. This is loose
     #    on purpose — Mem0 already filters to "durable facts". If noise
     #    turns out to be a problem we add an LLM classifier pass here.
+    #    The generation check runs inside the insert's own transaction.
     if extracted_facts:
         try:
             from kronos.swarm_store import get_swarm
@@ -169,6 +187,7 @@ def store_memories_background(state: AgentState) -> AgentState:
                     user_id=user_id,
                     fact=fact,
                     source_agent=settings.agent_name,
+                    generation=generation,
                 ):
                     added += 1
             if added:
@@ -179,13 +198,5 @@ def store_memories_background(state: AgentState) -> AgentState:
             log.debug("Shared facts mirror failed: %s", e)
 
     check_execution()
-
-    # 3. Index raw conversation turn in FTS5 (catches exact phrases,
-    #    names, URLs that Mem0 fact extraction might miss). Per-agent.
-    try:
-        turn_text = f"User: {last_user}\nKronos: {last_assistant}"
-        fts.index_fact(turn_text, user_id)
-    except Exception as e:
-        log.debug("FTS5 conversation indexing failed: %s", e)
 
     return {}

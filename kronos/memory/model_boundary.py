@@ -104,3 +104,22 @@ class BudgetedMemory:
     def get_all(self, *args, **kwargs):
         """Read stored facts without introducing a model request."""
         return self._call("get_all", *args, **kwargs)
+
+    def delete(self, memory_id: str):
+        """Delete one stored fact. No model request is involved."""
+        return self._memory.delete(memory_id)
+
+    def delete_all(self, *, user_id: str):
+        """Delete one user's stored facts. No model request is involved."""
+        if not user_id:
+            raise ValueError("delete_all requires a user_id; use reset() to delete everything")
+        return self._memory.delete_all(user_id=user_id)
+
+    def reset(self):
+        """Delete every stored fact.
+
+        Runs on the cached instance itself: Mem0 replaces its vector-store
+        handle during a reset, and a per-operation copy would leave the cached
+        one pointing at the store that was just dropped.
+        """
+        return self._memory.reset()

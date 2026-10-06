@@ -206,6 +206,13 @@ def _schema(conn) -> None:
                 VALUES (new.id, new.fact);
             END;
 
+        -- Memory generations: advanced by a reset so that a writer which
+        -- planned its write before the reset can tell and stand down.
+        CREATE TABLE IF NOT EXISTS memory_generations (
+            scope TEXT PRIMARY KEY,
+            generation INTEGER NOT NULL
+        );
+
         -- Session messages: cross-agent FTS5 search over conversation history.
         CREATE TABLE IF NOT EXISTS session_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1270,27 +1277,86 @@ class SwarmStore:
     # Shared user facts — cross-agent view of the user
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _memory_generation(conn, user_id: str) -> str:
+        rows = conn.execute(
+            "SELECT scope, generation FROM memory_generations WHERE scope IN ('*', ?)",
+            (f"user:{user_id}",),
+        ).fetchall()
+        found = {row["scope"]: row["generation"] for row in rows}
+        return f"{found.get('*', 0)}:{found.get(f'user:{user_id}', 0)}"
+
+    def memory_generation(self, user_id: str) -> str:
+        """Opaque marker that changes whenever this user's memory, or all memory, is reset."""
+        return self._db.write_tx(lambda conn: self._memory_generation(conn, user_id))
+
+    def advance_memory_generation(self, user_id: str = "") -> None:
+        """Invalidate writes planned before now, for one user or (empty) for everyone."""
+        scope = f"user:{user_id}" if user_id else "*"
+        self._db.write(
+            """
+            INSERT INTO memory_generations (scope, generation) VALUES (?, 1)
+            ON CONFLICT(scope) DO UPDATE SET generation = generation + 1
+            """,
+            (scope,),
+        )
+
+    def delete_shared_facts(self, *, user_id: str = "") -> int:
+        """Delete one user's shared facts, or everyone's when ``user_id`` is empty."""
+        if user_id:
+            cursor = self._db.write("DELETE FROM shared_user_facts WHERE user_id = ?", (user_id,))
+        else:
+            cursor = self._db.write("DELETE FROM shared_user_facts")
+        return int(cursor.rowcount) if cursor else 0
+
+    def delete_shared_fact(self, *, user_id: str, fact: str) -> int:
+        """Delete one user's exact shared fact."""
+        cursor = self._db.write("DELETE FROM shared_user_facts WHERE user_id = ? AND fact = ?", (user_id, fact))
+        return int(cursor.rowcount) if cursor else 0
+
+    def delete_session_index(self, *, agent_name: str, user_id: str = "") -> int:
+        """Delete this agent's session-search rows for one user, or all of them."""
+        if user_id:
+            cursor = self._db.write(
+                "DELETE FROM session_messages WHERE agent_name = ? AND user_id = ?", (agent_name, user_id)
+            )
+        else:
+            cursor = self._db.write("DELETE FROM session_messages WHERE agent_name = ?", (agent_name,))
+        return int(cursor.rowcount) if cursor else 0
+
     def add_shared_fact(
         self,
         *,
         user_id: str,
         fact: str,
         source_agent: str,
+        generation: str | None = None,
     ) -> bool:
-        """Insert a user-derived fact. Returns True if new, False if duplicate."""
+        """Insert a user-derived fact. Returns True if new, False if duplicate.
+
+        With ``generation`` (captured when the turn started) the insert happens
+        only if no reset intervened; the check shares the insert's transaction,
+        so it holds across agent processes.
+        """
         fact = fact.strip()
         if not fact:
             return False
         now = time.time()
-        cursor = self._db.write(
-            """
-            INSERT OR IGNORE INTO shared_user_facts
-                (user_id, fact, source_agent, created_at, last_accessed_at, access_count)
-            VALUES (?, ?, ?, ?, ?, 0)
-            """,
-            (user_id, fact, source_agent, now, now),
-        )
-        return bool(cursor and cursor.rowcount)
+
+        def _insert(conn) -> bool:
+            if generation is not None and self._memory_generation(conn, user_id) != generation:
+                return False
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO shared_user_facts
+                    (user_id, fact, source_agent, created_at, last_accessed_at, access_count)
+                VALUES (?, ?, ?, ?, ?, 0)
+                """,
+                (user_id, fact, source_agent, now, now),
+            )
+            return bool(cursor.rowcount)
+
+        return self._db.write_tx(_insert)
 
     def search_shared_facts(
         self,

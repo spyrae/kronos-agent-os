@@ -306,6 +306,29 @@ def recent_entities(limit: int = 20) -> list[dict]:
     return [{"name": r["name"], "type": r["type"], "user_id": r["user_id"]} for r in rows]
 
 
+def delete_rows(*, user_id: str = "") -> dict[str, int]:
+    """Reset: delete one owner's graph, or every row (ownerless too) when ``user_id`` is empty."""
+    owner = _read_owner(user_id)
+
+    def _delete(conn):
+        if owner:
+            relations = conn.execute(
+                """
+                DELETE FROM relations WHERE user_id = ?
+                   OR source_id IN (SELECT id FROM entities WHERE user_id = ?)
+                   OR target_id IN (SELECT id FROM entities WHERE user_id = ?)
+                """,
+                (owner, owner, owner),
+            ).rowcount
+            entities = conn.execute("DELETE FROM entities WHERE user_id = ?", (owner,)).rowcount
+        else:
+            relations = conn.execute("DELETE FROM relations").rowcount
+            entities = conn.execute("DELETE FROM entities").rowcount
+        return {"entities": entities, "relations": relations}
+
+    return _get_db().write_tx(_delete)
+
+
 def legacy_row_counts() -> dict[str, int]:
     """How many rows still have no recorded owner."""
     db = _get_db()
