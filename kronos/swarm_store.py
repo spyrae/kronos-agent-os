@@ -76,6 +76,9 @@ def _schema(conn) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(session_messages)").fetchall()}
     if columns and "fingerprint" not in columns:
         conn.execute("ALTER TABLE session_messages ADD COLUMN fingerprint TEXT")
+    # Rows indexed before owner scoping stay NULL: unknown owner, matched to nobody.
+    if columns and "user_id" not in columns:
+        conn.execute("ALTER TABLE session_messages ADD COLUMN user_id TEXT")
 
     # reply_claims gained an 'executing' state (a lease held between winning
     # arbitration and confirmed delivery). SQLite can't ALTER a CHECK
@@ -211,10 +214,13 @@ def _schema(conn) -> None:
             role TEXT NOT NULL,
             content TEXT NOT NULL,
             created_at REAL NOT NULL,
-            fingerprint TEXT
+            fingerprint TEXT,
+            user_id TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_session_messages_thread
             ON session_messages(agent_name, thread_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_session_messages_owner
+            ON session_messages(user_id, created_at);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_session_messages_fingerprint
             ON session_messages(fingerprint)
             WHERE fingerprint IS NOT NULL;
@@ -1371,12 +1377,16 @@ class SwarmStore:
         role: str,
         content: str,
         fingerprint: str = "",
+        user_id: str = "",
     ) -> bool:
         """Index a single message from a session into the cross-agent FTS store.
 
         ``fingerprint`` is optional for callers that do not have a stable
         per-session position. When absent, we derive a content-based key to
         keep repeated backfills from duplicating rows.
+
+        ``user_id`` is the trusted owner of the turn that produced the row.
+        Without it the row is stored ownerless and no user search returns it.
         """
         clean_content = content.strip()
         if not clean_content:
@@ -1387,10 +1397,10 @@ class SwarmStore:
         cursor = self._db.write(
             """
             INSERT OR IGNORE INTO session_messages
-                (agent_name, thread_id, role, content, created_at, fingerprint)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (agent_name, thread_id, role, content, created_at, fingerprint, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (agent_name, thread_id, role, clean_content, time.time(), fingerprint),
+            (agent_name, thread_id, role, clean_content, time.time(), fingerprint, str(user_id or "").strip() or None),
         )
         return bool(cursor and cursor.rowcount)
 
@@ -1398,72 +1408,61 @@ class SwarmStore:
         self,
         *,
         query: str,
+        user_id: str,
         agent_name: str = "",
         days: int = 30,
         limit: int = 10,
     ) -> list[dict]:
-        """FTS5 search over all session messages.
+        """FTS5 search over the session messages owned by ``user_id``.
+
+        ``user_id`` must be the trusted data owner of the caller. An empty
+        owner returns nothing, and ownerless legacy rows are never matched.
 
         Returns list of dicts with keys:
         agent_name, thread_id, role, content, created_at.
         """
         query = query.strip()
-        if not query:
+        owner = str(user_id or "").strip()
+        if not query or not owner:
             return []
         safe_query = " ".join(f'"{tok}"' for tok in query.split() if tok.strip())
         if not safe_query:
             return []
 
         cutoff = time.time() - (days * 86400)
+        agent_filter = "AND sm.agent_name = ?" if agent_name else ""
+        agent_params = (agent_name,) if agent_name else ()
 
         try:
-            if agent_name:
-                rows = self._db.read(
-                    """
-                    SELECT sm.agent_name, sm.thread_id, sm.role,
-                           sm.content, sm.created_at
-                    FROM session_messages_fts fts
-                    JOIN session_messages sm ON sm.id = fts.rowid
-                    WHERE fts.content MATCH ?
-                      AND sm.agent_name = ?
-                      AND sm.created_at > ?
-                    ORDER BY rank
-                    LIMIT ?
-                    """,
-                    (safe_query, agent_name, cutoff, limit),
-                )
-            else:
-                rows = self._db.read(
-                    """
-                    SELECT sm.agent_name, sm.thread_id, sm.role,
-                           sm.content, sm.created_at
-                    FROM session_messages_fts fts
-                    JOIN session_messages sm ON sm.id = fts.rowid
-                    WHERE fts.content MATCH ?
-                      AND sm.created_at > ?
-                    ORDER BY rank
-                    LIMIT ?
-                    """,
-                    (safe_query, cutoff, limit),
-                )
-        except Exception as e:
-            log.warning("Session FTS search failed, falling back to LIKE: %s", e)
-            like = f"%{query}%"
-            agent_filter = ""
-            params: list = [like, cutoff, limit]
-            if agent_name:
-                agent_filter = "AND agent_name = ?"
-                params = [like, agent_name, cutoff, limit]
             rows = self._db.read(
                 f"""
-                SELECT agent_name, thread_id, role, content, created_at
-                FROM session_messages
-                WHERE content LIKE ? {agent_filter}
-                  AND created_at > ?
-                ORDER BY created_at DESC
+                SELECT sm.agent_name, sm.thread_id, sm.role,
+                       sm.content, sm.created_at
+                FROM session_messages_fts fts
+                JOIN session_messages sm ON sm.id = fts.rowid
+                WHERE fts.content MATCH ?
+                  AND sm.user_id = ?
+                  {agent_filter}
+                  AND sm.created_at > ?
+                ORDER BY rank
                 LIMIT ?
                 """,
-                tuple(params),
+                (safe_query, owner, *agent_params, cutoff, limit),
+            )
+        except Exception as e:
+            log.warning("Session FTS search failed, falling back to LIKE: %s", e)
+            rows = self._db.read(
+                f"""
+                SELECT sm.agent_name, sm.thread_id, sm.role, sm.content, sm.created_at
+                FROM session_messages sm
+                WHERE sm.content LIKE ?
+                  AND sm.user_id = ?
+                  {agent_filter}
+                  AND sm.created_at > ?
+                ORDER BY sm.created_at DESC
+                LIMIT ?
+                """,
+                (f"%{query}%", owner, *agent_params, cutoff, limit),
             )
 
         return [dict(r) for r in rows]
