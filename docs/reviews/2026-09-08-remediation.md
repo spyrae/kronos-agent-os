@@ -43,7 +43,7 @@ A02/F13 и оставшиеся части F08–F15/A01/A03–A06/PROD/V сох
 | F09 | Generated/pending/delivered раздельны; сбой доставки повторяется | Локально: operator repair, восстановление обычных ответов после рестарта и retry cron-уведомлений добавлены (2026-10-06, ADR-0022). Cron-уведомления — retry после отказа, не transactional outbox; live Telegram не проверен | Ожидает |
 | F10 | Durable intent/idempotency/reconciliation; journal errors fail closed | Локально: reconciliation и явная классификация всех встроенных инструментов с inventory-тестом (2026-10-06, ADR-0022). Writers вне engine перечислены в ADR, их идемпотентность не проверена; distinct logical operation ids и provider idempotency остаются | Ожидает |
 | F11 | Один resume на turn; live registry и atomic ownership | Исправлено и проверено локально | Нужен согласованный rollout без старых исполнителей |
-| F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | Локально: durable session ledger, атомарные reservations и учёт unknown outcomes добавлены (2026-10-06, ADR-0023). Реальный Mem0 1.0.7 не проверен: установка пакета не согласована | Ожидает |
+| F12 | Общая бюджетная проверка и рабочий downgrade всех model paths | Локально: durable session ledger, атомарные reservations, учёт unknown outcomes (2026-10-06, ADR-0023) и приёмка на настоящем mem0ai 1.0.7 без сети (2026-10-07). Live-провайдеры не проверены | Ожидает |
 | F13 | Честный scoped reset по всем слоям, включая background writers | Исправлено и проверено локально (2026-10-06, ADR-0021); Mem0 — на fake, реальный пакет в F12 | Ожидает rollout |
 | F14 | Desired/effective runtime settings совпадают или restart явно указан | Исправлено и проверено локально (2026-10-06) | Ожидает rollout |
 | F15 | Model/memory I/O не блокирует event loop; responsiveness test | Локально: retrieval, compaction и budget admission вынесены с event loop, есть heartbeat-тест (2026-10-06). Короткие sync SQLite-вызовы в bridge/routers остаются | Ожидает rollout |
@@ -1344,3 +1344,26 @@ approval. 7 test cases.
 чате; затем рестарт сервиса между ответом модели и отправкой и проверка, что
 ответ пришёл один раз с пометкой восстановления. Это требует развёрнутого
 кода, включённых approvals (PROD-05) и согласования.
+
+### Приёмка на Python 3.12 и настоящем mem0ai 1.0.7 (2026-10-07)
+
+- Во временном окружении вне проекта (Python 3.12.12, зависимости проекта +
+  `mem0ai==1.0.7`, как в production inventory): **2751 passed, 58 integration
+  deselected**; **27 crash/restart passed**. В основном окружении (3.13, без
+  mem0): 2742 passed, 1 skipped. Зависимости проекта не менялись.
+- `tests/test_mem0_real_package.py`: настоящий `Memory`, его Qdrant, history DB
+  и parsing; заменены только embedder и вызов chat-completions. 9 cases:
+  извлечение через бюджетную границу с закрытыми holds; отказ до провайдера
+  при исчерпанном бюджете; хранение и поиск по пользователю; user reset;
+  глобальный reset с пересозданием рабочего хранилища; ход старше reset не
+  пишет обратно; удаление факта за пределами страницы Mem0 в 100 записей.
+- Найдено и исправлено: Mem0 по умолчанию отправляет usage-события на
+  сторонний аналитический хост; проект это не отключал. Теперь
+  `MEM0_TELEMETRY` по умолчанию выключен (оператор может включить).
+- Найдено: свежая установка тянет Telethon 1.45, где `Button.inline`
+  возвращает другой тип. Рабочий код совместим; один тест читал старое поле —
+  исправлен. На хосте Telethon 1.42. Диапазон `telethon>=1.36` не закреплён.
+
+**Не закрыто:** embedder заменён заглушкой — настоящий
+`sentence-transformers` и качество векторного поиска не проверялись. Живой
+DeepSeek не вызывался.

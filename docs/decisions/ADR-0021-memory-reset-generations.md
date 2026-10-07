@@ -63,9 +63,9 @@ shared copies as well, Mem0 first, so a failure leaves the fact listed.
   Other agents' Mem0, FTS, graph and histories are reset from those agents.
 - Durable turn outcomes and delivery records are execution evidence; they stay
   under their own retention and are not memory in this sense.
-- Mem0 `delete`, `delete_all` and `reset` are exercised against a fake. The
-  package is not installed locally; acceptance against mem0ai 1.0.7 is part of
-  F12. Listing uses an explicit high limit because Mem0 pages at 100.
+- Mem0 `delete`, `delete_all` and `reset` are exercised against the real
+  mem0ai 1.0.7 package where it is installed, and against a fake elsewhere.
+  Listing uses an explicit high limit because Mem0 pages at 100.
 - Facts imported by an operator bypass the generation: an import is a new,
   deliberate write.
 - The dashboard has one principal, the operator, who manages every user's
