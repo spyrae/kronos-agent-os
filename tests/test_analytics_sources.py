@@ -97,3 +97,34 @@ def test_langfuse_flags_probe_route_request_without_a_timestamp(monkeypatch) -> 
 
     assert result["exposure_probe_requests"] == 0
     assert result["unauthenticated_requests"] == 1
+
+
+def test_supabase_pulse_counts_leave_out_test_accounts(monkeypatch) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    def fake_rest_get(table, params=None, **kwargs):
+        params = dict(params or {})
+        calls.append((table, params))
+        if kwargs.get("head"):
+            return 0
+        if table == "global_users":
+            return [{"id": "test-user"}]
+        if table == "trip":
+            return [{"global_user_id": "test-user"}, {"global_user_id": "real-user"}]
+        return []
+
+    monkeypatch.setattr(supabase_stats.settings, "supabase_url", "https://db.test")
+    monkeypatch.setattr(supabase_stats.settings, "supabase_service_role_key", "key")
+    monkeypatch.setattr(supabase_stats, "_rest_get", fake_rest_get)
+
+    result = supabase_stats.collect()
+
+    counted = {table: params for table, params in calls if params.get("select") != "global_user_id"}
+    assert all(params.get("is_test") == "eq.false" for table, params in calls if table == "global_users" and "id" not in params.get("select", ""))
+    for table in ("trip", "day_activities", "user_poi", "subscriptions", "user_trials"):
+        assert counted[table].get("global_users.is_test") == "eq.false", table
+        # subscriptions has two links to global_users; an unhinted join is ambiguous.
+        assert "global_users!global_user_id!inner" in counted[table]["select"], table
+    assert counted["ai_chat_messages"].get("ai_chats.global_users.is_test") == "eq.false"
+    # The E2E account creates trips daily; it must not show up as an active user.
+    assert result["dau_24h"] == 1
