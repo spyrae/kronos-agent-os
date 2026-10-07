@@ -556,8 +556,13 @@ async def test_bot_plan_prompt_has_matching_inline_callback(agent, plan_bridge, 
     await poller.run_due_plan_steps()
     approval_id = plans.get_step(step_id)["approval_id"]
     buttons = plan_bridge.send_message.call_args.kwargs["buttons"]
-    assert buttons[0][0].data == f"kaos:approval:approve:{approval_id}".encode()
-    assert buttons[0][1].data == f"kaos:approval:reject:{approval_id}".encode()
+
+    def callback_data(button):
+        # Telethon 1.45 wraps the callback in button.type; earlier versions expose it directly.
+        return button.data if hasattr(button, "data") else button.type.data
+
+    assert callback_data(buttons[0][0]) == f"kaos:approval:approve:{approval_id}".encode()
+    assert callback_data(buttons[0][1]) == f"kaos:approval:reject:{approval_id}".encode()
 
 
 async def test_concurrent_cold_stores_initialize_and_keep_every_turn(tmp_path):
