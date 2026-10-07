@@ -6,6 +6,7 @@ FTS5 keyword index runs in parallel for hybrid search.
 """
 
 import logging
+import os
 from functools import lru_cache
 
 from kronos.config import settings
@@ -31,6 +32,10 @@ def get_memory():
     """Get or create Mem0 Memory instance (singleton)."""
     if not settings.deepseek_api_key:
         raise RuntimeError("DeepSeek memory extraction is not configured")
+    # Mem0 reports usage events to a third-party analytics host unless told
+    # not to, and reads this at import. A personal memory store does not phone
+    # home by default; an operator who wants it can set MEM0_TELEMETRY=true.
+    os.environ.setdefault("MEM0_TELEMETRY", "False")
     from mem0 import Memory
 
     config = {
