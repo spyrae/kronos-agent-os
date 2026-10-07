@@ -54,8 +54,8 @@ The estimate is `budgets.reservation_usd` (default 0.02).
 - Direct callers (ASO, GEO, Vision, Whisper, scripts) reserve through the same
   admission and settle through the same recorder; on failure nothing releases
   their hold, which is the conservative reading of an unknown outcome.
-- Mem0 runs through this boundary but only against a fake: mem0ai is not
-  installed locally. Acceptance against mem0ai 1.0.7 needs the package in a
-  temporary environment, which is a dependency installation and has not been
-  approved.
+- Mem0 runs through this boundary against the real mem0ai 1.0.7 package in
+  `tests/test_mem0_real_package.py`, with the embedder and the completion call
+  replaced so nothing leaves the machine. The test is skipped where the
+  package is not installed.
 - No provider invoice is reconciled against these numbers.
