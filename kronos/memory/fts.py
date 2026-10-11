@@ -232,13 +232,14 @@ def decay_all_facts(half_life_days: int = 14) -> dict:
     db = _get_db()
     now = datetime.now(UTC)
 
-    rows = db.read("SELECT id, relevance, last_accessed, tier FROM memory_facts WHERE relevance > 0.01")
+    rows = db.read("SELECT id, relevance, last_accessed, created_at, tier FROM memory_facts WHERE relevance > 0.01")
 
     stats = {"decayed": 0, "tier_changes": 0, "archived": 0}
     ops = []
 
     for row in rows:
-        last_acc = row["last_accessed"] or row.get("created_at", now.isoformat())
+        # A fact that search has never returned has no last_accessed yet.
+        last_acc = row["last_accessed"] or row["created_at"]
         try:
             last_dt = datetime.fromisoformat(last_acc.replace("Z", "+00:00"))
         except (ValueError, AttributeError):
