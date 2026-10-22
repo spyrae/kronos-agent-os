@@ -1055,23 +1055,24 @@ async def run_bridge(agent: KronosAgent) -> None:
         bot_markup = _approval_bot_reply_markup(next_approval_id) if next_approval_id else None
         chat_id = int(getattr(event, "chat_id", 0) or 0)
         if topic_id and settings.tg_bot_token and chat_id:
-            await _send_bot_api_message(
+            sent = await _send_bot_api_message(
                 chat_id,
                 reply,
                 topic_id,
                 reply_markup=bot_markup,
             )
         elif topic_id and chat_id:
-            await _client.send_message(
+            sent = await _client.send_message(
                 chat_id,
                 reply,
                 reply_to=topic_id,
                 buttons=buttons,
             )
         else:
-            await event.respond(reply, buttons=buttons)
-        # The continuation's answer is out; another gate keeps the turn owed.
-        if pending and not next_approval_id and not is_plan_approval:
+            sent = await event.respond(reply, buttons=buttons)
+        # Confirm only what Telegram accepted. A turn that paused at another
+        # gate stays owed: the store refuses to settle a turn still waiting.
+        if pending and sent is not None:
             await _settle_reply([str(pending["turn_id"])])
 
     @_client.on(events.NewMessage(incoming=True))
@@ -1677,6 +1678,14 @@ async def run_bridge(agent: KronosAgent) -> None:
                     buttons=approval_buttons,
                 )
 
+        # Confirm the answer as soon as Telegram has it, before any ledger work
+        # that could fail and leave it owed — a restart would then send it twice.
+        # The Bot API path reports a failed send as None rather than raising, so
+        # only an actual message id, message or voice note counts. An approval
+        # prompt is not the answer: the store keeps a waiting turn owed.
+        if voice_sent or sent_msg is not None or sent_msg_id is not None:
+            await _settle_reply(owed_turns)
+
         # Swarm ledger: mark claim as sent, record outbound message. DMs
         # and fallback-router paths (no decision) skip this.
         if not is_dm and swarm is not None and decision is not None:
@@ -1704,10 +1713,6 @@ async def run_bridge(agent: KronosAgent) -> None:
 
         reply_mode = "voice" if voice_sent else "text"
         log.info("[%s%s] Replied (%s) to %s: %s", chat_type, topic_label, reply_mode, sender.first_name, reply[:100])
-        # An approval prompt is not the answer: that turn stays owed until its
-        # continuation is sent by the approval callback.
-        if not approval_id:
-            await _settle_reply(owed_turns)
 
     # --- Reaction handler (RL feedback loop) ---
 

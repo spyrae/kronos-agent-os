@@ -204,3 +204,16 @@ async def test_migration_owes_nothing_for_existing_turns(tmp_path):
         await migrate(db)
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT reply_state FROM active_turns").fetchone()[0] == ""
+
+
+async def test_a_turn_still_running_or_waiting_cannot_be_settled(store):
+    """What it sent was a prompt, not its answer; the answer is still owed."""
+    turn = await store.begin_turn("77", "question", recovery_destination=ROUTE, reply_owed=True)
+    assert await store.settle_reply(turn, "sent") is False
+    with sqlite3.connect(store.db_path) as db:
+        db.execute("UPDATE active_turns SET status = 'waiting_approval' WHERE turn_id = ?", (turn,))
+    assert await store.settle_reply(turn, "sent") is False
+    assert _state(store, turn) == ("owed", 0)
+
+    await store.fail_turn(turn, "stopped")
+    assert await store.settle_reply(turn, "sent") is True
