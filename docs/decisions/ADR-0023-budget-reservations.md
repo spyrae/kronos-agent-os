@@ -59,3 +59,7 @@ The estimate is `budgets.reservation_usd` (default 0.02).
   replaced so nothing leaves the machine. The test is skipped where the
   package is not installed.
 - No provider invoice is reconciled against these numbers.
+- One hold covers a whole call, including a provider fallback chain. If an
+  attempt times out and the next one succeeds, the success settles the hold
+  and the failed attempt's possible cost is not counted; each attempt still
+  re-checks the daily limit before it is made.
