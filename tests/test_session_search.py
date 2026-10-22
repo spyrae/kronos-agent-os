@@ -351,3 +351,36 @@ def test_cli_lists_counts_and_assigns_only_on_explicit_request(isolated_session_
     assert cli.main(["sessions", "assign-owner", "--user-id", "alice", "--thread", "100", "--graph"]) == 0
     assert "thread 100: 1 message(s) assigned" in capsys.readouterr().out
     assert len(swarm.search_sessions(query="private", user_id="alice")) == 1
+
+
+# --- trimming must not re-attribute history -----------------------------------
+
+
+async def test_trimmed_history_is_not_reindexed_under_the_next_speaker(isolated_session_search):
+    """Alice fills a group thread past the history limit, then Bob speaks once."""
+    from kronos.session import MAX_HISTORY
+
+    session_path, swarm = isolated_session_search
+    store = SessionStore(str(session_path), agent_name="kronos")
+    history = []
+    for index in range(MAX_HISTORY + 4):
+        history = [*history, HumanMessage(content=f"alice secret number {index}")]
+        await store.save("group-1", history, user_id="alice")
+    history = [*history, HumanMessage(content="bob asks about lunch")]
+    await store.save("group-1", history, user_id="bob")
+
+    assert swarm.search_sessions(query="alice secret", user_id="bob") == []
+    assert [r["content"] for r in swarm.search_sessions(query="lunch", user_id="bob")] == ["bob asks about lunch"]
+    owners = {r["user_id"] for r in swarm._db.read("SELECT user_id FROM session_messages WHERE content LIKE 'alice%'")}
+    assert owners == {"alice"}
+
+
+async def test_ownerless_legacy_rows_are_not_adopted_by_a_later_save(isolated_session_search):
+    session_path, swarm = isolated_session_search
+    swarm.index_session_message(agent_name="kronos", thread_id="100", role="user", content="old private plan")
+
+    store = SessionStore(str(session_path), agent_name="kronos")
+    await store.save("100", [HumanMessage(content="old private plan"), HumanMessage(content="new question")], user_id="mallory")
+
+    assert swarm.search_sessions(query="private", user_id="mallory") == []
+    assert [r["content"] for r in swarm.search_sessions(query="question", user_id="mallory")] == ["new question"]
