@@ -1463,8 +1463,18 @@ class SwarmStore:
         return f"{found.get('*', 0)}:{found.get(f'user:{user_id}', 0)}"
 
     def memory_generation(self, user_id: str) -> str:
-        """Opaque marker that changes whenever this user's memory, or all memory, is reset."""
-        return self._db.write_tx(lambda conn: self._memory_generation(conn, user_id))
+        """Opaque marker that changes whenever this user's memory, or all memory, is reset.
+
+        A plain read: it is taken on every turn and must not queue for the
+        shared ledger's write lock. Writers re-check it inside their own
+        transaction (see ``add_shared_fact``) or under the reset gate.
+        """
+        rows = self._db.read(
+            "SELECT scope, generation FROM memory_generations WHERE scope IN ('*', ?)",
+            (f"user:{user_id}",),
+        )
+        found = {row["scope"]: row["generation"] for row in rows}
+        return f"{found.get('*', 0)}:{found.get(f'user:{user_id}', 0)}"
 
     def advance_memory_generation(self, user_id: str = "") -> None:
         """Invalidate writes planned before now, for one user or (empty) for everyone."""
