@@ -353,13 +353,19 @@ class SessionStore:
         return turn_id
 
     async def settle_reply(self, turn_id: str, outcome: str) -> bool:
-        """Transport confirmation for an owed reply: ``sent`` or deliberately ``waived``."""
+        """Transport confirmation for an owed reply: ``sent`` or deliberately ``waived``.
+
+        Only a finished turn can be settled. What a running or approval-waiting
+        turn sent was a prompt or progress, not its answer, so it stays owed —
+        whatever the caller believes about which turn it just answered.
+        """
         if outcome not in {"sent", "waived"}:
             raise ValueError("reply outcome must be sent or waived")
         async with self._open_db() as db:
             await self._ensure_table(db)
             cursor = await db.execute(
-                "UPDATE active_turns SET reply_state = ? WHERE turn_id = ? AND reply_state = 'owed'",
+                """UPDATE active_turns SET reply_state = ? WHERE turn_id = ? AND reply_state = 'owed'
+                   AND status NOT IN ('running', 'resuming', 'waiting_approval')""",
                 (outcome, turn_id),
             )
             await db.commit()
