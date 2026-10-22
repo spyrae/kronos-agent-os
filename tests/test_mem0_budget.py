@@ -255,7 +255,11 @@ async def test_full_invocation_context_covers_retrieval_background_and_compactio
     assert {label for label, _, _ in observations} == {"retrieve", "store", "compact"}
     assert all(context["session_id"] == "session" for _, context, _ in observations)
     assert all(model == "lite" for _, _, model in observations)
-    assert _recorded("session") == pytest.approx(0.03)
+    # The explicit costs land on the original session. The probe calls themselves
+    # reported no usage, so each keeps its own hold as unknown instead of being
+    # silently closed by the next recorded cost.
+    assert get_swarm().session_cost("session", include_holds=False) == pytest.approx(0.03)
+    assert get_swarm().budget_holds() == {"held": 0.0, "unknown": pytest.approx(0.06)}
     assert get_tool_audit_context() == before
 
 

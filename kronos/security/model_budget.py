@@ -84,7 +84,12 @@ def admit_model_call() -> bool:
     guardian = get_guardian()
     try:
         if _admitted.get():
-            # Inside an admitted call: its hold already covers this; only the tier is decided.
+            # Inside an admitted call (a fallback attempt, a delegated lite model):
+            # the day is checked again, because an earlier attempt may have been
+            # billed, but no second hold is taken — the outer call's covers it.
+            allowed, reason = guardian.check_budget(session_id="")
+            if not allowed:
+                raise ModelBudgetError(reason)
             return _force_lite.get() or guardian.should_degrade()
         allowed, reason = guardian.check_budget(session_id=session_id)
         if not allowed:
