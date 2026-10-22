@@ -81,6 +81,16 @@ def _session_fts_fingerprint(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _turn_exchange(input_message: str | None, content: str | None) -> list[BaseMessage]:
+    """What one turn adds to session search: the user's input and its answer."""
+    exchange: list[BaseMessage] = []
+    if input_message:
+        exchange.append(HumanMessage(content=str(input_message)))
+    if content:
+        exchange.append(AIMessage(content=str(content)))
+    return exchange
+
+
 def _serialize_message(msg: BaseMessage) -> dict:
     """Serialize a LangChain message to a JSON-safe dict."""
     data = {
@@ -1505,7 +1515,7 @@ class SessionStore:
             await self._ensure_table(db)
             await db.execute("BEGIN IMMEDIATE")
             async with db.execute(
-                "SELECT thread_id, status, final_content, error, user_id FROM active_turns WHERE turn_id = ?",
+                "SELECT thread_id, status, final_content, error, user_id, input_message FROM active_turns WHERE turn_id = ?",
                 (turn_id,),
             ) as cursor:
                 existing = await cursor.fetchone()
@@ -1543,7 +1553,12 @@ class SessionStore:
             await db.execute("DELETE FROM tool_results WHERE turn_id = ?", (turn_id,))
             await db.commit()
 
-        self._index_to_swarm_fts(thread_id, trimmed, user_id=existing[4] or "")
+        self._index_to_swarm_fts(
+            thread_id,
+            _turn_exchange(existing[5], content),
+            user_id=existing[4] or "",
+            key=turn_id,
+        )
 
     async def get_turn_outcome(self, turn_id: str) -> InvocationOutcome:
         """Read a consistent execution/approval snapshot without running tools."""
@@ -1815,7 +1830,7 @@ class SessionStore:
             except BaseException:
                 await db.rollback()
                 raise
-        self._index_to_swarm_fts(thread_id, trimmed, user_id=owner or "")
+        self._index_to_swarm_fts(thread_id, _turn_exchange(input_message, None), user_id=owner or "", key=turn_id)
         return 1
 
     def _record_durable_metric(self, metric: str, delta: int) -> None:
@@ -1847,8 +1862,20 @@ class SessionStore:
             log.error("Failed to deserialize session %s: %s", thread_id, e)
             return []
 
-    async def save(self, thread_id: str, messages: list[BaseMessage], *, user_id: str = "") -> None:
-        """Save conversation history, keeping only the last MAX_HISTORY messages."""
+    async def save(
+        self,
+        thread_id: str,
+        messages: list[BaseMessage],
+        *,
+        user_id: str = "",
+        new_messages: list[BaseMessage] | None = None,
+    ) -> None:
+        """Save conversation history, keeping only the last MAX_HISTORY messages.
+
+        Only ``new_messages`` — what this call added — go to session search,
+        under ``user_id``. The rest of the window was indexed when it was
+        written, under whoever wrote it.
+        """
         # Trim to max history (keep most recent)
         trimmed = trim_completed_history(messages, MAX_HISTORY)
 
@@ -1869,7 +1896,8 @@ class SessionStore:
             )
             await db.commit()
 
-        self._index_to_swarm_fts(thread_id, trimmed, user_id=user_id)
+        if new_messages:
+            self._index_to_swarm_fts(thread_id, new_messages, user_id=user_id, key=str(uuid.uuid4()))
 
     def _index_to_swarm_fts(
         self,
@@ -1877,11 +1905,17 @@ class SessionStore:
         messages: list[BaseMessage],
         *,
         user_id: str = "",
+        key: str = "",
     ) -> int:
-        """Index session messages into swarm FTS. Non-blocking, non-fatal.
+        """Index messages into swarm FTS. Non-blocking, non-fatal.
 
-        Rows already indexed keep their first owner. Without ``user_id`` new
-        rows are ownerless, which hides them from every user search.
+        Callers pass only what one turn added, never the stored window: a
+        window shifts as history is trimmed or reset, and re-indexing it would
+        hand earlier messages — another participant's, a reset user's, legacy
+        ownerless ones — to whoever wrote last. ``key`` (the turn) makes a
+        repeated call idempotent. Without ``user_id`` rows are ownerless and
+        hidden from every user search; without ``key`` the fingerprint is the
+        position in ``messages``, which only the operator backfill uses.
         """
         if not self._agent_name:
             return 0
@@ -1906,7 +1940,7 @@ class SessionStore:
                         user_id=user_id,
                         fingerprint=_session_fts_fingerprint(
                             agent_name=self._agent_name,
-                            thread_id=thread_id,
+                            thread_id=f"{thread_id}\0{key}" if key else thread_id,
                             position=position,
                             role=role,
                             content=msg.content,

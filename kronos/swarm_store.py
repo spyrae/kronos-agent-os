@@ -1646,34 +1646,13 @@ class SwarmStore:
         fingerprint = (
             fingerprint or hashlib.sha256(f"{agent_name}\0{thread_id}\0{role}\0{clean_content}".encode()).hexdigest()
         )
-        # The same text already indexed in this conversation is never indexed
-        # again. A positional fingerprint alone is not enough: once history is
-        # trimmed, every older message shifts position, and re-indexing the
-        # window under the current turn's owner would hand another participant's
-        # messages — or ownerless legacy rows — to whoever spoke last.
         cursor = self._db.write(
             """
             INSERT OR IGNORE INTO session_messages
                 (agent_name, thread_id, role, content, created_at, fingerprint, user_id)
-            SELECT ?, ?, ?, ?, ?, ?, ?
-            WHERE NOT EXISTS (
-                SELECT 1 FROM session_messages
-                WHERE agent_name = ? AND thread_id = ? AND role = ? AND content = ?
-            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (
-                agent_name,
-                thread_id,
-                role,
-                clean_content,
-                time.time(),
-                fingerprint,
-                str(user_id or "").strip() or None,
-                agent_name,
-                thread_id,
-                role,
-                clean_content,
-            ),
+            (agent_name, thread_id, role, clean_content, time.time(), fingerprint, str(user_id or "").strip() or None),
         )
         return bool(cursor and cursor.rowcount)
 
@@ -1747,6 +1726,18 @@ class SwarmStore:
             (agent_name, thread_id),
         )
         return int(cursor.rowcount) if cursor else 0
+
+    def threads_with_other_owners(self, *, agent_name: str, user_id: str) -> set[str]:
+        """Conversations of this agent holding search rows of anyone but ``user_id``.
+
+        Ownerless rows count as someone else: their author was never recorded.
+        """
+        rows = self._db.read(
+            """SELECT DISTINCT thread_id FROM session_messages
+               WHERE agent_name = ? AND (user_id IS NULL OR user_id != ?)""",
+            (agent_name, user_id),
+        )
+        return {row["thread_id"] for row in rows}
 
     def ownerless_session_threads(self, *, agent_name: str) -> list[dict]:
         """Operator view: threads of ``agent_name`` whose indexed rows have no owner."""
