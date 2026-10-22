@@ -1636,13 +1636,34 @@ class SwarmStore:
         fingerprint = (
             fingerprint or hashlib.sha256(f"{agent_name}\0{thread_id}\0{role}\0{clean_content}".encode()).hexdigest()
         )
+        # The same text already indexed in this conversation is never indexed
+        # again. A positional fingerprint alone is not enough: once history is
+        # trimmed, every older message shifts position, and re-indexing the
+        # window under the current turn's owner would hand another participant's
+        # messages — or ownerless legacy rows — to whoever spoke last.
         cursor = self._db.write(
             """
             INSERT OR IGNORE INTO session_messages
                 (agent_name, thread_id, role, content, created_at, fingerprint, user_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            SELECT ?, ?, ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (
+                SELECT 1 FROM session_messages
+                WHERE agent_name = ? AND thread_id = ? AND role = ? AND content = ?
+            )
             """,
-            (agent_name, thread_id, role, clean_content, time.time(), fingerprint, str(user_id or "").strip() or None),
+            (
+                agent_name,
+                thread_id,
+                role,
+                clean_content,
+                time.time(),
+                fingerprint,
+                str(user_id or "").strip() or None,
+                agent_name,
+                thread_id,
+                role,
+                clean_content,
+            ),
         )
         return bool(cursor and cursor.rowcount)
 
