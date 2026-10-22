@@ -62,10 +62,13 @@ A graph entity whose name the user already has stays ownerless.
 - After upgrade, existing session-search rows and the existing graph are
   invisible to users until the operator assigns them. Session search heals by
   itself within its 30-day window; the graph does not.
-- In a group thread a row belongs to the user whose turn first indexed it. The
-  same text already indexed in a conversation is never indexed again, so
-  trimming history cannot hand an earlier participant's messages, or ownerless
-  legacy rows, to whoever spoke last.
+- Each turn indexes only its own exchange — the user's input and the answer —
+  under its owner, keyed by the turn. The stored window is never re-indexed,
+  so neither trimming nor a reset can hand an earlier participant's messages,
+  a reset user's messages or ownerless legacy rows to whoever spoke last.
+- A user's session reset keeps conversations someone else took part in (by
+  their turns or by their rows in session search) and removes only that
+  user's search rows from them.
 - Rolling back to code from before this decision: the added columns and
   tables are ignored by older code. The one exception is the knowledge graph:
   older code re-creates `UNIQUE (name, type)` on `entities`, which fails while
