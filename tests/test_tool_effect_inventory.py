@@ -32,6 +32,8 @@ EFFECTS = {
     "browser_click",
     "browser_type",
     "browser_evaluate",
+    "browser_navigate",
+    "open_site_session",
 }
 READS = {
     "load_skill",
@@ -40,7 +42,6 @@ READS = {
     "extract_structured",
     "compare_offers",
     "list_site_accounts",
-    "open_site_session",
     "check_site_action",
     "plan_status",
     "repo_list",
@@ -53,7 +54,6 @@ READS = {
     "list_dynamic_tools",
     "session_search",
     "list_scheduled_tasks",
-    "browser_navigate",
     "browser_snapshot",
     "browser_screenshot",
 }
