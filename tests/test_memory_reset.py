@@ -308,7 +308,7 @@ async def test_sleep_compute_does_not_rebuild_a_graph_that_was_reset_mid_extract
     from kronos.swarm_store import get_swarm
 
     class Model:
-        def invoke(self, messages):
+        async def ainvoke(self, messages):
             # The reset lands while the model is still extracting.
             get_swarm().advance_memory_generation("alice")
             return type("R", (), {"content": '{"entities": [{"name": "Merger", "type": "project"}]}'})()

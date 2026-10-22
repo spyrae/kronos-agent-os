@@ -9,6 +9,7 @@ Pipeline:
 5. Clean up stale memories (>90 days, low relevance)
 """
 
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime, timedelta
@@ -135,7 +136,7 @@ def _get_recent_facts(days: int = 7) -> dict[str, list[str]]:
 async def _extract_and_build_graph(facts: list[str], user_id: str) -> tuple[int, int]:
     """Extract entities from one user's facts and add them to that user's graph."""
     # Facts read before a reset must not rebuild the graph the reset removed.
-    generation = memory_generation(user_id)
+    generation = await asyncio.to_thread(memory_generation, user_id)
     facts_text = "\n".join(f"- {f[:200]}" for f in facts[:50])
 
     prompt = ENTITY_EXTRACTION_PROMPT.format(facts=facts_text)
@@ -143,7 +144,7 @@ async def _extract_and_build_graph(facts: list[str], user_id: str) -> tuple[int,
     model = get_model(ModelTier.LITE)
     from langchain_core.messages import HumanMessage
 
-    response = model.invoke([HumanMessage(content=prompt)])
+    response = await model.ainvoke([HumanMessage(content=prompt)])
     reply = response.content if isinstance(response.content, str) else str(response.content)
 
     # Parse JSON from response
@@ -160,33 +161,39 @@ async def _extract_and_build_graph(facts: list[str], user_id: str) -> tuple[int,
         log.warning("Invalid JSON in entity extraction response")
         return 0, 0
 
-    entities_added = 0
-    relations_added = 0
-
     try:
-        with memory_write(user_id, generation):
-            for entity in data.get("entities", []):
-                name = entity.get("name", "").strip()
-                etype = entity.get("type", "concept").strip()
-                props = entity.get("properties", {})
-                if name:
-                    kg.add_entity(name, etype, props, user_id=user_id)
-                    entities_added += 1
-
-            for rel in data.get("relations", []):
-                src = rel.get("source", "").strip()
-                src_type = rel.get("source_type", "concept").strip()
-                tgt = rel.get("target", "").strip()
-                tgt_type = rel.get("target_type", "concept").strip()
-                rtype = rel.get("relation", "related_to").strip()
-                if src and tgt:
-                    kg.add_relation(src, src_type, tgt, tgt_type, rtype, user_id=user_id)
-                    relations_added += 1
+        # Off the loop: a reset in progress holds the gate this write waits on.
+        entities_added, relations_added = await asyncio.to_thread(_write_graph, data, user_id, generation)
     except MemoryResetError:
         log.info("Memory was reset during extraction; graph left untouched")
         return 0, 0
 
     log.info("KG updated: +%d entities, +%d relations", entities_added, relations_added)
+    return entities_added, relations_added
+
+
+def _write_graph(data: dict, user_id: str, generation: str) -> tuple[int, int]:
+    """Write one user's extracted entities and relations unless a reset intervened."""
+    entities_added = 0
+    relations_added = 0
+    with memory_write(user_id, generation):
+        for entity in data.get("entities", []):
+            name = entity.get("name", "").strip()
+            etype = entity.get("type", "concept").strip()
+            props = entity.get("properties", {})
+            if name:
+                kg.add_entity(name, etype, props, user_id=user_id)
+                entities_added += 1
+
+        for rel in data.get("relations", []):
+            src = rel.get("source", "").strip()
+            src_type = rel.get("source_type", "concept").strip()
+            tgt = rel.get("target", "").strip()
+            tgt_type = rel.get("target_type", "concept").strip()
+            rtype = rel.get("relation", "related_to").strip()
+            if src and tgt:
+                kg.add_relation(src, src_type, tgt, tgt_type, rtype, user_id=user_id)
+                relations_added += 1
     return entities_added, relations_added
 
 

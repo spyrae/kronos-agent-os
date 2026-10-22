@@ -186,7 +186,7 @@ async def test_sleep_compute_builds_a_separate_graph_per_user(kg, monkeypatch):
     prompts = []
 
     class Model:
-        def invoke(self, messages):
+        async def ainvoke(self, messages):
             prompt = messages[0].content
             prompts.append(prompt)
             name = "Merger" if "Merger" in prompt else "Layoffs"

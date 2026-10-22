@@ -1063,7 +1063,7 @@ class KronosAgent:
             "loop_detector": None,
         }
         if self._memory_enabled and user_id and not is_ephemeral:
-            state["memory_generation"] = self._memory_generation(user_id)
+            state["memory_generation"] = await asyncio.to_thread(self._memory_generation, user_id)
 
         # Step 1: Validate input
         rejection = validate_input(message, source=user_id)
