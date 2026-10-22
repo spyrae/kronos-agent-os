@@ -207,6 +207,12 @@ async def _reset_sessions(user_id: str) -> dict:
     store = SessionStore(settings.db_path, agent_name=settings.agent_name)
     threads = await store.thread_ids(user_id=user_id)
     shared = await store.thread_ids(user_id=user_id, shared=True) if user_id else []
+    if user_id:
+        # Turn retention may have pruned the other participants' turns; their
+        # rows in session search still show that the conversation was shared.
+        others = get_swarm().threads_with_other_owners(agent_name=settings.agent_name, user_id=user_id)
+        shared = [*shared, *(t for t in threads if t in others)]
+        threads = [t for t in threads if t not in others]
     cleared = 0
     for thread_id in threads:
         async with own_conversation(store.db_path, thread_id):

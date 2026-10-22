@@ -33,15 +33,19 @@ def isolated_session_search(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_session_save_indexes_messages_without_duplicates(isolated_session_search):
+    """A turn indexes its own exchange once; re-saving the window adds nothing."""
     session_path, swarm = isolated_session_search
     store = SessionStore(str(session_path), agent_name="kronos")
-    messages = [
+    turn = await store.begin_turn("thread-1", "We discussed Kimi migration details", user_id="alice")
+    history = [
         HumanMessage(content="We discussed Kimi migration details"),
         AIMessage(content="Decision: use the Kimi router"),
     ]
-
-    await store.save("thread-1", messages, user_id="alice")
-    await store.save("thread-1", messages, user_id="alice")
+    for _ in range(2):
+        await store.finalize_turn(
+            thread_id="thread-1", messages=history, turn_id=turn, content="Decision: use the Kimi router"
+        )
+    await store.save("thread-1", history, user_id="alice")
 
     results = swarm.search_sessions(
         query="migration",
@@ -53,6 +57,7 @@ async def test_session_save_indexes_messages_without_duplicates(isolated_session
     assert len(results) == 1
     assert results[0]["thread_id"] == "thread-1"
     assert results[0]["role"] == "user"
+    assert len(swarm._db.read("SELECT 1 FROM session_messages")) == 2
 
 
 @pytest.mark.asyncio
@@ -272,22 +277,19 @@ async def test_tool_searches_only_the_bound_owner(isolated_session_search):
 
 
 async def test_group_thread_rows_belong_to_whoever_took_the_turn(isolated_session_search):
-    """Two users in one thread: neither can search the other user's separate DM."""
+    """Two users in one thread: neither can search the other's messages or DM."""
     session_path, swarm = isolated_session_search
     store = SessionStore(str(session_path), agent_name="kronos")
-    await store.save("dm-alice", [HumanMessage(content="alice passport renewal")], user_id="alice")
-    await store.save("group-1", [HumanMessage(content="shared launch checklist")], user_id="alice")
-    await store.save(
-        "group-1",
-        [HumanMessage(content="shared launch checklist"), HumanMessage(content="bob adds launch budget")],
-        user_id="bob",
-    )
+    alice_dm = [HumanMessage(content="alice passport renewal")]
+    await store.save("dm-alice", alice_dm, user_id="alice", new_messages=alice_dm)
+    group = [HumanMessage(content="shared launch checklist")]
+    await store.save("group-1", group, user_id="alice", new_messages=group)
+    bob = HumanMessage(content="bob adds launch budget")
+    await store.save("group-1", [*group, bob], user_id="bob", new_messages=[bob])
 
     assert swarm.search_sessions(query="passport", user_id="bob") == []
     assert [r["content"] for r in swarm.search_sessions(query="launch", user_id="bob")] == ["bob adds launch budget"]
-    assert [r["content"] for r in swarm.search_sessions(query="launch", user_id="alice")] == [
-        "shared launch checklist"
-    ]
+    assert [r["content"] for r in swarm.search_sessions(query="launch", user_id="alice")] == ["shared launch checklist"]
 
 
 async def test_finalize_turn_indexes_under_the_turn_owner(isolated_session_search):
@@ -364,10 +366,11 @@ async def test_trimmed_history_is_not_reindexed_under_the_next_speaker(isolated_
     store = SessionStore(str(session_path), agent_name="kronos")
     history = []
     for index in range(MAX_HISTORY + 4):
-        history = [*history, HumanMessage(content=f"alice secret number {index}")]
-        await store.save("group-1", history, user_id="alice")
-    history = [*history, HumanMessage(content="bob asks about lunch")]
-    await store.save("group-1", history, user_id="bob")
+        message = HumanMessage(content=f"alice secret number {index}")
+        history = [*history, message]
+        await store.save("group-1", history, user_id="alice", new_messages=[message])
+    bob = HumanMessage(content="bob asks about lunch")
+    await store.save("group-1", [*history, bob], user_id="bob", new_messages=[bob])
 
     assert swarm.search_sessions(query="alice secret", user_id="bob") == []
     assert [r["content"] for r in swarm.search_sessions(query="lunch", user_id="bob")] == ["bob asks about lunch"]
@@ -380,7 +383,20 @@ async def test_ownerless_legacy_rows_are_not_adopted_by_a_later_save(isolated_se
     swarm.index_session_message(agent_name="kronos", thread_id="100", role="user", content="old private plan")
 
     store = SessionStore(str(session_path), agent_name="kronos")
-    await store.save("100", [HumanMessage(content="old private plan"), HumanMessage(content="new question")], user_id="mallory")
+    new = HumanMessage(content="new question")
+    await store.save("100", [HumanMessage(content="old private plan"), new], user_id="mallory", new_messages=[new])
 
     assert swarm.search_sessions(query="private", user_id="mallory") == []
     assert [r["content"] for r in swarm.search_sessions(query="question", user_id="mallory")] == ["new question"]
+
+
+async def test_a_repeated_sentence_is_indexed_for_each_user_who_said_it(isolated_session_search):
+    session_path, swarm = isolated_session_search
+    store = SessionStore(str(session_path), agent_name="kronos")
+    for user in ("alice", "bob"):
+        turn = await store.begin_turn("group-1", "same words exactly", user_id=user)
+        await store.finalize_turn(
+            thread_id="group-1", messages=[HumanMessage(content="same words exactly")], turn_id=turn, content=None
+        )
+    for user in ("alice", "bob"):
+        assert len(swarm.search_sessions(query="same words", user_id=user)) == 1

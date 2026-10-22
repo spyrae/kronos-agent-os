@@ -443,3 +443,46 @@ async def test_clearing_sessions_alone_does_not_void_facts_being_stored(env):
     assert memory_generation("alice") == captured
     await reset_memory({"facts"}, user_id="alice")
     assert memory_generation("alice") != captured
+
+
+async def test_after_a_reset_nobody_else_and_no_later_turn_restores_the_users_rows(env):
+    """Review finding: a kept shared thread was re-indexed whole on the next save."""
+    from kronos.session import SessionStore
+    from kronos.swarm_store import get_swarm
+
+    store = SessionStore(settings.db_path, agent_name="kronos")
+
+    async def speak(user, text):
+        turn = await store.begin_turn("group-1", text, user_id=user)
+        history = [*(await store.load("group-1")), HumanMessage(content=text), AIMessage(content="noted")]
+        await store.finalize_turn(thread_id="group-1", messages=history, turn_id=turn, content="noted")
+
+    await speak("alice", "alice salary in the group")
+    await speak("bob", "bob salary in the group")
+    await reset_memory({"sessions"}, user_id="alice")
+
+    await speak("bob", "bob asks for lunch")
+    await speak("alice", "alice asks for coffee")
+
+    assert [r["content"] for r in get_swarm().search_sessions(query="alice", user_id="bob")] == []
+    alice = [r["content"] for r in get_swarm().search_sessions(query="alice", user_id="alice")]
+    assert alice == ["alice asks for coffee"], "the reset rows do not come back with her next turn"
+
+
+async def test_a_thread_whose_other_turns_were_pruned_still_counts_as_shared(env):
+    from kronos.session import SessionStore
+    from kronos.swarm_store import get_swarm
+
+    store = SessionStore(settings.db_path, agent_name="kronos")
+    for user, text in (("alice", "alice salary in the group"), ("bob", "bob salary in the group")):
+        turn = await store.begin_turn("group-1", text, user_id=user)
+        history = [*(await store.load("group-1")), HumanMessage(content=text)]
+        await store.finalize_turn(thread_id="group-1", messages=history, turn_id=turn, content=None)
+    with sqlite3.connect(settings.db_path) as db:
+        db.execute("DELETE FROM active_turns WHERE user_id = 'bob'")  # turn retention
+
+    report = await reset_memory({"sessions"}, user_id="alice")
+
+    assert report["layers"]["sessions"]["shared_threads_kept"] == 1
+    assert "bob salary in the group" in [m.content for m in await store.load("group-1")]
+    assert get_swarm().search_sessions(query="salary", user_id="bob")
