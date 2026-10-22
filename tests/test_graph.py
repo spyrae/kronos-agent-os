@@ -71,15 +71,24 @@ class TestKronosAgentConstruction:
         assert agent._supervisor is None
         assert agent._memory_enabled is False
 
-    def test_memory_stays_disabled_without_deepseek_key(self, patched_settings):
+    def test_memory_runs_in_keyword_mode_without_deepseek_key(self, patched_settings):
+        """A05: no key turns off fact extraction only, not keyword memory."""
         from kronos.graph import KronosAgent
+        from kronos.memory.store import extraction_configured
 
         agent = KronosAgent(
             tools=[],
-            enable_memory=True,  # requested on…
+            enable_memory=True,
             enable_supervisor=False,
         )
-        # …but DEEPSEEK_API_KEY was patched to "" → memory must refuse.
+        # DEEPSEEK_API_KEY was patched to "": keyword memory on, extraction off.
+        assert agent._memory_enabled is True
+        assert extraction_configured() is False
+
+    def test_memory_stays_off_when_not_requested(self, patched_settings):
+        from kronos.graph import KronosAgent
+
+        agent = KronosAgent(tools=[], enable_memory=False, enable_supervisor=False)
         assert agent._memory_enabled is False
 
 
