@@ -26,6 +26,8 @@ from kronos.config import settings
 log = logging.getLogger("kronos.memory.reset")
 
 SCOPES = ("facts", "shared", "knowledge_graph", "sessions")
+# The layers that background writers fill; resetting them voids writes in flight.
+_WRITER_SCOPES = frozenset({"facts", "shared", "knowledge_graph"})
 # Mem0 lists 100 memories by default; a fact past that page would be missed.
 _MEM0_SCAN_LIMIT = 100_000
 
@@ -192,20 +194,26 @@ def _reset_graph(user_id: str) -> dict:
 
 
 async def _reset_sessions(user_id: str) -> dict:
-    """Clear stored conversations one by one, each under its own ownership."""
+    """Clear stored conversations one by one, each under its own ownership.
+
+    For one user, a conversation someone else also took part in keeps its
+    history — it holds their messages too — and loses only this user's rows
+    in session search. The count of such threads is reported, not hidden.
+    """
     from kronos.session import SessionStore
     from kronos.swarm_store import get_swarm
     from kronos.turn_ownership import own_conversation
 
     store = SessionStore(settings.db_path, agent_name=settings.agent_name)
     threads = await store.thread_ids(user_id=user_id)
+    shared = await store.thread_ids(user_id=user_id, shared=True) if user_id else []
     cleared = 0
     for thread_id in threads:
         async with own_conversation(store.db_path, thread_id):
             cleared += await store.clear(thread_id)
-    # Index rows without a stored conversation behind them (trimmed, backfilled).
+    # This user's search rows everywhere, including shared and trimmed history.
     cleared += get_swarm().delete_session_index(agent_name=settings.agent_name, user_id=user_id)
-    return {"threads": len(threads), "rows": cleared}
+    return {"threads": len(threads), "shared_threads_kept": len(shared), "rows": cleared}
 
 
 async def reset_memory(scopes: set[str], *, user_id: str = "") -> dict:
@@ -226,8 +234,11 @@ async def reset_memory(scopes: set[str], *, user_id: str = "") -> dict:
 
     def _sync_layers() -> None:
         # Advance first: a writer that planned its write earlier now refuses,
-        # including one that is still waiting for the gate.
-        get_swarm().advance_memory_generation(owner)
+        # including one that is still waiting for the gate. Only when memory
+        # writers are affected — clearing sessions alone does not void the
+        # facts a turn in flight is about to store.
+        if scopes & _WRITER_SCOPES:
+            get_swarm().advance_memory_generation(owner)
         with _gate.resetting():
             for scope, action in (
                 ("facts", _reset_facts),

@@ -1949,16 +1949,24 @@ class SessionStore:
         log.info("Session FTS backfill complete: %d new messages indexed", indexed)
         return indexed
 
-    async def thread_ids(self, *, user_id: str = "") -> list[str]:
-        """Threads with stored history; with ``user_id``, those the user took a turn in."""
+    async def thread_ids(self, *, user_id: str = "", shared: bool = False) -> list[str]:
+        """Threads with stored history.
+
+        With ``user_id``: the threads only that user took turns in, or, with
+        ``shared=True``, the ones where someone else — including a legacy turn
+        with no recorded owner — took a turn too. A shared thread's history
+        holds other people's messages and is not this user's to delete.
+        """
         async with self._open_db() as db:
             await self._ensure_table(db)
             if user_id:
                 cursor = await db.execute(
-                    """SELECT thread_id FROM sessions
+                    f"""SELECT thread_id FROM sessions
                        WHERE thread_id IN (SELECT thread_id FROM active_turns WHERE user_id = ?)
+                         AND thread_id {"" if shared else "NOT "}IN (
+                             SELECT thread_id FROM active_turns WHERE user_id != ?)
                        ORDER BY thread_id""",
-                    (user_id,),
+                    (user_id, user_id),
                 )
             else:
                 cursor = await db.execute("SELECT thread_id FROM sessions ORDER BY thread_id")
