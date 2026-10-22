@@ -413,3 +413,33 @@ async def test_deleting_one_fact_removes_it_from_mem0_fts_and_shared(env, monkey
     assert (await api.delete_memory_record(f"fts:{row_id}"))["ok"] is False
     with pytest.raises(HTTPException):
         await api.delete_memory_record("fts:1 OR 1=1")
+
+
+async def test_a_users_reset_keeps_a_group_thread_others_spoke_in(env):
+    """The group history holds Bob's messages too; Alice's reset is not Bob's."""
+    from kronos.session import SessionStore
+    from kronos.swarm_store import get_swarm
+
+    store = SessionStore(settings.db_path, agent_name="kronos")
+    for user, text in (("alice", "alice salary in the group"), ("bob", "bob salary in the group")):
+        turn = await store.begin_turn("group-1", text, user_id=user)
+        history = [*(await store.load("group-1")), HumanMessage(content=text), AIMessage(content="noted")]
+        await store.finalize_turn(thread_id="group-1", messages=history, turn_id=turn, content="noted")
+    await _seed(env, "alice")
+
+    report = await reset_memory({"sessions"}, user_id="alice")
+
+    assert report["layers"]["sessions"]["shared_threads_kept"] == 1
+    assert await store.load("dm-alice") == []
+    kept = [m.content for m in await store.load("group-1")]
+    assert "bob salary in the group" in kept and "alice salary in the group" in kept
+    assert get_swarm().search_sessions(query="salary", user_id="alice") == []
+    assert get_swarm().search_sessions(query="salary", user_id="bob")
+
+
+async def test_clearing_sessions_alone_does_not_void_facts_being_stored(env):
+    captured = memory_generation("alice")
+    await reset_memory({"sessions"}, user_id="alice")
+    assert memory_generation("alice") == captured
+    await reset_memory({"facts"}, user_id="alice")
+    assert memory_generation("alice") != captured
