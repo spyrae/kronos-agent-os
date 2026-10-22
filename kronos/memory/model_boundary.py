@@ -11,7 +11,7 @@ from langchain_core.messages import convert_to_messages
 from kronos.execution_control import check_execution
 from kronos.llm import ModelTier, get_model
 from kronos.security.direct_model import record_direct_response
-from kronos.security.model_budget import admit_model_call
+from kronos.security.model_budget import admit_model_call, release_current_hold
 
 
 def _lite_completion(request: dict[str, Any]) -> SimpleNamespace:
@@ -39,6 +39,7 @@ class _BudgetedCompletions:
 
     def create(self, **request):
         if admit_model_call():
+            release_current_hold()  # the lite model reserves for itself
             return _lite_completion(request)
         response = self._create(**request)
         record_direct_response(

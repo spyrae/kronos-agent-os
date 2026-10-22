@@ -18,7 +18,7 @@ import httpx
 
 from kronos.effect_state import DurableStateError
 from kronos.security.direct_model import chat_response_text, record_direct_response
-from kronos.security.model_budget import ModelBudgetError, admit_model_call
+from kronos.security.model_budget import ModelBudgetError, admit_model_call, release_current_hold
 
 log = logging.getLogger("aso.llm")
 
@@ -123,6 +123,8 @@ async def _call_openai_compatible(
         from langchain_core.messages import convert_to_messages
 
         from kronos.llm import ModelTier, get_model
+
+        release_current_hold()  # the lite model reserves for itself
 
         response = await asyncio.wait_for(
             get_model(ModelTier.LITE).ainvoke(
