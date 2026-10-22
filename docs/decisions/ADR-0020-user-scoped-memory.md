@@ -62,11 +62,15 @@ A graph entity whose name the user already has stays ownerless.
 - After upgrade, existing session-search rows and the existing graph are
   invisible to users until the operator assigns them. Session search heals by
   itself within its 30-day window; the graph does not.
-- In a group thread a row belongs to the user whose turn first indexed it. When
-  history is re-indexed after trimming, an earlier participant's message can be
-  indexed again under the current speaker. Both already share that thread, so
-  this does not cross a conversation boundary, but it is thread-level, not
-  strictly per-message, attribution.
+- In a group thread a row belongs to the user whose turn first indexed it. The
+  same text already indexed in a conversation is never indexed again, so
+  trimming history cannot hand an earlier participant's messages, or ownerless
+  legacy rows, to whoever spoke last.
+- Rolling back to code from before this decision: the added columns and
+  tables are ignored by older code. The one exception is the knowledge graph:
+  older code re-creates `UNIQUE (name, type)` on `entities`, which fails while
+  two owners have an entity with the same name and type. Check that before
+  rolling back; the graph is then unavailable, the agent itself keeps running.
 - With an open allowlist and no configured owner, the user-model cron still
   reads all audit entries; only the session context is withheld.
 - Dashboard memory views and the sleep-compute digest remain operator views
