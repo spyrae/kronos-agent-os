@@ -8,7 +8,7 @@ from typing import Any
 
 from kronos.execution_control import check_execution
 from kronos.security.cost_tracking import BillingKind, estimate_audio_cost_usd, estimate_cost_usd, record_llm_cost
-from kronos.security.model_budget import ModelBudgetError, admit_model_call
+from kronos.security.model_budget import ModelBudgetError, admit_model_call, release_current_hold
 
 
 class ModelUsageUnknownError(RuntimeError):
@@ -18,6 +18,8 @@ class ModelUsageUnknownError(RuntimeError):
 def admit_fixed_model(label: str, *, lite_compatible: bool = False) -> None:
     """Never silently relabel a measurement or replace a required modality."""
     if admit_model_call() and not lite_compatible:
+        # Refused after reserving: nothing will be dispatched, so nothing stays held.
+        release_current_hold()
         raise ModelBudgetError(f"{label} paused by budget downgrade; no compatible lite replacement configured")
 
 
@@ -89,6 +91,8 @@ def ask_script_model(prompt: str, *, base_url: str, api_key: str, model: str, ma
         from langchain_core.messages import HumanMessage
 
         from kronos.llm import ModelTier, get_model
+
+        release_current_hold()  # the lite model reserves for itself
 
         response = get_model(ModelTier.LITE).invoke(
             [HumanMessage(content=prompt)], max_tokens=max_tokens, timeout=timeout

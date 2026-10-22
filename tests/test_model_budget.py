@@ -282,3 +282,70 @@ def test_thread_only_context_is_shared_by_recording_and_admission(models):
     finally:
         reset_tool_audit_context(token)
     assert not models.attempts
+
+
+# --- one hold per model call, wherever the call is delegated -----------------
+
+
+def _holds():
+    rows = get_swarm()._db.read("SELECT state, COUNT(*) AS n FROM budget_holds GROUP BY state")
+    return {row["state"]: row["n"] for row in rows}
+
+
+@pytest.mark.parametrize("method", ["invoke", "ainvoke"])
+@pytest.mark.parametrize("degraded", [False, True])
+async def test_a_factory_call_reserves_exactly_once(models, monkeypatch, method, degraded):
+    """The provider chain and the lite model it may delegate to run inside the
+    outer call's hold; reserving again left one hold per call behind all day."""
+    monkeypatch.setattr(settings, "kaos_standard_provider_chain", "standard,backup")
+    if degraded:
+        get_swarm().add_cost(agent="another-agent", cost_usd=4.1)
+    model = llm.get_model()
+    for _ in range(5):
+        if method == "ainvoke":
+            await model.ainvoke([HumanMessage(content="hello")])
+        else:
+            model.invoke([HumanMessage(content="hello")])
+    # The fake providers report no usage, so every call ends 'unknown' — once per call.
+    assert _holds() == {"unknown": 5}
+
+
+async def test_a_nested_call_does_not_settle_or_drop_the_outer_hold(models):
+    from kronos.security import model_budget
+
+    outer = llm.get_model()
+    inner = llm.get_model("lite")
+    seen = {}
+
+    class Delegating:
+        async def ainvoke(self, messages, **kwargs):
+            seen["outer_hold"] = model_budget.current_hold()
+            await inner.ainvoke(messages)
+            seen["after_inner"] = model_budget.current_hold()
+            return AIMessage(content="done")
+
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+    outer._model = Delegating()
+    await outer.ainvoke([HumanMessage(content="hello")])
+    assert seen["outer_hold"] and seen["after_inner"] == seen["outer_hold"]
+    assert _holds() == {"unknown": 1}
+    assert model_budget.current_hold() == ""
+
+
+def test_a_direct_caller_that_downgrades_hands_its_hold_over(models, monkeypatch):
+    from kronos.security.direct_model import ask_script_model
+
+    get_swarm().add_cost(agent="another-agent", cost_usd=4.1)
+    assert ask_script_model("hi", base_url="http://unused", api_key="k", model="m", max_tokens=5, timeout=1) == "lite"
+    assert _holds() == {"unknown": 1}, "only the lite model's own hold remains"
+
+
+def test_a_refused_fixed_model_leaves_nothing_held(models):
+    from kronos.security.direct_model import admit_fixed_model
+
+    get_swarm().add_cost(agent="another-agent", cost_usd=4.1)
+    with pytest.raises(ModelBudgetError, match="paused by budget downgrade"):
+        admit_fixed_model("GEO measurement")
+    assert _holds() == {}

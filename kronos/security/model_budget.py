@@ -17,6 +17,10 @@ class ModelBudgetError(RuntimeError):
 _force_lite: ContextVar[bool] = ContextVar("model_budget_force_lite", default=False)
 # The hold of the model call being made in this context (see ``admit_model_call``).
 _hold: ContextVar[str] = ContextVar("model_budget_hold", default="")
+# True while a budgeted call is in flight. Code that runs inside it — a provider
+# fallback chain, a lite model it delegates to — is covered by that call's hold
+# and must not reserve a second one.
+_admitted: ContextVar[bool] = ContextVar("model_budget_admitted", default=False)
 
 
 def current_hold() -> str:
@@ -79,6 +83,9 @@ def admit_model_call() -> bool:
     session_id = budget_session_key(get_tool_audit_context())
     guardian = get_guardian()
     try:
+        if _admitted.get():
+            # Inside an admitted call: its hold already covers this; only the tier is decided.
+            return _force_lite.get() or guardian.should_degrade()
         allowed, reason = guardian.check_budget(session_id=session_id)
         if not allowed:
             raise ModelBudgetError(reason)
@@ -91,6 +98,25 @@ def admit_model_call() -> bool:
         raise ModelBudgetError(str(error)) from error
     except Exception as error:
         raise ModelBudgetError("Cost accounting unavailable; model request blocked") from error
+
+
+def release_current_hold() -> None:
+    """Give back this context's hold before handing the call to another budgeted model.
+
+    A direct caller that downgrades to the factory's lite model would otherwise
+    hold twice: its own reservation, never settled, and the lite model's. Inside
+    an admitted call the hold belongs to the outer call and is left alone.
+    """
+    hold = _hold.get()
+    if not hold or _admitted.get():
+        return
+    _hold.set("")
+    try:
+        from kronos.swarm_store import get_swarm
+
+        get_swarm().release_budget_hold(hold)
+    except Exception:  # pragma: no cover - the hold simply stays counted
+        pass
 
 
 def _release_undispatched(task: "asyncio.Future") -> None:
@@ -161,24 +187,40 @@ class BudgetedModel:
         return model, hold
 
     def invoke(self, *args: Any, **kwargs: Any) -> Any:
+        if _admitted.get():
+            result = self._effective_model().invoke(*args, **kwargs)
+            check_execution()
+            return result
         model = self._effective_model()
         hold = current_hold()
+        token = _admitted.set(True)
         try:
             result = model.invoke(*args, **kwargs)
         except BaseException as error:
             finish_hold(hold, error)
             raise
+        finally:
+            _admitted.reset(token)
+            _hold.set("")
         finish_hold(hold)
         check_execution()
         return result
 
     async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
+        if _admitted.get():
+            result = await self._effective_model().ainvoke(*args, **kwargs)
+            check_execution()
+            return result
         model, hold = await self._admit_off_loop()
+        token = _admitted.set(True)
         try:
             result = await model.ainvoke(*args, **kwargs)
         except BaseException as error:
             finish_hold(hold, error)
             raise
+        finally:
+            _admitted.reset(token)
+            _hold.set("")
         finish_hold(hold)
         check_execution()
         return result
